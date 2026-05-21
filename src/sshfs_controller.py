@@ -209,14 +209,14 @@ class SSHFSController:
     # Mount
     # ------------------------------------------------------------------
 
-    def mount(self, conn: Connection) -> MountResult:
+    def mount(self, conn: Connection, disable_cache: bool = False) -> MountResult:
         """Nur sshfs.exe direkt – erzeugt ein lokales WinFsp-Laufwerk."""
-        result = self._mount_direct(conn)
+        result = self._mount_direct(conn, disable_cache=disable_cache)
         if result.success:
             self._set_drive_label(conn)
         return result
 
-    def _mount_direct(self, conn: Connection) -> MountResult:
+    def _mount_direct(self, conn: Connection, disable_cache: bool = False) -> MountResult:
         from src.app_logger import logger
 
         sshfs_exe = _find_sshfs_exe()
@@ -270,7 +270,15 @@ class SSHFSController:
             "-oumask=000",
             "-ocreate_umask=000",
             "-odefault_permissions",
+            "-oCreateFileMapping",
         ]
+
+        if disable_cache:
+            cmd += [
+                "-oattr_timeout=0",
+                "-oentry_timeout=0",
+                "-onegative_timeout=0",
+            ]
 
         if conn.auth_method == "key" and conn.key_path:
             key_path = conn.key_path.replace("\\", "/")

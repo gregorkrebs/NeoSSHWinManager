@@ -115,6 +115,8 @@
   "settings.check_interval": "Prüfintervall (Sekunden):",
   "settings.auto_reconnect": "Beim Start automatisch verbinden",
   "settings.auto_remount": "Automatisch neu verbinden bei Verbindungsverlust",
+  "settings.sshfs_disable_cache": "Verzeichnis-Cache deaktivieren (sofortiger Refresh)",
+  "settings.sshfs_disable_cache.hint": "Zwingt WinFsp, Datei- und Ordnerdaten immer direkt vom Server zu laden. Behebt verzögertes Erscheinen neuer Dateien/Ordner, erhöht aber die Netzwerklast.",
   "settings.use_putty": "PuTTY statt nativem SSH verwenden",
   "settings.putty_path": "Pfad zu putty.exe",
   "settings.putty_hint": "Hinweis: PuTTY benötigt Schlüssel im .ppk-Format.\nOpenSSH-Schlüssel können mit PuTTYgen konvertiert werden.",

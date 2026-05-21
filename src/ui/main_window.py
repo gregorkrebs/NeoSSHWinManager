@@ -2469,6 +2469,8 @@ class MainWindow(FramelessMainWindow):
         self._sf_auto_reconnect.setChecked(getattr(s, "auto_reconnect", False))
         self._sf_auto_remount = QCheckBox(tr("settings.auto_remount"))
         self._sf_auto_remount.setChecked(getattr(s, "auto_remount_on_lost", True))
+        self._sf_sshfs_disable_cache = QCheckBox(tr("settings.sshfs_disable_cache"))
+        self._sf_sshfs_disable_cache.setChecked(getattr(s, "sshfs_disable_cache", False))
 
         mnt_card, mnt_vl = _group_card()
         mnt_vl.addWidget(_row_combo(tr("settings.check_interval"), self._sf_interval))
@@ -2476,6 +2478,8 @@ class MainWindow(FramelessMainWindow):
         mnt_vl.addWidget(_row_check(self._sf_auto_reconnect))
         mnt_vl.addWidget(_inner_sep())
         mnt_vl.addWidget(_row_check(self._sf_auto_remount))
+        mnt_vl.addWidget(_inner_sep())
+        mnt_vl.addWidget(_row_check(self._sf_sshfs_disable_cache, tr("settings.sshfs_disable_cache.hint")))
         v.addWidget(mnt_card)
         v.addSpacing(14)
 
@@ -3083,6 +3087,7 @@ class MainWindow(FramelessMainWindow):
             allow_insecure_password_auth=_sec >= 2,
             telemetry_enabled=getattr(self, "_sf_telemetry").isChecked() if hasattr(self, "_sf_telemetry") else False,
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
+            sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
         )
         self._mgr.save_settings(new_settings)
         self._apply_settings_object(new_settings)
@@ -3396,7 +3401,8 @@ class MainWindow(FramelessMainWindow):
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.connect"))
-        worker = MountWorker(conn, self._controller)
+        _disable_cache = bool(getattr(self._mgr.get_settings(), "sshfs_disable_cache", False))
+        worker = MountWorker(conn, self._controller, disable_cache=_disable_cache)
         worker.finished.connect(self._on_mount_finished)
         self._workers[conn_id] = worker
         worker.start()
@@ -3457,7 +3463,8 @@ class MainWindow(FramelessMainWindow):
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.connect"))
-        worker = MountWorker(conn, self._controller)
+        _disable_cache = bool(getattr(self._mgr.get_settings(), "sshfs_disable_cache", False))
+        worker = MountWorker(conn, self._controller, disable_cache=_disable_cache)
         worker.finished.connect(self._on_mount_finished)
         self._workers[conn_id] = worker
         worker.start()
@@ -3929,10 +3936,6 @@ class MainWindow(FramelessMainWindow):
             self._bridge_server.host_key_verify_callback = self._terminal_tofu_callback
             self._bridge_server.start()
 
-            self._terminal_cleanup_timer = QTimer(self)
-            self._terminal_cleanup_timer.timeout.connect(self._cleanup_idle_terminal_sessions)
-            self._terminal_cleanup_timer.start(60_000)
-
             logger.debug("Terminal bridge server started on port %d", self._bridge_server.port)
         except Exception as e:
             logger.warning("Terminal bridge server could not start: %s", e)
@@ -4200,6 +4203,3 @@ class MainWindow(FramelessMainWindow):
             has_sessions = bool(self._terminal_conn_tabs.get(conn_id))
             card.set_terminal_active(has_sessions)
 
-    def _cleanup_idle_terminal_sessions(self):
-        if self._bridge_server:
-            self._bridge_server.cleanup_idle_sessions(max_idle_seconds=1800)

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,6 @@ class TerminalSession:
     channel: "paramiko.Channel"
     websocket: object | None = None
     forwarder_task: asyncio.Task | None = None
-    last_activity: float = field(default_factory=lambda: __import__("time").time())
 
 
 class TerminalBridgeServer:
@@ -170,6 +169,11 @@ class TerminalBridgeServer:
         channel = client.invoke_shell(term="xterm-256color", width=80, height=24)
         channel.setblocking(False)
 
+        # Keepalive every 30 s — prevents server-side idle disconnect regardless of data flow
+        transport = client.get_transport()
+        if transport:
+            transport.set_keepalive(30)
+
         session = TerminalSession(conn_id=conn_id, client=client, channel=channel)
         self._sessions[conn_id] = session
 
@@ -198,12 +202,6 @@ class TerminalBridgeServer:
             return False
         return not session.channel.closed
 
-    def cleanup_idle_sessions(self, max_idle_seconds: float = 1800.0):
-        import time
-        now = time.time()
-        dead = [cid for cid, s in self._sessions.items() if now - s.last_activity > max_idle_seconds or s.channel.closed]
-        for cid in dead:
-            self.close_session(cid)
 
     # ------------------------------------------------------------------
     # Internal asyncio coroutines
@@ -255,9 +253,7 @@ class TerminalBridgeServer:
 
         try:
             # WS→SSH
-            import time
             async for message in websocket:
-                session.last_activity = time.time()
                 if session.channel.closed:
                     break
                 try:
@@ -275,7 +271,6 @@ class TerminalBridgeServer:
             logger.debug("Terminal: WebSocket disconnected for %s", conn_id)
 
     async def _ssh_to_ws(self, session: TerminalSession):
-        import time
         loop = asyncio.get_event_loop()
         while True:
             try:
@@ -284,7 +279,6 @@ class TerminalBridgeServer:
                 break
             if data is None:
                 break
-            session.last_activity = time.time()
             if session.websocket:
                 try:
                     await session.websocket.send(data)

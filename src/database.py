@@ -225,6 +225,8 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN telemetry_prompt_shown INTEGER DEFAULT 0")
             if "terminal_client" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN terminal_client TEXT DEFAULT 'xterm'")
+            if "sshfs_disable_cache" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN sshfs_disable_cache INTEGER DEFAULT 0")
         except Exception:
             pass
 

@@ -75,6 +75,7 @@ class AppSettings:
     allow_insecure_password_auth: bool = False
     telemetry_enabled: bool = False
     telemetry_prompt_shown: bool = False
+    sshfs_disable_cache: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
