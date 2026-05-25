@@ -120,7 +120,6 @@
   "settings.use_putty": "PuTTY statt nativem SSH verwenden",
   "settings.putty_path": "Pfad zu putty.exe",
   "settings.putty_hint": "Hinweis: PuTTY benötigt Schlüssel im .ppk-Format.\nOpenSSH-Schlüssel können mit PuTTYgen konvertiert werden.",
-  "settings.putty_download_link": "PuTTY herunterladen (aktuell)",
   "settings.debug_mode": "Debug-Modus aktivieren",
   "settings.language.label": "Oberflächensprache",
   "settings.language.restart": "Sprachänderung wird nach einem Neustart wirksam.",

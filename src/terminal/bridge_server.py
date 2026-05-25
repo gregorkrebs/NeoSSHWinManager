@@ -110,13 +110,7 @@ class TerminalBridgeServer:
         conn is a Connection dataclass with fields:
           host, port, user (ssh_user), auth_method, password, key_path, putty_key_path
         """
-        try:
-            import paramiko
-        except ImportError as exc:
-            logger.error(
-                "Terminal: paramiko import failed (missing hiddenimport in compiled build?): %s", exc
-            )
-            return None
+        import paramiko
 
         host = conn.host or ""
         port = int(conn.port or 22)
@@ -214,14 +208,7 @@ class TerminalBridgeServer:
     # ------------------------------------------------------------------
 
     async def _serve(self, ready_event: threading.Event):
-        try:
-            import websockets
-        except ImportError as exc:
-            logger.error(
-                "Terminal: websockets import failed (missing hiddenimport in compiled build?): %s", exc
-            )
-            ready_event.set()
-            return
+        import websockets
 
         server = await websockets.serve(
             self._ws_handler,

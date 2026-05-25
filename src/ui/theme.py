@@ -103,32 +103,6 @@ QCheckBox::indicator:checked:hover {
     image: url("__CHECKMARK_URL__");
 }
 
-/* ---- Radio Buttons ---------------------------------------- */
-QRadioButton {
-    spacing: 8px;
-}
-QRadioButton::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    border: 1.5px solid #243243;
-    background-color: #0d1117;
-}
-QRadioButton::indicator:hover {
-    border-color: #3a5068;
-}
-QRadioButton::indicator:checked {
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    background-color: #00b4d8;
-    border: 1.5px solid #0090ae;
-}
-QRadioButton::indicator:checked:hover {
-    background-color: #22c4e8;
-    border-color: #00a0c0;
-}
-
 /* ---- Main Window ------------------------------------------ */
 #MainWindow {
     background-color: #0d0d12;
@@ -856,7 +830,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 QPushButton#sidebarBtn {
     background-color: #111822;
     border: 1px solid #1f2b3a;
-    border-radius: 21px;
+    border-radius: 12px;
     min-width: 42px;
     max-width: 42px;
     min-height: 42px;
@@ -1627,32 +1601,6 @@ QCheckBox::indicator:checked:hover {
     image: url("__CHECKMARK_URL__");
 }
 
-/* ---- Radio Buttons (light) -------------------------------- */
-QRadioButton {
-    spacing: 8px;
-}
-QRadioButton::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    border: 1.5px solid #c8d0dc;
-    background-color: #ffffff;
-}
-QRadioButton::indicator:hover {
-    border-color: #9aacbe;
-}
-QRadioButton::indicator:checked {
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    background-color: #0077b6;
-    border: 1.5px solid #005a8a;
-}
-QRadioButton::indicator:checked:hover {
-    background-color: #0088c8;
-    border-color: #0066a0;
-}
-
 #MainWindow {
     background-color: #f0f2f5;
 }
@@ -2281,7 +2229,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QPushButton#sidebarBtn {
     background-color: #ffffff;
     border: 1px solid #d5dde7;
-    border-radius: 21px;
+    border-radius: 12px;
     min-width: 42px;
     max-width: 42px;
     min-height: 42px;

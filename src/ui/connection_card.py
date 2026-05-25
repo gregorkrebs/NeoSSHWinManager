@@ -300,8 +300,7 @@ class ConnectionCard(QFrame):
             self.show_loading(tr("card.loading.connect"))
             self.mount_requested.emit(self._conn.id)
         else:
-            self.show_loading(tr("card.loading.disconnect"))
-            self.unmount_requested.emit(self._conn.id)
+            self.open_path_requested.emit(self._conn.id)
 
     def _on_drive_badge_clicked(self, event):
         if event.button() != Qt.MouseButton.LeftButton:

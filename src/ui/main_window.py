@@ -988,7 +988,7 @@ class MainWindow(FramelessMainWindow):
             "_ef_conn", "_ef_name", "_ef_host", "_ef_user", "_ef_path", "_ef_port",
             "_ef_drive", "_ef_auth", "_ef_pw", "_ef_key", "_ef_cli_cb",
             "_ef_cli_widget", "_ef_cli_key", "_ef_cli_copy_btn", "_ef_cli_gen_btn",
-            "_ef_putty_key", "_ef_groups", "_ef_template_cb", "_ef_template_source"
+            "_ef_putty_key", "_ef_groups", "_ef_template_cb"
         ):
             setattr(self, attr, None)
         self._ef_initial_snapshot = None
@@ -2012,26 +2012,6 @@ class MainWindow(FramelessMainWindow):
             v.addLayout(status_row)
             v.addSpacing(8)
 
-        # Template selector (Add mode only)
-        self._ef_template_source = None
-        if not is_edit:
-            templates = self._mgr.get_templates()
-            if templates:
-                v.addWidget(self._section_label(tr("addedit.section.template")))
-                self._ef_template_source = NoWheelComboBox()
-                self._ef_template_source.addItem(tr("addedit.template.none"), userData=None)
-                for tmpl in templates:
-                    self._ef_template_source.addItem(
-                        f"{tmpl.name}  ({tmpl.host or 'Template'})", userData=tmpl
-                    )
-                self._ef_template_source.currentIndexChanged.connect(self._on_ef_template_selected)
-                v.addWidget(_ef_field(tr("addedit.section.template"), self._ef_template_source))
-                hint = QLabel(tr("addedit.template.hint"))
-                hint.setObjectName("hintLabel")
-                hint.setWordWrap(True)
-                v.addWidget(hint)
-                v.addSpacing(8)
-
         # General
         v.addWidget(self._section_label(tr("addedit.section.general")))
         self._ef_name = QLineEdit(conn.name if is_edit else "")
@@ -2205,61 +2185,6 @@ class MainWindow(FramelessMainWindow):
             chain.insert(-2, self._ef_putty_key)
         for i in range(len(chain) - 1):
             self.setTabOrder(chain[i], chain[i + 1])
-
-    def _on_ef_template_selected(self, index: int):
-        """Populate add form fields from the selected template."""
-        src = getattr(self, "_ef_template_source", None)
-        if src is None:
-            return
-        tmpl = src.itemData(index)
-        if tmpl is None:
-            for attr, default in (("_ef_name", ""), ("_ef_host", ""),
-                                   ("_ef_user", ""), ("_ef_path", "/"),
-                                   ("_ef_pw", ""), ("_ef_key", "")):
-                w = getattr(self, attr, None)
-                if w is not None:
-                    try:
-                        w.setText(default)
-                    except RuntimeError:
-                        pass
-            p = getattr(self, "_ef_port", None)
-            if p is not None:
-                try:
-                    p.setValue(22)
-                except RuntimeError:
-                    pass
-            return
-        for attr, value in (("_ef_host", tmpl.host), ("_ef_user", tmpl.user),
-                             ("_ef_path", tmpl.remote_path), ("_ef_pw", tmpl.password),
-                             ("_ef_key", tmpl.key_path)):
-            w = getattr(self, attr, None)
-            if w is not None:
-                try:
-                    w.setText(value or "")
-                except RuntimeError:
-                    pass
-        p = getattr(self, "_ef_port", None)
-        if p is not None:
-            try:
-                p.setValue(tmpl.port or 22)
-            except RuntimeError:
-                pass
-        a = getattr(self, "_ef_auth", None)
-        if a is not None:
-            try:
-                idx = a.findData(tmpl.auth_method)
-                if idx >= 0:
-                    a.setCurrentIndex(idx)
-            except RuntimeError:
-                pass
-        n = getattr(self, "_ef_name", None)
-        if n is not None:
-            try:
-                n.clear()
-                n.setPlaceholderText(tr("addedit.placeholder.copy", name=tmpl.name))
-                n.setFocus()
-            except RuntimeError:
-                pass
 
     def _ef_browse_key(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2497,7 +2422,7 @@ class MainWindow(FramelessMainWindow):
 
         self._sf_shortcut_btn = QPushButton(tr("settings.create_shortcut"))
         self._sf_shortcut_btn.setObjectName("settingsActionBtn")
-        self._sf_shortcut_btn.setMinimumWidth(170)
+        self._sf_shortcut_btn.setFixedWidth(170)
         self._sf_shortcut_btn.setMinimumHeight(32)
         self._sf_shortcut_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sf_shortcut_btn.clicked.connect(self._sf_create_shortcut)
@@ -2608,17 +2533,6 @@ class MainWindow(FramelessMainWindow):
         hint2.setObjectName("hintLabel")
         hint2.setWordWrap(True)
         pp_vl.addWidget(hint2)
-
-        _theme_now = self._mgr.get_settings().theme or "dark"
-        _link_color = "#00b4d8" if _theme_now == "dark" else "#0077b6"
-        putty_dl = QLabel(
-            f'<a href="https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html" '
-            f'style="color: {_link_color};">{tr("settings.putty_download_link")}</a>'
-        )
-        putty_dl.setObjectName("hintLabel")
-        putty_dl.setOpenExternalLinks(True)
-        putty_dl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        pp_vl.addWidget(putty_dl)
 
         term_card, term_vl = _group_card()
         term_vl.addWidget(_row_check(self._sf_term_ssh))
@@ -2763,14 +2677,6 @@ class MainWindow(FramelessMainWindow):
 
     def _on_sf_security_changed(self, index: int):
         self._sf_sec_warning.setVisible(index >= 1)
-        card = getattr(self, "_sf_sec_card", None)
-        if card is not None:
-            if index >= 1:
-                card.setStyleSheet(
-                    "QFrame#settingsGroupCard { border: 1.5px solid rgba(239, 68, 68, 0.65); }"
-                )
-            else:
-                card.setStyleSheet("")
 
     def _sf_terminal_client_toggled(self, _button=None, _checked=None):
         self._sf_putty_widget.setVisible(self._sf_term_putty.isChecked())
@@ -3099,10 +3005,8 @@ class MainWindow(FramelessMainWindow):
         self._mgr.update(updated)
         self._refresh_list()
         self._set_status(tr("status.saved"))
-        if updated.is_template:
-            self._close_right_panel_force()
-        else:
-            self._open_info_panel(conn.id)
+        # Reopen info panel for the updated connection
+        self._open_info_panel(conn.id)
 
     def _save_add_form(self):
         name = self._safe_lineedit_text("_ef_name")
@@ -3138,10 +3042,7 @@ class MainWindow(FramelessMainWindow):
         self._refresh_list()
         self._set_status(tr("status.saved"))
         self._ef_initial_snapshot = self._snapshot_form()
-        if new_conn.is_template:
-            self._close_right_panel_force()
-        else:
-            self._open_info_panel(new_conn.id)
+        self._open_info_panel(new_conn.id)
 
     def _save_settings_form(self):
         if self._sf_term_putty.isChecked():
