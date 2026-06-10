@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/gregorkrebs/neosshwinmanager/releases/latest">
-    <img src="(https://badgen.net/github/release/gregorkrebs/neosshwinmanager" alt="Latest release"/>
+    <img src="https://badgen.net/github/release/gregorkrebs/neosshwinmanager" alt="Latest release"/>
   </a>
   <a href="https://github.com/gregorkrebs/neosshwinmanager/blob/main/LICENSE">
     <img src="https://badgen.net/github/license/gregorkrebs/neosshwinmanager" alt="License"/>
