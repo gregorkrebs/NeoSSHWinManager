@@ -7,10 +7,10 @@
 
 <p align="center">
   <a href="https://github.com/gregorkrebs/neosshwinmanager/releases/latest">
-    <img src="https://img.shields.io/github/v/release/gregorkrebs/neosshwinmanager?label=release&style=for-the-badge" alt="Latest release"/>
+    <img src="(https://badgen.net/github/release/gregorkrebs/neosshwinmanager" alt="Latest release"/>
   </a>
   <a href="https://github.com/gregorkrebs/neosshwinmanager/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/gregorkrebs/neosshwinmanager?style=for-the-badge" alt="License"/>
+    <img src="https://badgen.net/github/license/gregorkrebs/neosshwinmanager" alt="License"/>
   </a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge" alt="Platform: Windows"/>
   <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"/>
