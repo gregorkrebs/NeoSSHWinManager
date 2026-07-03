@@ -7,6 +7,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
 from PyQt6.QtCore import Qt, QSize
 import os
 from src.i18n import tr
+from src.channel import display_name
 
 
 def _create_tray_icon() -> QIcon:
@@ -45,7 +46,7 @@ class SystemTray(QSystemTrayIcon):
         else:
             self.setIcon(QIcon(_create_tray_icon()))
             
-        self.setToolTip("NEO SSH-Win Manager")
+        self.setToolTip(display_name())
         self._build_menu()
         self.activated.connect(self._on_activated)
 
@@ -60,7 +61,7 @@ class SystemTray(QSystemTrayIcon):
         menu.addSeparator()
 
         quit_act = QAction("✕  " + tr("tray.quit"), self)
-        quit_act.triggered.connect(QApplication.quit)
+        quit_act.triggered.connect(self._main_window.quit_app)
         menu.addAction(quit_act)
 
         self.setContextMenu(menu)
@@ -99,7 +100,7 @@ class SystemTray(QSystemTrayIcon):
 
         menu.addSeparator()
         quit_act = QAction("✕  " + tr("tray.quit"), self)
-        quit_act.triggered.connect(QApplication.quit)
+        quit_act.triggered.connect(self._main_window.quit_app)
         menu.addAction(quit_act)
 
     def _on_tray_toggle(self, conn_id: str, is_mounted: bool):

@@ -15,7 +15,6 @@ import subprocess
 import shutil
 from src.config import Connection, AppSettings
 from src.app_logger import logger
-from src.i18n import tr
 from src.utils.secure_memory import SecureBytes
 from src.sshfs_controller import _is_safe_label
 
@@ -82,26 +81,20 @@ def _launch_native_ssh(conn: Connection, settings: AppSettings | None = None) ->
 
     env = os.environ.copy()
     sec_level = getattr(settings, 'security_level', 0) if settings else 0
-
-    if (sec_level >= 2 and conn.auth_method == "password" and conn.password):
-        # Hardened SSH_ASKPASS: Tokens instead of plaintext passwords in environment.
-        # The password is exchanged via IPC after the helper starts.
-        import sys
+    if sec_level >= 1 and conn.auth_method == "password" and conn.password:
+        import sys as _sys
         import os.path as _osp
         from src.askpass_manager import create_token
-        
-        if getattr(sys, "frozen", False):
-            askpass_cmd = f'"{sys.executable}" --pass-helper'
+        if getattr(_sys, "frozen", False):
+            askpass_cmd = f'"{_sys.executable}" --pass-helper'
         else:
             _main_py = _osp.abspath(_osp.join(_osp.dirname(__file__), "..", "main.py"))
-            askpass_cmd = f'"{sys.executable}" "{_main_py}" --pass-helper'
-        
+            askpass_cmd = f'"{_sys.executable}" "{_main_py}" --pass-helper'
         token = create_token(conn.password)
         env["SSH_ASKPASS_TOKEN"] = token
         env["SSH_ASKPASS"] = askpass_cmd
         env["SSH_ASKPASS_REQUIRE"] = "force"
         env["DISPLAY"] = "dummy:0"
-        logger.info(f"Hardened SSH_ASKPASS: Token-Austausch initiiert für {conn.name}")
 
     logger.debug(f"Native SSH cmd: {ssh_cmd_list}")
     try:
@@ -393,17 +386,11 @@ def _launch_putty(conn: Connection, putty_path: str, settings: AppSettings | Non
     cmd = [putty_path, "-ssh", "-P", str(conn.port)]
 
     sec_level = getattr(settings, 'security_level', 0) if settings else 0
-
-    if conn.auth_method == "password":
-        if sec_level < 2:
-            return False, tr("ssh.putty.pw_disabled")
-        if not conn.password:
-            return False, tr("ssh.putty.pw_missing")
-        # Passwort via -pw Flag. Sichtbar in der Prozessliste für den aktuellen Windows-Benutzer.
-        logger.warning(f"PuTTY Passwort-Login (Sicherheitsstufe 2) für {conn.name} – Passwort in Prozessliste.")
+    if sec_level >= 1 and conn.auth_method == "password" and conn.password:
+        logger.warning(f"PuTTY Autologin (Sicherheitsstufe 1) für {conn.name} – Passwort in Prozessliste.")
         cmd += ["-pw", conn.password]
 
-    elif conn.auth_method == "key" and (conn.putty_key_path or conn.key_path):
+    if conn.auth_method == "key" and (conn.putty_key_path or conn.key_path):
         dangerous = set(';"\'`$()&|<>')
         # Use putty_key_path if available, otherwise fall back to key_path
         key_path = conn.putty_key_path or conn.key_path

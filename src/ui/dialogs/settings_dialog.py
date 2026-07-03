@@ -3,7 +3,7 @@ settings_dialog.py – Settings dialog for NEO SSH-Win Manager.
 """
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QRadioButton,
     QPushButton, QSpinBox, QFrame, QWidget, QLineEdit,
     QFileDialog, QMessageBox, QScrollArea, QApplication, QComboBox
 )
@@ -96,6 +96,20 @@ class SettingsDialog(QDialog):
         vl.setContentsMargins(16, 11, 16, 11)
         vl.setSpacing(4)
         vl.addWidget(checkbox)
+        if hint:
+            hl = self._hint(hint)
+            hl.setContentsMargins(24, 0, 0, 0)
+            vl.addWidget(hl)
+        return w
+
+    def _row_radio(self, radio: "QRadioButton", hint: str = "") -> QWidget:
+        """RadioButton row, same visual style as _row_check."""
+        w = QWidget()
+        w.setObjectName("settingsRow")
+        vl = QVBoxLayout(w)
+        vl.setContentsMargins(16, 11, 16, 11)
+        vl.setSpacing(4)
+        vl.addWidget(radio)
         if hint:
             hl = self._hint(hint)
             hl.setContentsMargins(24, 0, 0, 0)
@@ -272,8 +286,13 @@ class SettingsDialog(QDialog):
         root.addWidget(self._section_header(tr("settings.section.terminal")))
         root.addSpacing(4)
 
-        self._use_putty = QCheckBox(tr("settings.use_putty"))
-        self._use_putty.toggled.connect(self._on_putty_toggled)
+        self._term_ssh_radio = QRadioButton(tr("settings.terminal_client.ssh"))
+        self._term_putty_radio = QRadioButton(tr("settings.terminal_client.putty"))
+        self._term_xterm_radio = QRadioButton(tr("settings.terminal_client.xterm"))
+
+        self._term_ssh_radio.toggled.connect(self._on_terminal_client_toggled)
+        self._term_putty_radio.toggled.connect(self._on_terminal_client_toggled)
+        self._term_xterm_radio.toggled.connect(self._on_terminal_client_toggled)
 
         self._putty_path_edit = QLineEdit()
         self._putty_path_edit.setPlaceholderText(r"C:\Program Files\PuTTY\putty.exe")
@@ -291,11 +310,34 @@ class SettingsDialog(QDialog):
         )
         self._putty_path_widget.setVisible(False)
 
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl as _QUrl
+        self._putty_download_lbl = QLabel(
+            f'<a href="https://www.putty.org" style="color:#00b4d8;">'
+            f'{tr("settings.putty_download_link")}</a>'
+        )
+        self._putty_download_lbl.setObjectName("hintLabel")
+        self._putty_download_lbl.setContentsMargins(16, 0, 16, 8)
+        self._putty_download_lbl.setOpenExternalLinks(False)
+        self._putty_download_lbl.linkActivated.connect(
+            lambda: QDesktopServices.openUrl(_QUrl("https://www.putty.org"))
+        )
+        self._putty_download_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._putty_download_lbl.setVisible(False)
+
         term_card, term_vl = self._make_group()
-        term_vl.addWidget(self._row_check(self._use_putty))
+        term_vl.addWidget(self._row_radio(self._term_ssh_radio))
+        term_vl.addWidget(self._inner_sep())
+        term_vl.addWidget(self._row_radio(self._term_putty_radio))
         term_vl.addWidget(self._putty_path_widget)
+        term_vl.addWidget(self._putty_download_lbl)
+        term_vl.addWidget(self._inner_sep())
+        term_vl.addWidget(self._row_radio(self._term_xterm_radio))
         root.addWidget(term_card)
         root.addSpacing(14)
+
+        # Legacy alias kept for external code that reads _use_putty
+        self._use_putty = self._term_putty_radio
 
         # ── DEVELOPER ─────────────────────────────────────────────────
         root.addWidget(self._section_header(tr("settings.section.developer")))
@@ -378,9 +420,12 @@ class SettingsDialog(QDialog):
         self._auto_reconnect.setChecked(s.auto_reconnect)
         self._auto_remount_on_lost.setChecked(s.auto_remount_on_lost)
         self._debug_mode.setChecked(s.debug_mode)
-        self._use_putty.setChecked(getattr(s, 'use_putty', False))
+        tc = getattr(s, 'terminal_client', 'ssh') or 'ssh'
+        self._term_ssh_radio.setChecked(tc == 'ssh')
+        self._term_putty_radio.setChecked(tc == 'putty')
+        self._term_xterm_radio.setChecked(tc == 'xterm')
         self._putty_path_edit.setText(getattr(s, 'putty_path', r"C:\Program Files\PuTTY\putty.exe"))
-        self._putty_path_widget.setVisible(getattr(s, 'use_putty', False))
+        self._putty_path_widget.setVisible(tc == 'putty')
         self._tools_widget.setVisible(s.debug_mode)
         # Language
         lang = getattr(s, 'language', 'en') or 'en'
@@ -392,6 +437,12 @@ class SettingsDialog(QDialog):
         idx = self._theme_combo.findData(theme)
         if idx >= 0:
             self._theme_combo.setCurrentIndex(idx)
+
+    def _on_terminal_client_toggled(self, _checked: bool):
+        is_putty = self._term_putty_radio.isChecked()
+        self._putty_path_widget.setVisible(is_putty)
+        self._putty_download_lbl.setVisible(is_putty)
+        self.adjustSize()
 
     def _on_putty_toggled(self, checked: bool):
         self._putty_path_widget.setVisible(checked)
@@ -538,7 +589,7 @@ class SettingsDialog(QDialog):
         updater.check_for_updates_async()
 
     def _on_save(self):
-        if self._use_putty.isChecked():
+        if self._term_putty_radio.isChecked():
             import os
             path = self._putty_path_edit.text().strip()
             if not path:
@@ -554,6 +605,12 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def get_settings(self) -> AppSettings:
+        if self._term_putty_radio.isChecked():
+            tc = "putty"
+        elif self._term_xterm_radio.isChecked():
+            tc = "xterm"
+        else:
+            tc = "ssh"
         s = AppSettings(
             start_with_windows=self._start_with_windows.isChecked(),
             minimize_to_tray=self._minimize_to_tray.isChecked(),
@@ -562,7 +619,8 @@ class SettingsDialog(QDialog):
             auto_reconnect=self._auto_reconnect.isChecked(),
             auto_remount_on_lost=self._auto_remount_on_lost.isChecked(),
             debug_mode=self._debug_mode.isChecked(),
-            use_putty=self._use_putty.isChecked(),
+            terminal_client=tc,
+            use_putty=(tc == "putty"),
             putty_path=self._putty_path_edit.text().strip(),
             language=self._lang_combo.currentData() or "en",
             theme=self._theme_combo.currentData() or "dark",

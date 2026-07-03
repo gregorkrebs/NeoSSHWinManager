@@ -37,8 +37,8 @@ import os
 import re
 import sys
 
-from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
+from PyQt6.QtCore import Qt, QTimer, QEvent, QObject, QPoint
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QApplication
 from PyQt6.QtGui import QPixmap, QCursor
 
 from src.ui.custom_titlebar import CustomTitleBar
@@ -126,6 +126,9 @@ class FramelessMainWindow(QMainWindow):
         self._fw_outer_layout: QVBoxLayout | None = None
         self._fw_content:  QWidget | None     = None
         self._fw_dwm_done: bool               = False
+
+        # Install app-level filter so we see MouseMove over child widgets too.
+        QApplication.instance().installEventFilter(self)
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -302,6 +305,20 @@ class FramelessMainWindow(QMainWindow):
                         event.accept()
                         return
         super().mousePressEvent(event)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        """Catch MouseMove on any child widget to update the resize cursor."""
+        if event.type() == QEvent.Type.MouseMove and not self.isMaximized():
+            # Map the global cursor position into window-local coordinates.
+            gpos = QCursor.pos()
+            local = self.mapFromGlobal(gpos)
+            flags = self._fw_edge_flags(local.x(), local.y())
+            shape = _EDGE_CURSORS.get(flags)
+            if shape is not None:
+                self.setCursor(QCursor(shape))
+            else:
+                self.unsetCursor()
+        return False  # never consume the event
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         """Update cursor shape when hovering over a resize edge."""

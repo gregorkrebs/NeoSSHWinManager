@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.5.1] — 2026-05-13
+
+### Added
+- Title bar in a unified design, matching the selected Dark/Light Theme
+
+---
+
 ## [1.5.0] — 2026-05-11
 
 ### Added

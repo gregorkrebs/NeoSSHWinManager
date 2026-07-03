@@ -209,14 +209,14 @@ class SSHFSController:
     # Mount
     # ------------------------------------------------------------------
 
-    def mount(self, conn: Connection) -> MountResult:
+    def mount(self, conn: Connection, disable_cache: bool = False) -> MountResult:
         """Nur sshfs.exe direkt – erzeugt ein lokales WinFsp-Laufwerk."""
-        result = self._mount_direct(conn)
+        result = self._mount_direct(conn, disable_cache=disable_cache)
         if result.success:
             self._set_drive_label(conn)
         return result
 
-    def _mount_direct(self, conn: Connection) -> MountResult:
+    def _mount_direct(self, conn: Connection, disable_cache: bool = False) -> MountResult:
         from src.app_logger import logger
 
         sshfs_exe = _find_sshfs_exe()
@@ -270,7 +270,15 @@ class SSHFSController:
             "-oumask=000",
             "-ocreate_umask=000",
             "-odefault_permissions",
+            "-oCreateFileMapping",
         ]
+
+        if disable_cache:
+            cmd += [
+                "-oattr_timeout=0",
+                "-oentry_timeout=0",
+                "-onegative_timeout=0",
+            ]
 
         if conn.auth_method == "key" and conn.key_path:
             key_path = conn.key_path.replace("\\", "/")
@@ -624,12 +632,52 @@ class SSHFSController:
                 cleanup()
                 return MountResult(True, f"Laufwerk {letter_up} getrennt (net use).")
 
+        # ── Eskalation: bis zu 10s lang sshfs-Prozess suchen & hart killen ──
+        # Deckt Fälle ab, in denen der Prozess beim ersten Versuch noch nicht
+        # auffindbar war (Race Condition) bzw. net-use-Mounts ohne Kill-Fallback.
+        log("Escalating to force-kill (up to 10s)")
+        if self._force_kill_escalation(drive_char, letter_up, log=log):
+            cleanup()
+            return MountResult(True, f"Laufwerk {letter_up} getrennt (force-kill).")
+
         return MountResult(
             False,
             f"Laufwerk {letter_up} konnte nicht getrennt werden.\n\n"
             "Alle Programme schließen die auf das Laufwerk zugreifen "
             "und erneut versuchen – oder Windows neu starten.",
         )
+
+    def _force_kill_escalation(self, drive_char: str, letter_up: str,
+                               timeout: float = 10.0, log=None) -> bool:
+        """Zuletzt eingesetzte Eskalationsstufe beim Unmount: pollt bis zu
+        ``timeout`` Sekunden lang, sucht den sshfs.exe-Prozess für das Laufwerk
+        und killt ihn hart (``taskkill /F``). Gibt True zurück, sobald der
+        Laufwerksbuchstabe frei ist, sonst nach Ablauf des Timeouts False."""
+        def _log(msg):
+            if log:
+                log(msg)
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pid = _find_sshfs_pid_for_drive(drive_char)
+            if pid:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True, timeout=5,
+                        creationflags=0x08000000,
+                    )
+                    _log(f"Force-kill PID {pid}")
+                except Exception as e:
+                    _log(f"Force-kill taskkill error: {e}")
+            else:
+                _log("No sshfs PID found during escalation")
+
+            time.sleep(1.0)
+            if not _drive_letter_in_use(letter_up):
+                return True
+
+        return not _drive_letter_in_use(letter_up)
 
     # ------------------------------------------------------------------
     # Label Cleanup

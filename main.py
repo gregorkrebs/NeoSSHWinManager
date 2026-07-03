@@ -21,7 +21,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pass-helper":
     import json
     import ctypes
     import ctypes.wintypes
-    
+
     pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
     GENERIC_READ = 0x80000000
     GENERIC_WRITE = 0x40000000
@@ -71,7 +71,6 @@ import json
 
 # Ensure src/ is importable from project root
 sys.path.insert(0, os.path.dirname(__file__))
-
 
 def _is_admin() -> bool:
     """Check if the process is running with administrator rights."""
@@ -125,6 +124,7 @@ from src.database import init_db
 from src.ui.dialogs.login_dialog import LoginDialog
 from src.auth_manager import Session
 from src.i18n import tr
+from src.channel import display_name
 
 
 def _install_global_exception_handlers():
@@ -236,9 +236,18 @@ def main():
     except Exception:
         pass
 
+    # QtWebEngineWidgets MUST be imported before QApplication is created.
+    try:
+        from PyQt6.QtWebEngineWidgets import QWebEngineView as _QWebEngineView  # noqa: F401
+        from PyQt6.QtWebEngineCore import QWebEnginePage as _QWebEnginePage    # noqa: F401
+        from PyQt6.QtWebChannel import QWebChannel as _QWebChannel              # noqa: F401
+    except ImportError:
+        pass  # xterm terminal feature unavailable; app still runs without it
+
     app = QApplication(sys.argv)
-    app.setApplicationName("NEO SSH-Win Manager")
-    app.setApplicationDisplayName("NEO SSH-Win Manager")
+    app_name = display_name()
+    app.setApplicationName(app_name)
+    app.setApplicationDisplayName(app_name)
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("NeoSSHWinManager")
 
@@ -338,6 +347,46 @@ def main():
         
     except Exception as e:
         logger.warning(f"Language/theme/telemetry init failed: {e}")
+
+    # ── Prerequisite check: WinFSP + SSHFS-Win required ─────────────────
+    from src.sshfs_controller import SSHFSController
+    import webbrowser as _webbrowser
+    _prereq = SSHFSController.get_install_status()
+    if not _prereq["winfsp"] or not _prereq["sshfs_win"]:
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+        from PyQt6.QtCore import Qt as _Qt
+        _dlg = QDialog()
+        _dlg.setWindowTitle(tr("prereq.dialog.title"))
+        _dlg.setMinimumWidth(440)
+        _dlg.setWindowFlag(_Qt.WindowType.WindowCloseButtonHint, False)
+        _vl = QVBoxLayout(_dlg)
+        _vl.setSpacing(16)
+        _vl.setContentsMargins(24, 24, 24, 24)
+        if not _prereq["winfsp"] and not _prereq["sshfs_win"]:
+            _msg = tr("prereq.dialog.text_both")
+        elif not _prereq["winfsp"]:
+            _msg = tr("prereq.dialog.text_winfsp")
+        else:
+            _msg = tr("prereq.dialog.text_sshfs")
+        _lbl = QLabel(_msg)
+        _lbl.setWordWrap(True)
+        _vl.addWidget(_lbl)
+        _btn_row = QHBoxLayout()
+        _btn_row.setSpacing(8)
+        if not _prereq["winfsp"]:
+            _b1 = QPushButton(tr("prereq.dialog.download_winfsp"))
+            _b1.clicked.connect(lambda: _webbrowser.open("https://winfsp.dev/rel/"))
+            _btn_row.addWidget(_b1)
+        if not _prereq["sshfs_win"]:
+            _b2 = QPushButton(tr("prereq.dialog.download_sshfs"))
+            _b2.clicked.connect(lambda: _webbrowser.open("https://github.com/winfsp/sshfs-win/releases/latest"))
+            _btn_row.addWidget(_b2)
+        _vl.addLayout(_btn_row)
+        _exit_btn = QPushButton(tr("prereq.dialog.exit"))
+        _exit_btn.clicked.connect(_dlg.accept)
+        _vl.addWidget(_exit_btn)
+        _dlg.exec()
+        sys.exit(0)
 
     # Don't quit when the last window is hidden (tray support)
     app.setQuitOnLastWindowClosed(False)

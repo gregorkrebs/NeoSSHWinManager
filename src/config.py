@@ -65,6 +65,7 @@ class AppSettings:
     require_admin: bool = False
     use_putty: bool = False
     putty_path: str = r"C:\Program Files\PuTTY\putty.exe"
+    terminal_client: str = "xterm"  # "ssh" | "putty" | "xterm"
     auto_login: bool = False
     auto_reconnect_mounts: bool = True
     language: str = "en"
@@ -74,6 +75,7 @@ class AppSettings:
     allow_insecure_password_auth: bool = False
     telemetry_enabled: bool = False
     telemetry_prompt_shown: bool = False
+    sshfs_disable_cache: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)

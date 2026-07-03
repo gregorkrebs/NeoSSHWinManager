@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices
 
 import os
+from src.channel import display_name, display_version
 from src.ui.dialog_utils import match_parent_height
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.widgets.no_wheel import NoWheelScrollArea
@@ -134,12 +135,12 @@ class AboutDialog(FramelessDialog):
             icon_lbl.setPixmap(svg_pixmap("cloud", "#00b4d8", 64))
         hero_l.addWidget(icon_lbl)
 
-        title_lbl = QLabel("NEO SSH-Win Manager")
+        title_lbl = QLabel(display_name())
         title_lbl.setObjectName("dialogTitle")
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hero_l.addWidget(title_lbl)
 
-        ver_lbl = QLabel(tr("about.version", version=APP_VERSION))
+        ver_lbl = QLabel(display_version(APP_VERSION))
         ver_lbl.setObjectName("dialogPill")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hero_l.addWidget(ver_lbl, 0, Qt.AlignmentFlag.AlignCenter)

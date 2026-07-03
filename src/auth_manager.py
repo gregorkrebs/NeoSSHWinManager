@@ -784,7 +784,8 @@ class UserConnectionManager:
             check_interval_seconds=row["check_interval_seconds"],
             debug_mode=bool(row["debug_mode"]),
             require_admin=bool(row["require_admin"]),
-            use_putty=bool(row["use_putty"]),
+            terminal_client=(row["terminal_client"] if "terminal_client" in row.keys() and row["terminal_client"] else "ssh"),
+            use_putty=(row["terminal_client"] == "putty") if "terminal_client" in row.keys() and row["terminal_client"] else bool(row["use_putty"]),
             putty_path=row["putty_path"] or "",
             auto_login=bool(row["auto_login"]) if "auto_login" in row.keys() else False,
             auto_reconnect=auto_reconnect,
@@ -797,6 +798,7 @@ class UserConnectionManager:
             allow_insecure_password_auth=bool(row["allow_insecure_password_auth"]) if "allow_insecure_password_auth" in row.keys() else False,
             telemetry_enabled=bool(row["telemetry_enabled"]) if "telemetry_enabled" in row.keys() else False,
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
+            sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -805,11 +807,12 @@ class UserConnectionManager:
                 """INSERT INTO app_settings
                    (user_id, start_with_windows, minimize_to_tray,
                     check_interval_seconds, debug_mode, require_admin,
-                    use_putty, putty_path, auto_login, auto_reconnect, language, theme,
+                    use_putty, putty_path, terminal_client, auto_login, auto_reconnect, language, theme,
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
+                    sshfs_disable_cache,
                     updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -818,6 +821,7 @@ class UserConnectionManager:
                      require_admin=excluded.require_admin,
                      use_putty=excluded.use_putty,
                      putty_path=excluded.putty_path,
+                     terminal_client=excluded.terminal_client,
                      auto_login=excluded.auto_login,
                      auto_reconnect=excluded.auto_reconnect,
                      language=excluded.language,
@@ -828,17 +832,20 @@ class UserConnectionManager:
                      auto_remount_on_lost=excluded.auto_remount_on_lost,
                      telemetry_enabled=excluded.telemetry_enabled,
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
+                     sshfs_disable_cache=excluded.sshfs_disable_cache,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
                  s.check_interval_seconds, int(s.debug_mode),
                  int(s.require_admin), int(s.use_putty), s.putty_path,
+                 getattr(s, "terminal_client", "ssh") or "ssh",
                  int(s.auto_login), int(bool(getattr(s, "auto_reconnect", False) or getattr(s, "auto_reconnect_mounts", False))), s.language, s.theme,
                  int(s.security_level),
                  int(s.allow_passwordless_key_auth), int(s.allow_insecure_password_auth),
                  int(bool(getattr(s, "auto_remount_on_lost", True))),
                  int(bool(getattr(s, "telemetry_enabled", False))),
-                 int(bool(getattr(s, "telemetry_prompt_shown", False))))
+                 int(bool(getattr(s, "telemetry_prompt_shown", False))),
+                 int(bool(getattr(s, "sshfs_disable_cache", False))))
             )
 
     # Backwards-compatible alias used by main.py

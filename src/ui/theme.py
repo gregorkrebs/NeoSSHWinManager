@@ -380,6 +380,30 @@ QProgressBar#sysinfoProgress[level="error"]::chunk {
     border-radius: 3px;
 }
 
+QMenu {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 8px;
+    color: #c8d6e5;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 18px;
+    border-radius: 6px;
+}
+QMenu::item:selected {
+    background-color: #182232;
+    color: #7ddfff;
+}
+QMenu::item:disabled {
+    color: #3a4a5a;
+}
+QMenu::separator {
+    height: 1px;
+    background: #1f2b3a;
+    margin: 4px 2px;
+}
+
 QMenu#trayMenu {
     background-color: #111822;
     border: 1px solid #1f2b3a;
@@ -1162,6 +1186,21 @@ QPushButton#cardInfoBtn[active="true"] {
     border: 1px solid #36506c;
     color: #deebf7;
 }
+#templateDropdownFrame {
+    background-color: #111820;
+    border: 1px solid #243243;
+    border-radius: 10px;
+}
+#templateDropdownRow {
+    border-radius: 6px;
+}
+#templateDropdownRow:hover {
+    background-color: #192433;
+}
+#templateDropdownLabel {
+    color: #c1cfdd;
+    font-size: 13px;
+}
 QPushButton#aboutLinkBtn {
     background-color: #141d28;
     border: 1px solid #243243;
@@ -1201,7 +1240,11 @@ QLineEdit:focus, QPushButton:focus {
 #actionBtn[btn_type="danger"], #dangerBtn {
     background: rgba(239, 68, 68, 0.08);
     border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 10px;
     color: #ef4444;
+    padding: 0 14px;
+    min-height: 32px;
+    max-height: 32px;
 }
 #actionBtn[btn_type="danger"]:hover, #dangerBtn:hover {
     background: rgba(239, 68, 68, 0.15);
@@ -1217,6 +1260,38 @@ QLineEdit:focus, QPushButton:focus {
 #actionBtn[btn_type="warning"]:hover {
     background: rgba(245, 158, 11, 0.15);
     border: 1px solid #f59e0b;
+}
+
+/* Integrated Terminal UI */
+#terminalArea {
+    background-color: #0d0d12;
+}
+#terminalTabBar {
+    background-color: #0d1117;
+    border-bottom: 1px solid #1a2330;
+}
+#terminalTabBtn {
+    background-color: #141d28;
+    border: 1px solid #1f2b3a;
+    border-radius: 6px;
+    color: #6a7a8a;
+    padding: 3px 12px;
+    min-height: 24px;
+    max-height: 24px;
+    font-size: 11px;
+}
+#terminalTabBtn:hover {
+    background-color: #192433;
+    color: #aab4c4;
+}
+#terminalTabBtn:checked {
+    background-color: #192433;
+    border-color: #00b4d8;
+    color: #deebf7;
+}
+#terminalEndBar {
+    background-color: #0d1117;
+    border-top: 1px solid #1a2330;
 }
 
 /* SSH Circular/Small Button */
@@ -1793,6 +1868,30 @@ QProgressBar#sysinfoProgress[level="warn"]::chunk {
 QProgressBar#sysinfoProgress[level="error"]::chunk {
     background-color: #dc2626;
     border-radius: 3px;
+}
+
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 8px;
+    color: #1a2332;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 18px;
+    border-radius: 6px;
+}
+QMenu::item:selected {
+    background-color: #edf5fb;
+    color: #0077b6;
+}
+QMenu::item:disabled {
+    color: #aab4c4;
+}
+QMenu::separator {
+    height: 1px;
+    background: #d5dde7;
+    margin: 4px 2px;
 }
 
 QMenu#trayMenu {
@@ -2476,6 +2575,21 @@ QPushButton#actionBtn:disabled:hover {
     border: 1px solid #aec6dd;
     color: #1a2332;
 }
+#templateDropdownFrame {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 10px;
+}
+#templateDropdownRow {
+    border-radius: 6px;
+}
+#templateDropdownRow:hover {
+    background-color: #edf5fb;
+}
+#templateDropdownLabel {
+    color: #2a3a4a;
+    font-size: 13px;
+}
 QPushButton#aboutLinkBtn {
     background-color: #f0f5fa;
     border: 1px solid #d5dde7;
@@ -2513,7 +2627,11 @@ QLineEdit:focus, QPushButton:focus {
 #actionBtn[btn_type="danger"], #dangerBtn {
     background: rgba(220, 38, 38, 0.08);
     border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 10px;
     color: #dc2626;
+    padding: 0 14px;
+    min-height: 32px;
+    max-height: 32px;
 }
 #actionBtn[btn_type="danger"]:hover, #dangerBtn:hover {
     background: rgba(220, 38, 38, 0.15);
@@ -2528,6 +2646,38 @@ QLineEdit:focus, QPushButton:focus {
 #actionBtn[btn_type="warning"]:hover {
     background: rgba(217, 119, 6, 0.15);
     border: 1px solid #d97706;
+}
+
+/* Integrated Terminal UI (light) */
+#terminalArea {
+    background-color: #f0f2f5;
+}
+#terminalTabBar {
+    background-color: #e8edf3;
+    border-bottom: 1px solid #c8d0dc;
+}
+#terminalTabBtn {
+    background-color: #f4f7fa;
+    border: 1px solid #d5dde7;
+    border-radius: 6px;
+    color: #6a7a8a;
+    padding: 3px 12px;
+    min-height: 24px;
+    max-height: 24px;
+    font-size: 11px;
+}
+#terminalTabBtn:hover {
+    background-color: #edf5fb;
+    color: #1a2332;
+}
+#terminalTabBtn:checked {
+    background-color: #edf5fb;
+    border-color: #0077b6;
+    color: #0077b6;
+}
+#terminalEndBar {
+    background-color: #e8edf3;
+    border-top: 1px solid #c8d0dc;
 }
 
 QPushButton#sshBtn {

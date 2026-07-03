@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terminal</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: {{BG}};
+    overflow: hidden;
+  }
+  #terminal-container {
+    width: 100%; height: 100%;
+    padding: 4px;
+  }
+  .xterm { height: 100%; }
+  .xterm-viewport { overflow-y: hidden !important; }
+
+  #overlay {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: {{SURFACE}};
+    color: {{FG}};
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    z-index: 100;
+  }
+  #overlay.visible { display: flex; }
+  #overlay-msg { opacity: 0.75; letter-spacing: 0.01em; }
+  .overlay-dots {
+    display: inline-flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .overlay-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: {{ACCENT}};
+    animation: dot-blink 1.2s infinite;
+    opacity: 0.2;
+  }
+  .overlay-dot:nth-child(2) { animation-delay: 0.2s; }
+  .overlay-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot-blink {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+  }
+  #reconnect-btn {
+    padding: 8px 22px;
+    background: {{ACCENT}};
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: opacity 0.15s;
+    display: none;
+  }
+  #reconnect-btn:hover { opacity: 0.85; }
+  #reconnect-btn.visible { display: block; }
+</style>
+</head>
+<body>
+<div id="terminal-container"></div>
+<div id="overlay">
+  <span id="overlay-msg">{{MSG_CONNECTING}}</span>
+  <div class="overlay-dots" id="overlay-dots">
+    <div class="overlay-dot"></div>
+    <div class="overlay-dot"></div>
+    <div class="overlay-dot"></div>
+  </div>
+  <button id="reconnect-btn" onclick="reconnect()">{{MSG_RECONNECT}}</button>
+</div>
+
+<script src="xterm.js"></script>
+<script src="xterm-addon-fit.js"></script>
+<script src="xterm-addon-web-links.js"></script>
+<script src="qwebchannel.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  const WS_URL     = '{{WS_URL}}';
+  const BG         = '{{BG}}';
+  const FG         = '{{FG}}';
+  const CURSOR     = '{{ACCENT}}';
+  const MSG_CONNECTING  = '{{MSG_CONNECTING}}';
+  const MSG_CONNECTED   = '{{MSG_CONNECTED}}';
+  const MSG_DISCONNECTED = '{{MSG_DISCONNECTED}}';
+  const MSG_RECONNECT    = '{{MSG_RECONNECT}}';
+
+  const overlay      = document.getElementById('overlay');
+  const overlayMsg   = document.getElementById('overlay-msg');
+  const reconnectBtn = document.getElementById('reconnect-btn');
+
+  const overlayDots = document.getElementById('overlay-dots');
+
+  function showOverlay(msg, showReconnect) {
+    overlay.classList.add('visible');
+    overlayMsg.textContent = msg;
+    reconnectBtn.classList.toggle('visible', !!showReconnect);
+    if (overlayDots) overlayDots.style.display = showReconnect ? 'none' : 'inline-flex';
+  }
+  function hideOverlay() {
+    overlay.classList.remove('visible');
+    reconnectBtn.classList.remove('visible');
+  }
+
+  // ── xterm.js ─────────────────────────────────────────────────
+  const term = new Terminal({
+    theme: {
+      background: BG,
+      foreground: FG,
+      cursor: CURSOR,
+      cursorAccent: BG,
+      selectionBackground: CURSOR + '55',
+    },
+    fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
+    fontSize: 13,
+    lineHeight: 1.2,
+    cursorBlink: true,
+    allowProposedApi: true,
+    scrollback: 5000,
+  });
+
+  const fitAddon      = new FitAddon.FitAddon();
+  const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+  term.loadAddon(fitAddon);
+  term.loadAddon(webLinksAddon);
+  term.open(document.getElementById('terminal-container'));
+
+  function fit() {
+    try { fitAddon.fit(); } catch(e) {}
+  }
+
+  // Resize when container changes size
+  const ro = new ResizeObserver(() => fit());
+  ro.observe(document.getElementById('terminal-container'));
+  fit();
+
+  // ── QWebChannel bridge (for PTY resize) ──────────────────────
+  let bridge = null;
+  new QWebChannel(qt.webChannelTransport, function(channel) {
+    bridge = channel.objects.bridge;
+  });
+
+  term.onResize(function(size) {
+    if (bridge) {
+      try { bridge.resize(size.cols, size.rows); } catch(e) {}
+    }
+  });
+
+  // ── WebSocket ─────────────────────────────────────────────────
+  let ws = null;
+  let intentionalClose = false;
+
+  function connect() {
+    intentionalClose = false;
+    showOverlay(MSG_CONNECTING, false);
+    ws = new WebSocket(WS_URL);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function() {
+      hideOverlay();
+      fit();
+    };
+
+    ws.onmessage = function(event) {
+      const data = event.data;
+      if (data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(data));
+      } else {
+        term.write(data);
+      }
+    };
+
+    ws.onerror = function() {
+      // onclose will follow
+    };
+
+    ws.onclose = function() {
+      if (!intentionalClose) {
+        showOverlay(MSG_DISCONNECTED, true);
+      }
+    };
+  }
+
+  term.onData(function(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  // Exposed globally so the onclick attribute on the button can reach it.
+  window.reconnect = function reconnect() {
+    if (bridge) {
+      try { bridge.resize(-1, -1); } catch(e) {}  // sentinel: trigger reconnect
+    }
+  };
+
+  // Called by terminal_panel.py via QWebChannel when the session is closed intentionally.
+  window.closeSession = function closeSession() {
+    intentionalClose = true;
+    if (ws) { ws.close(); }
+  };
+
+  connect();
+})();
+</script>
+</body>
+</html>
