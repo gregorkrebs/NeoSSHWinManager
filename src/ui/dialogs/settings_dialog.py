@@ -310,11 +310,27 @@ class SettingsDialog(QDialog):
         )
         self._putty_path_widget.setVisible(False)
 
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl as _QUrl
+        self._putty_download_lbl = QLabel(
+            f'<a href="https://www.putty.org" style="color:#00b4d8;">'
+            f'{tr("settings.putty_download_link")}</a>'
+        )
+        self._putty_download_lbl.setObjectName("hintLabel")
+        self._putty_download_lbl.setContentsMargins(16, 0, 16, 8)
+        self._putty_download_lbl.setOpenExternalLinks(False)
+        self._putty_download_lbl.linkActivated.connect(
+            lambda: QDesktopServices.openUrl(_QUrl("https://www.putty.org"))
+        )
+        self._putty_download_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._putty_download_lbl.setVisible(False)
+
         term_card, term_vl = self._make_group()
         term_vl.addWidget(self._row_radio(self._term_ssh_radio))
         term_vl.addWidget(self._inner_sep())
         term_vl.addWidget(self._row_radio(self._term_putty_radio))
         term_vl.addWidget(self._putty_path_widget)
+        term_vl.addWidget(self._putty_download_lbl)
         term_vl.addWidget(self._inner_sep())
         term_vl.addWidget(self._row_radio(self._term_xterm_radio))
         root.addWidget(term_card)
@@ -423,7 +439,9 @@ class SettingsDialog(QDialog):
             self._theme_combo.setCurrentIndex(idx)
 
     def _on_terminal_client_toggled(self, _checked: bool):
-        self._putty_path_widget.setVisible(self._term_putty_radio.isChecked())
+        is_putty = self._term_putty_radio.isChecked()
+        self._putty_path_widget.setVisible(is_putty)
+        self._putty_download_lbl.setVisible(is_putty)
         self.adjustSize()
 
     def _on_putty_toggled(self, checked: bool):

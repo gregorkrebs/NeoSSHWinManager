@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPen, QBrush, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal
 import os
 import sys
 from PyQt6 import sip
@@ -80,6 +80,70 @@ class _PillSplitter(QSplitter):
     """QSplitter that uses _PillHandle for its divider."""
     def createHandle(self) -> QSplitterHandle:  # noqa: N802
         return _PillHandle(self.orientation(), self)
+
+
+class _TemplateDropdown(QFrame):
+    """
+    Popup panel listing available templates.
+    Each row shows the template host/name plus a trash button to delete it.
+    Emits template_selected(Connection) or template_deleted(str conn_id).
+    """
+    template_selected = pyqtSignal(object)  # Connection
+    template_deleted  = pyqtSignal(str)     # conn_id
+
+    def __init__(self, templates: list, theme: str, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("templateDropdownFrame")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self._build(templates, theme)
+
+    def _build(self, templates: list, theme: str):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(2)
+        for conn in templates:
+            label_text = conn.name or conn.host
+            row_w = QWidget()
+            row_w.setObjectName("templateDropdownRow")
+            row_w.setCursor(Qt.CursorShape.PointingHandCursor)
+            hl = QHBoxLayout(row_w)
+            hl.setContentsMargins(8, 6, 6, 6)
+            hl.setSpacing(6)
+
+            lbl = QLabel(label_text)
+            lbl.setObjectName("templateDropdownLabel")
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            hl.addWidget(lbl, stretch=1)
+
+            trash_btn = QPushButton()
+            trash_btn.setObjectName("rpHeaderBtn")
+            trash_btn.setFixedSize(QSize(28, 28))
+            trash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            trash_btn.setToolTip(tr("addedit.template.delete.title"))
+            from src.ui.icons import icon as svg_icon
+            trash_btn.setIcon(svg_icon("trash", "#ef4444", 13))
+            trash_btn.setIconSize(QSize(13, 13))
+
+            _conn = conn  # capture for closure
+            trash_btn.clicked.connect(lambda _checked, c=_conn: self._on_delete(c))
+            lbl.mousePressEvent = lambda ev, c=_conn: self._on_select(c)
+
+            hl.addWidget(trash_btn)
+            outer.addWidget(row_w)
+
+    def _on_select(self, conn):
+        self.hide()
+        self.template_selected.emit(conn)
+
+    def _on_delete(self, conn):
+        self.hide()
+        self.template_deleted.emit(conn.id)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.parent():
+            parent = self.parent()
+            self.setFixedWidth(max(parent.width(), 200))
 
 
 class MainWindow(FramelessMainWindow):
@@ -954,11 +1018,16 @@ class MainWindow(FramelessMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = ConnectionCard(conn, mounted=mounted, theme=(self._mgr.get_settings().theme or "dark"))
+        card = ConnectionCard(
+            conn, mounted=mounted,
+            theme=(self._mgr.get_settings().theme or "dark"),
+            debug_edit=bool(self._mgr.get_settings().debug_mode),
+        )
         card.mount_requested.connect(self._on_mount)
         card.unmount_requested.connect(self._on_unmount)
         card.ssh_requested.connect(self._on_ssh_requested)
         card.open_path_requested.connect(self._on_open_mounted_path)
+        card.open_explorer_requested.connect(self._on_open_explorer)
         card.info_requested.connect(self._on_info_requested)
         card.edit_requested.connect(self._open_edit_panel)
         card.mousePressEvent = lambda ev, cid=conn.id: self._select_card(cid)
@@ -1119,21 +1188,23 @@ class MainWindow(FramelessMainWindow):
 
         card = self._cards.get(conn_id)
         is_mounted = card and card.is_mounted
+        # In DEBUG mode editing is always allowed, even while mounted.
+        edit_locked = is_mounted and not self._mgr.get_settings().debug_mode
 
         self._set_right_panel_header(tr("panel.header.details"), conn.name.upper())
         # Info button - always visible in info mode
         self._rp_info_btn.setVisible(True)
         # Edit button: enabled=accent color, disabled=muted (theme-aware)
         theme = self._mgr.get_settings().theme or "dark"
-        if is_mounted:
+        if edit_locked:
             edit_icon_color = "#aab4c4" if theme == "light" else "#2a3a4a"
         else:
             edit_icon_color = "#0077b6" if theme == "light" else "#aab4c4"
         self._rp_edit_btn.setIcon(svg_icon("edit", edit_icon_color, 15))
         self._rp_edit_btn.setVisible(True)
-        self._rp_edit_btn.setEnabled(not is_mounted)
+        self._rp_edit_btn.setEnabled(not edit_locked)
         self._rp_edit_btn.setToolTip(
-            tr("card.tooltip.edit_locked") if is_mounted else tr("card.tooltip.edit")
+            tr("card.tooltip.edit_locked") if edit_locked else tr("card.tooltip.edit")
         )
         # Header actions (overview): Sysinfo → Edit → Terminal → Mount → Close
         self._rp_terminal_btn.setVisible(True)
@@ -1248,7 +1319,7 @@ class MainWindow(FramelessMainWindow):
                 QFrame#rpStatusContainer {
                     background-color: rgba(0, 212, 100, 0.15);
                     border: 1px solid rgba(0, 212, 100, 0.3);
-                    border-radius: 16px;
+                    border-radius: 8px;
                 }
             """)
         else:
@@ -1256,7 +1327,7 @@ class MainWindow(FramelessMainWindow):
                 QFrame#rpStatusContainer {
                     background-color: rgba(106, 122, 138, 0.15);
                     border: 1px solid rgba(106, 122, 138, 0.3);
-                    border-radius: 16px;
+                    border-radius: 8px;
                 }
             """)
         status_layout = QHBoxLayout(status_container)
@@ -1343,7 +1414,7 @@ class MainWindow(FramelessMainWindow):
             return
 
         card = self._cards.get(conn_id)
-        if card and card.is_mounted:
+        if card and card.is_mounted and not self._mgr.get_settings().debug_mode:
             self._show_inline_message(
                 tr("edit.locked.title"),
                 tr("edit.locked.msg"),
@@ -1976,7 +2047,7 @@ class MainWindow(FramelessMainWindow):
                     QFrame#rpStatusContainer {
                         background-color: rgba(0, 212, 100, 0.15);
                         border: 1px solid rgba(0, 212, 100, 0.3);
-                        border-radius: 16px;
+                        border-radius: 8px;
                     }
                 """)
             else:
@@ -1984,7 +2055,7 @@ class MainWindow(FramelessMainWindow):
                     QFrame#rpStatusContainer {
                         background-color: rgba(106, 122, 138, 0.15);
                         border: 1px solid rgba(106, 122, 138, 0.3);
-                        border-radius: 16px;
+                        border-radius: 8px;
                     }
                 """)
             status_layout = QHBoxLayout(status_container)
@@ -2011,6 +2082,38 @@ class MainWindow(FramelessMainWindow):
                 status_row.addWidget(folder_lbl)
             v.addLayout(status_row)
             v.addSpacing(8)
+
+            # DEBUG mode: editing a mounted host is allowed but risky (changing
+            # path/drive letter while mounted can leave things inconsistent).
+            if is_mounted and self._mgr.get_settings().debug_mode:
+                warn = QLabel(tr("edit.debug_warning"))
+                warn.setWordWrap(True)
+                warn.setStyleSheet(
+                    "background-color: rgba(255, 180, 0, 0.15);"
+                    "border: 1px solid rgba(255, 180, 0, 0.35);"
+                    "border-radius: 8px; padding: 8px 12px;"
+                    "color: #d89000; font-size: 12px; font-weight: 600;"
+                )
+                v.addWidget(warn)
+                v.addSpacing(8)
+
+        # Template selector (add mode only)
+        self._ef_template_btn = None
+        self._ef_templates = []
+        if not is_edit:
+            _templates = self._mgr.get_templates()
+            if _templates:
+                self._ef_templates = _templates
+                v.addWidget(self._section_label(tr("addedit.section.template")))
+                self._ef_template_btn = QPushButton(tr("addedit.template.none"))
+                self._ef_template_btn.setObjectName("secondaryBtn")
+                self._ef_template_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                self._ef_template_btn.clicked.connect(self._ef_show_template_dropdown)
+                v.addWidget(self._ef_template_btn)
+                _hint = QLabel(tr("addedit.template.hint"))
+                _hint.setObjectName("hintLabel")
+                v.addWidget(_hint)
+                v.addSpacing(4)
 
         # General
         v.addWidget(self._section_label(tr("addedit.section.general")))
@@ -2185,6 +2288,111 @@ class MainWindow(FramelessMainWindow):
             chain.insert(-2, self._ef_putty_key)
         for i in range(len(chain) - 1):
             self.setTabOrder(chain[i], chain[i + 1])
+
+    def _ef_show_template_dropdown(self):
+        templates = self._mgr.get_templates()
+        if not templates:
+            return
+        theme = self._mgr.get_settings().theme or "dark"
+        btn = self._ef_template_btn
+        if btn is None:
+            return
+        popup = _TemplateDropdown(templates, theme, btn)
+        popup.template_selected.connect(self._on_ef_template_selected)
+        popup.template_deleted.connect(self._on_ef_template_deleted)
+        global_pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        popup.move(global_pos)
+        popup.show()
+
+    def _next_unique_name(self, base: str) -> str:
+        """Return base if unused, else base#2, base#3, … (first free slot)."""
+        existing = {c.name.lower() for c in self._mgr.get_all(include_templates=False)}
+        if base.lower() not in existing:
+            return base
+        n = 2
+        while f"{base}#{n}".lower() in existing:
+            n += 1
+        return f"{base}#{n}"
+
+    def _on_ef_template_selected(self, conn):
+        # Name: template name, auto-incremented if already taken
+        unique_name = self._next_unique_name(conn.name)
+        if getattr(self, "_ef_name", None):
+            try:
+                self._ef_name.setText(unique_name)
+            except RuntimeError:
+                pass
+
+        # Host
+        if getattr(self, "_ef_host", None):
+            try:
+                self._ef_host.setText(conn.host)
+            except RuntimeError:
+                pass
+
+        # Port
+        if getattr(self, "_ef_port", None):
+            try:
+                self._ef_port.setValue(conn.port or 22)
+            except RuntimeError:
+                pass
+
+        # User
+        if getattr(self, "_ef_user", None):
+            try:
+                self._ef_user.setText(conn.user)
+            except RuntimeError:
+                pass
+
+        # Auth method (no password / key paths)
+        if getattr(self, "_ef_auth", None):
+            try:
+                idx = self._ef_auth.findData(conn.auth_method)
+                if idx >= 0:
+                    self._ef_auth.setCurrentIndex(idx)
+            except RuntimeError:
+                pass
+
+        # Remote path
+        if getattr(self, "_ef_path", None):
+            try:
+                self._ef_path.setText(conn.remote_path or "/")
+            except RuntimeError:
+                pass
+
+        # Groups
+        if getattr(self, "_ef_groups", None):
+            try:
+                self._ef_groups.setText(conn.groups or "")
+            except RuntimeError:
+                pass
+
+        # Update dropdown button label to template name
+        if self._ef_template_btn:
+            try:
+                self._ef_template_btn.setText(conn.name or conn.host)
+            except RuntimeError:
+                pass
+
+        self._validate_edit_form()
+
+    def _on_ef_template_deleted(self, conn_id: str):
+        conn = self._mgr.get_by_id(conn_id)
+        name = conn.name if conn else conn_id
+        confirmed = StyledMessageBox.question(
+            self,
+            tr("addedit.template.delete.title"),
+            tr("addedit.template.delete.confirm", name=name),
+        )
+        if not confirmed:
+            return
+        self._mgr.delete(conn_id)
+        self._ef_templates = self._mgr.get_templates()
+        if not self._ef_templates and self._ef_template_btn:
+            try:
+                self._ef_template_btn.setVisible(False)
+            except RuntimeError:
+                pass
 
     def _ef_browse_key(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2541,6 +2749,23 @@ class MainWindow(FramelessMainWindow):
         self._sf_putty_widget = putty_path_row
         self._sf_putty_widget.setVisible(_tc == 'putty')
         term_vl.addWidget(self._sf_putty_widget)
+
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl as _QUrl
+        self._sf_putty_download_lbl = QLabel(
+            f'<a href="https://www.putty.org" style="color:#00b4d8;">'
+            f'{tr("settings.putty_download_link")}</a>'
+        )
+        self._sf_putty_download_lbl.setObjectName("hintLabel")
+        self._sf_putty_download_lbl.setContentsMargins(16, 0, 16, 8)
+        self._sf_putty_download_lbl.setOpenExternalLinks(False)
+        self._sf_putty_download_lbl.linkActivated.connect(
+            lambda: QDesktopServices.openUrl(_QUrl("https://www.putty.org"))
+        )
+        self._sf_putty_download_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_putty_download_lbl.setVisible(_tc == 'putty')
+        term_vl.addWidget(self._sf_putty_download_lbl)
+
         term_vl.addWidget(_inner_sep())
         term_vl.addWidget(_row_check(self._sf_term_xterm))
         v.addWidget(term_card)
@@ -2616,6 +2841,57 @@ class MainWindow(FramelessMainWindow):
         dev_vl.addWidget(_row_check(self._sf_debug))
         dev_vl.addWidget(self._sf_tools_widget)
         v.addWidget(dev_card)
+        v.addSpacing(14)
+
+        # ── PRO LICENSE ───────────────────────────────────────────────────
+        v.addWidget(_section_hdr(tr("settings.section.pro")))
+        v.addSpacing(4)
+
+        from src.pro_manager import is_pro_active as _is_pro_active
+        _pro_active = _is_pro_active()
+
+        self._sf_pro_status_lbl = QLabel(
+            tr("settings.pro.active") if _pro_active else tr("settings.pro.inactive")
+        )
+        self._sf_pro_status_lbl.setObjectName("rpSectionLabel" if _pro_active else "hintLabel")
+        self._sf_pro_status_lbl.setWordWrap(True)
+
+        self._sf_pro_key = QLineEdit()
+        self._sf_pro_key.setPlaceholderText("NEO-XXXX-XXXX-XXXX")
+        self._sf_pro_key.setVisible(not _pro_active)
+
+        self._sf_pro_activate_btn = QPushButton(tr("settings.pro.activate"))
+        self._sf_pro_activate_btn.setObjectName("primaryBtn")
+        self._sf_pro_activate_btn.setFixedWidth(120)
+        self._sf_pro_activate_btn.setMinimumHeight(32)
+        self._sf_pro_activate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_pro_activate_btn.setVisible(not _pro_active)
+        self._sf_pro_activate_btn.clicked.connect(self._sf_activate_pro)
+
+        pro_card, pro_vl = _group_card()
+        _pro_status_row = QWidget()
+        _pro_status_row.setObjectName("settingsRow")
+        _pro_inner = QVBoxLayout(_pro_status_row)
+        _pro_inner.setContentsMargins(16, 11, 16, 11)
+        _pro_inner.setSpacing(6)
+        _pro_inner.addWidget(self._sf_pro_status_lbl)
+        if not _pro_active:
+            _key_row_w = QWidget()
+            _key_row_hl = QHBoxLayout(_key_row_w)
+            _key_row_hl.setContentsMargins(0, 0, 0, 0)
+            _key_row_hl.setSpacing(8)
+            _key_row_hl.addWidget(self._sf_pro_key, stretch=1)
+            _key_row_hl.addWidget(self._sf_pro_activate_btn)
+            _pro_inner.addWidget(_key_row_w)
+            _donate_lbl = QLabel(
+                f'<a href="https://neosshwinmanager.org/pro" style="color:#00b4d8;">'
+                f'{tr("settings.pro.learn_more")}</a>'
+            )
+            _donate_lbl.setObjectName("hintLabel")
+            _donate_lbl.setOpenExternalLinks(True)
+            _pro_inner.addWidget(_donate_lbl)
+        pro_vl.addWidget(_pro_status_row)
+        v.addWidget(pro_card)
 
         v.addStretch()
         self._fs_layout.addWidget(body)
@@ -2678,8 +2954,29 @@ class MainWindow(FramelessMainWindow):
     def _on_sf_security_changed(self, index: int):
         self._sf_sec_warning.setVisible(index >= 1)
 
+    def _sf_activate_pro(self):
+        from src.pro_manager import activate_pro
+        key = getattr(self._sf_pro_key, "text", lambda: "")().strip().upper()
+        if not key:
+            self._show_inline_message("PRO", tr("settings.pro.key_required"), is_error=True)
+            return
+        self._sf_pro_activate_btn.setEnabled(False)
+        self._sf_pro_activate_btn.setText(tr("settings.pro.activating"))
+        QApplication.processEvents()
+        result = activate_pro(key)
+        self._sf_pro_activate_btn.setEnabled(True)
+        self._sf_pro_activate_btn.setText(tr("settings.pro.activate"))
+        if result["success"]:
+            StyledMessageBox.information(self, "PRO", tr("settings.pro.activation_success"))
+            self._open_settings_panel()
+        else:
+            self._show_inline_message("PRO", result.get("error", ""), is_error=True)
+
     def _sf_terminal_client_toggled(self, _button=None, _checked=None):
-        self._sf_putty_widget.setVisible(self._sf_term_putty.isChecked())
+        is_putty = self._sf_term_putty.isChecked()
+        self._sf_putty_widget.setVisible(is_putty)
+        if hasattr(self, "_sf_putty_download_lbl"):
+            self._sf_putty_download_lbl.setVisible(is_putty)
         _show_sec = not self._sf_term_xterm.isChecked()
         self._sf_sec_header.setVisible(_show_sec)
         self._sf_sec_spacing.setVisible(_show_sec)
@@ -2939,6 +3236,14 @@ class MainWindow(FramelessMainWindow):
             yes_text=tr("dirty.discard"), no_text=tr("dirty.keep")
         )
 
+    def _name_is_duplicate(self, name: str, exclude_id: str | None = None) -> bool:
+        """Returns True if another connection already uses this name (case-insensitive)."""
+        name_lower = name.strip().lower()
+        for c in self._mgr.get_all(include_templates=False):
+            if c.name.lower() == name_lower and c.id != exclude_id:
+                return True
+        return False
+
     def _validate_edit_form(self):
         required = ("_ef_name", "_ef_host", "_ef_user")
         is_valid = True
@@ -2951,6 +3256,11 @@ class MainWindow(FramelessMainWindow):
                 invalid = not text
                 if attr == "_ef_name" and text and not _is_safe_label(text):
                     invalid = True
+                elif attr == "_ef_name" and text and _is_safe_label(text):
+                    excl = getattr(self, "_ef_conn", None)
+                    excl_id = excl.id if excl and self._panel_mode == _PANEL_EDIT else None
+                    if self._name_is_duplicate(text, exclude_id=excl_id):
+                        invalid = True
                 widget.setProperty("invalid", "true" if invalid else "false")
                 widget.style().unpolish(widget)
                 widget.style().polish(widget)
@@ -2977,6 +3287,7 @@ class MainWindow(FramelessMainWindow):
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
+        elif self._name_is_duplicate(name, exclude_id=self._ef_conn.id): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
         if errors:
@@ -3015,6 +3326,7 @@ class MainWindow(FramelessMainWindow):
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
+        elif self._name_is_duplicate(name): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
         if errors:
@@ -3023,20 +3335,21 @@ class MainWindow(FramelessMainWindow):
 
         putty_key_path = self._safe_lineedit_text("_ef_putty_key")
         cli_enabled = self._safe_bool_checked("_ef_cli_cb", False)
-        
+        is_tpl = self._safe_bool_checked("_ef_template_cb", False)
+
         new_conn = Connection(
             name=name, host=host, user=user,
             remote_path=self._safe_lineedit_text("_ef_path") or "/",
             port=self._safe_spin_value("_ef_port", 22),
             auth_method=self._safe_current_data("_ef_auth", "password"),
-            password=self._safe_lineedit_text("_ef_pw"),
-            key_path=self._safe_lineedit_text("_ef_key"),
-            putty_key_path=putty_key_path,
+            password="" if is_tpl else self._safe_lineedit_text("_ef_pw"),
+            key_path="" if is_tpl else self._safe_lineedit_text("_ef_key"),
+            putty_key_path="" if is_tpl else putty_key_path,
             drive_letter=self._safe_current_data("_ef_drive", "Z:"),
             cli_access_enabled=cli_enabled,
             cli_access_key=self._safe_lineedit_text("_ef_cli_key") if cli_enabled else None,
             groups=self._safe_lineedit_text("_ef_groups"),
-            is_template=self._safe_bool_checked("_ef_template_cb", False),
+            is_template=is_tpl,
         )
         self._mgr.add(new_conn)
         self._refresh_list()
@@ -3585,6 +3898,21 @@ class MainWindow(FramelessMainWindow):
         browser.show()
         self._set_status(tr("status.sftp_browser_opened", name=conn.name))
 
+    def _on_open_explorer(self, conn_id: str):
+        """Open the locally mounted drive in Windows Explorer."""
+        conn = self._mgr.get_by_id(conn_id)
+        if not conn:
+            return
+        card = self._cards.get(conn_id)
+        if not card or not card.is_mounted:
+            return
+        path = f"{conn.drive_letter.rstrip(':').rstrip(chr(92))}:\\"
+        try:
+            os.startfile(path)
+            self._set_status(tr("status.explorer_opened", name=conn.name, drive=conn.drive_letter))
+        except OSError as e:
+            self._err_popup(tr("explorer.failed.title"), f"{path}\n\n{e}")
+
     def _on_settings(self):
         self._open_settings_panel()
 
@@ -3623,6 +3951,10 @@ class MainWindow(FramelessMainWindow):
     def _apply_debug_mode(self):
         enabled = self._mgr.get_settings().debug_mode
         self._debug_btn.setVisible(enabled)
+        # Keep the per-card edit lock in sync with DEBUG mode so mounted hosts
+        # become editable (or lock again) without rebuilding the list.
+        for card in self._cards.values():
+            card.set_debug_edit(enabled)
 
     def _on_debug(self):
         if not hasattr(self, '_debug_window') or self._debug_window is None:
@@ -4007,7 +4339,14 @@ class MainWindow(FramelessMainWindow):
             if active_key:
                 self._switch_terminal_tab(conn_id, active_key)
         else:
-            # First session for this conn
+            # First session for this conn — check Pro limit
+            total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
+            if total >= 3:
+                from src.pro_manager import is_pro_active as _is_pro_active
+                if not _is_pro_active():
+                    self._show_pro_session_limit_dialog()
+                    self._close_right_panel()
+                    return
             self._create_terminal_session(conn_id)
 
         self._right_panel_widget.setVisible(True)
@@ -4125,7 +4464,20 @@ class MainWindow(FramelessMainWindow):
         """Header button: open an additional SSH session for the current conn."""
         if self._panel_mode != _PANEL_TERMINAL or not self._panel_conn_id:
             return
+        total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
+        if total >= 3:
+            from src.pro_manager import is_pro_active as _is_pro_active
+            if not _is_pro_active():
+                self._show_pro_session_limit_dialog()
+                return
         self._create_terminal_session(self._panel_conn_id)
+
+    def _show_pro_session_limit_dialog(self):
+        StyledMessageBox.information(
+            self,
+            tr("pro.session_limit.title"),
+            tr("pro.session_limit.body"),
+        )
 
     def _on_end_terminal_session(self):
         """'Session beenden' button: terminate active tab; if last → close terminal panel."""

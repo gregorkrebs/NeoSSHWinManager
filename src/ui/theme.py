@@ -1186,6 +1186,21 @@ QPushButton#cardInfoBtn[active="true"] {
     border: 1px solid #36506c;
     color: #deebf7;
 }
+#templateDropdownFrame {
+    background-color: #111820;
+    border: 1px solid #243243;
+    border-radius: 10px;
+}
+#templateDropdownRow {
+    border-radius: 6px;
+}
+#templateDropdownRow:hover {
+    background-color: #192433;
+}
+#templateDropdownLabel {
+    color: #c1cfdd;
+    font-size: 13px;
+}
 QPushButton#aboutLinkBtn {
     background-color: #141d28;
     border: 1px solid #243243;
@@ -2559,6 +2574,21 @@ QPushButton#actionBtn:disabled:hover {
     background-color: #edf5fb;
     border: 1px solid #aec6dd;
     color: #1a2332;
+}
+#templateDropdownFrame {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 10px;
+}
+#templateDropdownRow {
+    border-radius: 6px;
+}
+#templateDropdownRow:hover {
+    background-color: #edf5fb;
+}
+#templateDropdownLabel {
+    color: #2a3a4a;
+    font-size: 13px;
 }
 QPushButton#aboutLinkBtn {
     background-color: #f0f5fa;

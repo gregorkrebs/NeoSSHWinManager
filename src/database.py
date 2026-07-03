@@ -165,6 +165,15 @@ def init_db() -> None:
                 mounted_at  TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(user_id, conn_id)
             );
+
+            CREATE TABLE IF NOT EXISTS pro_licenses (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                machine_id   TEXT NOT NULL UNIQUE,
+                pro_key_hash TEXT NOT NULL,
+                hmac_token   TEXT NOT NULL,
+                activated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_checked TEXT NOT NULL DEFAULT (datetime('now'))
+            );
         """)
 
         # Migration: Add CLI columns if they don't exist

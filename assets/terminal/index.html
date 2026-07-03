@@ -23,25 +23,49 @@
     display: none;
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: {{BG}};
+    background: {{SURFACE}};
     color: {{FG}};
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 12px;
     font-family: 'Segoe UI', system-ui, sans-serif;
     font-size: 14px;
+    z-index: 100;
   }
   #overlay.visible { display: flex; }
-  #overlay-msg { opacity: 0.7; }
+  #overlay-msg { opacity: 0.75; letter-spacing: 0.01em; }
+  .overlay-dots {
+    display: inline-flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .overlay-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: {{ACCENT}};
+    animation: dot-blink 1.2s infinite;
+    opacity: 0.2;
+  }
+  .overlay-dot:nth-child(2) { animation-delay: 0.2s; }
+  .overlay-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot-blink {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+  }
   #reconnect-btn {
-    padding: 8px 20px;
+    padding: 8px 22px;
     background: {{ACCENT}};
     color: #fff;
     border: none;
     border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: opacity 0.15s;
     display: none;
   }
   #reconnect-btn:hover { opacity: 0.85; }
@@ -52,6 +76,11 @@
 <div id="terminal-container"></div>
 <div id="overlay">
   <span id="overlay-msg">{{MSG_CONNECTING}}</span>
+  <div class="overlay-dots" id="overlay-dots">
+    <div class="overlay-dot"></div>
+    <div class="overlay-dot"></div>
+    <div class="overlay-dot"></div>
+  </div>
   <button id="reconnect-btn" onclick="reconnect()">{{MSG_RECONNECT}}</button>
 </div>
 
@@ -76,10 +105,13 @@
   const overlayMsg   = document.getElementById('overlay-msg');
   const reconnectBtn = document.getElementById('reconnect-btn');
 
+  const overlayDots = document.getElementById('overlay-dots');
+
   function showOverlay(msg, showReconnect) {
     overlay.classList.add('visible');
     overlayMsg.textContent = msg;
     reconnectBtn.classList.toggle('visible', !!showReconnect);
+    if (overlayDots) overlayDots.style.display = showReconnect ? 'none' : 'inline-flex';
   }
   function hideOverlay() {
     overlay.classList.remove('visible');

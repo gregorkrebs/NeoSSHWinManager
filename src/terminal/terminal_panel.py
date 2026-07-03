@@ -88,8 +88,9 @@ class TerminalPanel(QWidget):
         bg = colors["background"]
         fg = colors["text"]
         accent = colors["accent"]
+        surface = colors["surface"]
 
-        html = _build_html(ws_url, bg, fg, accent)
+        html = _build_html(ws_url, bg, fg, accent, surface)
         base_url = QUrl.fromLocalFile(_assets_dir() + "/")
         self._page.setHtml(html, base_url)
         logger.debug("TerminalPanel: loaded for conn %s on port %d", self._conn_id, port)
@@ -106,7 +107,7 @@ class TerminalPanel(QWidget):
         self._bridge_server.close_session(self._conn_id)
 
 
-def _build_html(ws_url: str, bg: str, fg: str, accent: str) -> str:
+def _build_html(ws_url: str, bg: str, fg: str, accent: str, surface: str = "") -> str:
     template_path = os.path.join(_assets_dir(), "index.html")
     with open(template_path, "r", encoding="utf-8") as f:
         html = f.read()
@@ -116,6 +117,7 @@ def _build_html(ws_url: str, bg: str, fg: str, accent: str) -> str:
         html
         .replace("{{WS_URL}}", ws_url)
         .replace("{{BG}}", bg)
+        .replace("{{SURFACE}}", surface or bg)
         .replace("{{FG}}", fg)
         .replace("{{ACCENT}}", accent)
         .replace("{{MSG_CONNECTING}}", tr("terminal.connecting"))

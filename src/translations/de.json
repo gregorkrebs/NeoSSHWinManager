@@ -65,12 +65,14 @@
   "mount.failed.details": "\n\nTechnische Details:\n{msg}",
   "mount.failed.retry": "Erneut versuchen",
   "unmount.failed.title": "Trennen fehlgeschlagen",
+  "explorer.failed.title": "Explorer konnte nicht geöffnet werden",
   "delete.title": "Löschen",
   "delete.select_one": "Bitte eine Verbindung auswählen.",
   "delete.mounted_confirm": "'{name}' ist verbunden. Trennen und löschen?",
   "delete.confirm": "Verbindung '{name}' löschen?",
   "edit.locked.title": "Bearbeiten gesperrt",
   "edit.locked.msg": "Diese Verbindung ist aktuell gemountet und kann nicht bearbeitet werden.\nBitte zuerst trennen.",
+  "edit.debug_warning": "Host ist aktuell gemountet. Änderungen an Pfad/Laufwerksbuchstabe können inkonsistent sein.",
   "logout.title": "Abmelden",
   "logout.confirm": "Wirklich abmelden?\nAlle aktiven Verbindungen werden getrennt.\nDas Programm wird beendet.",
   "tray.running": "Läuft weiter im Infobereich. Doppelklick zum Öffnen.",
@@ -354,6 +356,7 @@
 
   "card.tooltip.sftp_browser": "Dateien per SFTP durchsuchen",
   "status.sftp_browser_opened": "SFTP-Browser für '{name}' geöffnet",
+  "status.explorer_opened": "Explorer für '{name}' geöffnet ({drive})",
   "sftp.title": "SFTP-Browser — {name}",
   "sftp.col.name": "Name",
   "sftp.col.size": "Größe",
@@ -401,5 +404,25 @@
   "sftp.progress.downloading": "Lade herunter: {name}…",
   "sftp.progress.uploading": "Lade hoch: {name}…",
   "sftp.upload.select": "Dateien auswählen",
-  "sftp.upload.filter": "Alle Dateien (*.*)"
+  "sftp.upload.filter": "Alle Dateien (*.*)",
+
+  "addedit.name.duplicate": "Eine Verbindung mit diesem Namen existiert bereits.",
+  "addedit.template.select": "Vorlage auswählen…",
+  "addedit.template.delete.title": "Vorlage löschen",
+  "addedit.template.delete.confirm": "Vorlage '{name}' löschen?",
+
+  "settings.putty_download_link": "PuTTY von putty.org herunterladen",
+
+  "settings.section.pro": "PRO-LIZENZ",
+  "settings.pro.active": "PRO aktiv — unbegrenzte Sessions freigeschaltet",
+  "settings.pro.inactive": "Kostenlose Version — max. 3 parallele Terminal-Sessions",
+  "settings.pro.key_required": "Bitte Pro-Key eingeben.",
+  "settings.pro.activate": "Aktivieren",
+  "settings.pro.activating": "Prüfe…",
+  "settings.pro.activation_success": "Pro-Lizenz aktiviert! Genieße unbegrenzte Sessions.",
+  "settings.pro.learn_more": "Mehr erfahren & einen guten Zweck unterstützen",
+  "settings.pro.key_label": "Pro-Key",
+
+  "pro.session_limit.title": "Pro-Feature",
+  "pro.session_limit.body": "Die kostenlose Version unterstützt bis zu 3 gleichzeitige Terminal-Sessions.\n\nUnbegrenzte Sessions freischalten durch eine Spende von mind. 10 € an eine Organisation (Blutkrebs, Kinderschutz oder Tierschutz) und Beantragung eines Pro-Keys unter neosshwinmanager.org/pro."
 }

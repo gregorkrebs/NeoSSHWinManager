@@ -19,12 +19,14 @@ class ConnectionCard(QFrame):
     edit_requested = pyqtSignal(str)
     ssh_requested = pyqtSignal(str)
     open_path_requested = pyqtSignal(str)
+    open_explorer_requested = pyqtSignal(str)
 
-    def __init__(self, conn: Connection, mounted: bool = False, theme: str = "dark", parent=None):
+    def __init__(self, conn: Connection, mounted: bool = False, theme: str = "dark", debug_edit: bool = False, parent=None):
         super().__init__(parent)
         self._conn = conn
         self._mounted = mounted
         self._theme = theme
+        self._debug_edit = debug_edit
         self._loading = False
         self.setObjectName("connectionCard")
         # Increase height when groups are present
@@ -128,8 +130,8 @@ class ConnectionCard(QFrame):
         self._cloud_lbl.setPixmap(svg_pixmap("cloud", cloud_color, 32))
 
         if mounted:
-            self._cloud_lbl.setToolTip(tr("card.tooltip.mount_on"))
-            self._drive_badge.setToolTip(tr("card.tooltip.sftp_browser"))
+            self._cloud_lbl.setToolTip(tr("card.tooltip.open_path"))
+            self._drive_badge.setToolTip(tr("card.tooltip.open_path"))
             self._drive_badge.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             self._cloud_lbl.setToolTip(tr("card.tooltip.mount_off"))
@@ -137,6 +139,9 @@ class ConnectionCard(QFrame):
             self._drive_badge.setCursor(Qt.CursorShape.ArrowCursor)
 
         self._ssh_btn.setIcon(svg_icon("terminal", "#aab4c4", 16))
+        # In DEBUG mode editing is always allowed, so the edit button stays "active"
+        # even while mounted.
+        locked = mounted and not self._debug_edit
         # Light theme: active icon must be darker (#4a5a6a) to be visible on a light
         # background; disabled icon lighter (#b8c4cf). Dark theme keeps original values.
         if self._theme == "light":
@@ -145,13 +150,13 @@ class ConnectionCard(QFrame):
         else:
             _edit_active   = "#aab4c4"
             _edit_disabled = "#6a7a8a"
-        self._edit_btn.setIcon(svg_icon("edit", _edit_active if not mounted else _edit_disabled, 15))
+        self._edit_btn.setIcon(svg_icon("edit", _edit_active if not locked else _edit_disabled, 15))
         self._edit_btn.setToolTip(
-            tr("card.tooltip.edit_locked") if mounted else tr("card.tooltip.edit")
+            tr("card.tooltip.edit_locked") if locked else tr("card.tooltip.edit")
         )
 
-        self._edit_btn.setCursor(Qt.CursorShape.ArrowCursor if mounted else Qt.CursorShape.PointingHandCursor)
-        self._edit_btn.setStyleSheet("QPushButton#cardEditBtn:hover { border:  1px solid #243243; }" if mounted else "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }")
+        self._edit_btn.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
+        self._edit_btn.setStyleSheet("QPushButton#cardEditBtn:hover { border:  1px solid #243243; }" if locked else "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }")
 
         if self._loading:
             return
@@ -300,13 +305,13 @@ class ConnectionCard(QFrame):
             self.show_loading(tr("card.loading.connect"))
             self.mount_requested.emit(self._conn.id)
         else:
-            self.open_path_requested.emit(self._conn.id)
+            self.open_explorer_requested.emit(self._conn.id)
 
     def _on_drive_badge_clicked(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         if self._mounted:
-            self.open_path_requested.emit(self._conn.id)
+            self.open_explorer_requested.emit(self._conn.id)
 
     def _on_toggle(self):
         if self._mounted:
@@ -351,3 +356,10 @@ class ConnectionCard(QFrame):
     @property
     def is_mounted(self) -> bool:
         return self._mounted
+
+    def set_debug_edit(self, enabled: bool):
+        """Toggle whether editing is allowed while mounted (DEBUG mode)."""
+        if self._debug_edit == enabled:
+            return
+        self._debug_edit = enabled
+        self.update_mount_state(self._mounted)
