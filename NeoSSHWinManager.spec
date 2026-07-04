@@ -15,8 +15,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'unittest', 'email', 'http', 'xml', 'xmlrpc',
-        'pydoc', 'doctest', 'difflib',
+        # Only modules nothing pulls in at runtime: stdlib excludes like
+        # 'email'/'http'/'xml' break urllib.request and save almost nothing
+        # next to Qt WebEngine.
+        'tkinter',
         '_pytest', 'pytest',
     ],
     noarchive=False,
