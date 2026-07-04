@@ -236,11 +236,12 @@ def main():
     except Exception:
         pass
 
-    # Ensure pywebview host starts early (background thread, non-blocking).
+    # QtWebEngineWidgets MUST be imported before QApplication is created.
     try:
-        from src.terminal.webview_host import get_webview_host
-        get_webview_host()
-    except Exception:
+        from PyQt6.QtWebEngineWidgets import QWebEngineView as _QWebEngineView  # noqa: F401
+        from PyQt6.QtWebEngineCore import QWebEnginePage as _QWebEnginePage    # noqa: F401
+        from PyQt6.QtWebChannel import QWebChannel as _QWebChannel              # noqa: F401
+    except ImportError:
         pass  # xterm terminal feature unavailable; app still runs without it
 
     app = QApplication(sys.argv)

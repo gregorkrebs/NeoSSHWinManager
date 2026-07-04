@@ -273,9 +273,14 @@ class SSHFSController:
         ]
 
         if disable_cache:
+            # NOTE: attr_timeout/entry_timeout=0 (no caching at all) causes a race with
+            # Windows Explorer's "New Folder" -> inline rename flow: the rename's path
+            # lookup goes over the network with zero grace period, Explorer thinks the
+            # create failed and retries, leaving several duplicate folders behind.
+            # A short 1s grace period avoids that race while still refreshing near-instantly.
             cmd += [
-                "-oattr_timeout=0",
-                "-oentry_timeout=0",
+                "-oattr_timeout=1",
+                "-oentry_timeout=1",
                 "-onegative_timeout=0",
             ]
 
