@@ -23,6 +23,19 @@ _current_lang: str = _DEFAULT_LANG
 _cache: Dict[str, Dict[str, str]] = {}
 
 
+def _normalize_lang(lang: str | None) -> str:
+    """Normalize persisted/user-provided language identifiers to supported codes."""
+    if not lang:
+        return _DEFAULT_LANG
+    value = str(lang).strip().lower().replace("_", "-")
+    # Accept common variants from older settings or locale-like values.
+    if value in ("de", "de-de", "deutsch", "german") or value.startswith("de-"):
+        return "de"
+    if value in ("en", "en-us", "en-gb", "english") or value.startswith("en-"):
+        return "en"
+    return _DEFAULT_LANG
+
+
 def _translations_root() -> str:
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, "src", "translations")
@@ -44,10 +57,11 @@ def _load(lang: str) -> Dict[str, str]:
 
 def set_language(lang: str) -> None:
     global _current_lang
-    if lang not in _SUPPORTED:
-        lang = _DEFAULT_LANG
-    _current_lang = lang
-    _load(lang)
+    normalized = _normalize_lang(lang)
+    if normalized not in _SUPPORTED:
+        normalized = _DEFAULT_LANG
+    _current_lang = normalized
+    _load(normalized)
 
 
 def current_language() -> str:

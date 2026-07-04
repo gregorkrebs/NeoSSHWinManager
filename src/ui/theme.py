@@ -1,5 +1,5 @@
 """
-theme.py – Global stylesheets for SSH Win Manager.
+theme.py - Global stylesheets for SSH Win Manager.
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ THEME_COLORS = {
         "background": "#0d0d12",
         "surface": "#0D1117",
         "text": "#c8d6e5",
-        "accent": "#00b4d8"
+        "accent": "#0077b6"
     },
     "light": {
         "background": "#f0f2f5",
@@ -35,7 +35,7 @@ def get_stylesheet(theme: str = "dark") -> str:
 
 STYLESHEET = """
 /* ============================================================
-   NEO SSH-Win Manager – Modern Cyber Theme (v2.0)
+    NEO SSH-Win Manager - Modern Cyber Theme (v2.0)
    ============================================================ */
 
 /* ---- Custom Titlebar (dark) ------------------------------- */
@@ -91,15 +91,46 @@ QCheckBox::indicator:hover {
 QCheckBox::indicator:checked {
     width: 16px;
     height: 16px;
-    background-color: #00b4d8;
-    border: 1.5px solid #0090ae;
+    background-color: #0077b6;
+    border: 1.5px solid #005a8a;
     image: url("__CHECKMARK_URL__");
 }
 QCheckBox::indicator:checked:hover {
     width: 16px;
     height: 16px;
-    background-color: #22c4e8;
-    border: 1.5px solid #00a0c0;
+    background-color: #0088c8;
+    border: 1.5px solid #0066a0;
+    image: url("__CHECKMARK_URL__");
+}
+
+/* ---- Radio Buttons --------------------------------------- */
+QRadioButton {
+    spacing: 8px;
+}
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #243243;
+    background-color: #14141f;
+}
+QRadioButton::indicator:hover {
+    border-color: #3a5068;
+}
+QRadioButton::indicator:checked {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #005a8a;
+    background-color: #0077b6;
+    image: url("__CHECKMARK_URL__");
+}
+QRadioButton::indicator:checked:hover {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #0066a0;
+    background-color: #0088c8;
     image: url("__CHECKMARK_URL__");
 }
 
@@ -122,7 +153,7 @@ QCheckBox::indicator:checked:hover {
 
 /* --- Dialog Elements --- */
 #dialogTitle {
-    color: #00b4d8;
+    color: #0077b6;
     font-size: 18px;
     font-weight: bold;
     margin-bottom: 5px;
@@ -135,7 +166,7 @@ QCheckBox::indicator:checked:hover {
 }
 
 #sectionLabel {
-    color: #00b4d8;
+    color: #0077b6;
     font-family: "Consolas";
     font-size: 11px;
     font-weight: 600;
@@ -205,14 +236,14 @@ QPushButton#settingsActionBtn:hover {
 }
 QPushButton#settingsActionBtn[btn_type="primary"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #00b4d8, stop:1 #0077b6);
+        stop:0 #0088c8, stop:1 #005fa3);
     border: none;
     color: #fff;
     font-weight: 700;
 }
 QPushButton#settingsActionBtn[btn_type="primary"]:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #22c4e8, stop:1 #0088c8);
+        stop:0 #009add, stop:1 #006fb8);
 }
 
 #errorLabel {
@@ -226,7 +257,7 @@ QPushButton#settingsActionBtn[btn_type="primary"]:hover {
 }
 
 #accentLabel {
-    color: #00b4d8;
+    color: #0077b6;
     font-size: 11px;
 }
 
@@ -278,8 +309,8 @@ QPushButton#dialogMaximizeBtn:hover {
     border: 1px solid #36506c;
 }
 QPushButton#dialogMaximizeBtn:checked {
-    background-color: rgba(0, 180, 216, 0.15);
-    border: 1px solid rgba(0, 180, 216, 0.42);
+    background-color: rgba(0, 119, 182, 0.15);
+    border: 1px solid rgba(0, 119, 182, 0.42);
 }
 
 #sysinfoHeroCard, #sysinfoSectionCard, #sysinfoStateCard {
@@ -368,7 +399,7 @@ QProgressBar#sysinfoProgress {
     border-radius: 3px;
 }
 QProgressBar#sysinfoProgress::chunk {
-    background-color: #00b4d8;
+    background-color: #0077b6;
     border-radius: 3px;
 }
 QProgressBar#sysinfoProgress[level="warn"]::chunk {
@@ -496,8 +527,8 @@ QTextEdit#debugLogView {
 }
 
 #userBox[current="true"] {
-    border: 1px solid rgba(0, 180, 216, 0.42);
-    background: rgba(0, 180, 216, 0.12);
+    border: 1px solid rgba(0, 119, 182, 0.42);
+    background: rgba(0, 119, 182, 0.12);
 }
 
 #userBox QLabel[state="user_row"] {
@@ -518,8 +549,8 @@ QTextEdit#debugLogView {
 }
 
 #userAvatar[admin="true"] {
-    background: rgba(0, 180, 216, 0.14);
-    border: 1px solid rgba(0, 180, 216, 0.42);
+    background: rgba(0, 119, 182, 0.14);
+    border: 1px solid rgba(0, 119, 182, 0.42);
     color: #7ddfff;
 }
 
@@ -547,8 +578,8 @@ QTextEdit#debugLogView {
 }
 
 #userRoleBadge[variant="accent"] {
-    background: rgba(0, 180, 216, 0.15);
-    border: 1px solid rgba(0, 180, 216, 0.42);
+    background: rgba(0, 119, 182, 0.15);
+    border: 1px solid rgba(0, 119, 182, 0.42);
     color: #7ddfff;
 }
 
@@ -596,7 +627,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 /* Mounted State Properties */
 #connectionCard[mounted="true"] {
     background-color: #10202a;
-    border: 1px solid rgba(0, 180, 216, 0.48);
+    border: 1px solid rgba(0, 119, 182, 0.48);
 }
 
 /* Selected State */
@@ -607,7 +638,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
 /* Mounted overrides selected blue highlight */
 #connectionCard[mounted="true"][selected="true"] {
-    border: 1px solid rgba(0, 180, 216, 0.48);
+    border: 1px solid #00d464;
     background-color: #10202a;
 }
 
@@ -721,7 +752,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 }
 
 #connectionsKicker {
-    color: #00b4d8;
+    color: #0077b6;
     font-family: "Consolas";
     font-size: 11px;
     font-weight: 700;
@@ -841,8 +872,8 @@ QPushButton#sidebarBtn:hover {
     border: 1px solid #31465d;
 }
 QPushButton#sidebarBtn[active="true"] {
-    background-color: rgba(0, 180, 216, 0.15);
-    border: 1px solid rgba(0, 180, 216, 0.42);
+    background-color: rgba(0, 119, 182, 0.15);
+    border: 1px solid rgba(0, 119, 182, 0.42);
 }
 QPushButton#sidebarBtn[btn_type="danger"] {
     border: 1px solid #1f2b3a;
@@ -893,7 +924,7 @@ QPushButton#headerActionBtn:hover {
 QComboBox#headerGroupsCombo {
     background-color: #111822;
     color: #deebf7;
-    border: 1px solid #00b4d8;
+    border: 1px solid #0077b6;
     border-radius: 12px;
     padding: 4px 10px;
     font-size: 12px;
@@ -930,7 +961,7 @@ QComboBox#headerGroupsCombo QAbstractItemView {
     font-family: "Consolas";
 }
 
-/* ---- Right Panel – content elements ----------------------- */
+/* ---- Right Panel - content elements ----------------------- */
 #rightPanelScroll {
     background-color: transparent;
     border: none;
@@ -966,7 +997,7 @@ QFrame#rpInfoField QComboBox {
 QFrame#rpInfoField QLineEdit:focus,
 QFrame#rpInfoField QSpinBox:focus,
 QFrame#rpInfoField QComboBox:focus {
-    border-bottom: 1px solid #00b4d8;
+    border-bottom: 1px solid #0077b6;
     background-color: transparent;
 }
 QFrame#rpInfoField QPushButton {
@@ -976,7 +1007,7 @@ QFrame#rpInfoField QPushButton {
     font-size: 14px;
 }
 #rpSectionLabel {
-    color: #00b4d8;
+    color: #0077b6;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -1089,7 +1120,7 @@ QPushButton#rpActionBtn:hover {
 }
 QPushButton#rpActionBtn[btn_type="primary"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #00b4d8, stop:1 #0077b6);
+        stop:0 #0077b6, stop:1 #0077b6);
     border: none;
     color: #deebf7;
 }
@@ -1114,9 +1145,9 @@ QPushButton#rpActionBtn:disabled {
 
 /* [i] info button active state */
 QPushButton#cardInfoBtn[active="true"] {
-    background: rgba(0, 180, 216, 0.15);
-    border: 1px solid rgba(0, 180, 216, 0.5);
-    color: #00b4d8;
+    background: rgba(0, 119, 182, 0.15);
+    border: 1px solid rgba(0, 119, 182, 0.5);
+    color: #0077b6;
 }
 
 #divider {
@@ -1150,7 +1181,7 @@ QPushButton#cardInfoBtn[active="true"] {
 /* Primary Brand Button (Add, etc) */
 #actionBtn[btn_type="primary"], #primaryBtn {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #00b4d8, stop:1 #0077b6);
+        stop:0 #0088c8, stop:1 #005fa3);
     border: none;
     color: #deebf7;
     font-weight: 700;
@@ -1161,7 +1192,7 @@ QPushButton#cardInfoBtn[active="true"] {
 }
 #actionBtn[btn_type="primary"]:hover, #primaryBtn:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #22c4e8, stop:1 #0088c8);
+        stop:0 #009add, stop:1 #006fb8);
 }
 #actionBtn[btn_type="primary"]:disabled, #primaryBtn:disabled,
 #actionBtn[btn_type="primary"]:disabled:hover, #primaryBtn:disabled:hover {
@@ -1205,7 +1236,7 @@ QPushButton#aboutLinkBtn {
     background-color: #141d28;
     border: 1px solid #243243;
     border-radius: 8px;
-    color: #00b4d8;
+    color: #0077b6;
     font-size: 12px;
     padding: 0 10px;
     min-height: 34px;
@@ -1214,7 +1245,7 @@ QPushButton#aboutLinkBtn {
 }
 QPushButton#aboutLinkBtn:hover {
     background-color: #0d2137;
-    border: 1px solid #00b4d8;
+    border: 1px solid #0077b6;
     color: #38d4f8;
 }
 QPushButton#aboutLinkBtn:pressed {
@@ -1227,7 +1258,7 @@ QLineEdit[invalid="true"]:focus {
     border: 2px solid #0077b6;
 }
 QLineEdit:focus, QPushButton:focus {
-    border: 2px solid #00b4d8;
+    border: 2px solid #0077b6;
 }
 
 /* Dialog Button Bar */
@@ -1286,7 +1317,7 @@ QLineEdit:focus, QPushButton:focus {
 }
 #terminalTabBtn:checked {
     background-color: #192433;
-    border-color: #00b4d8;
+    border-color: #0077b6;
     color: #deebf7;
 }
 #terminalEndBar {
@@ -1304,7 +1335,7 @@ QPushButton#sshBtn {
     font-weight: 600;
 }
 QPushButton#sshBtn:hover {
-    background: rgba(0, 180, 216, 0.14);
+    background: rgba(0, 119, 182, 0.14);
     border: 1px solid #47c3ff;
 }
 
@@ -1340,7 +1371,7 @@ QPushButton#mountBtn {
     text-align: center;
 }
 QPushButton#mountBtn:hover {
-    background-color: rgba(0, 180, 216, 0.14);
+    background-color: rgba(0, 119, 182, 0.14);
     border: 1px solid #47c3ff;
     color: #7ddfff;
 }
@@ -1355,7 +1386,7 @@ QPushButton#mountBtn[mounted="true"]:hover {
     color: #ef4444;
 }
 QPushButton#mountBtn[loading="true"], QPushButton#mountBtn[loading="true"]:disabled {
-    background-color: rgba(0, 180, 216, 0.14);
+    background-color: rgba(0, 119, 182, 0.14);
     border: 1px solid rgba(71, 195, 255, 0.38);
     border-radius: 16px;
     color: #7ddfff;
@@ -1375,7 +1406,7 @@ QLineEdit, QSpinBox, QComboBox {
     font-size: 13px;
 }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
-    border: 1px solid #00b4d8;
+    border: 1px solid #0077b6;
     background-color: #16162a;
 }
 QLineEdit::placeholder {
@@ -1396,7 +1427,7 @@ QComboBox QAbstractItemView {
     border: 1px solid #2a2a4a;
     border-radius: 12px;
     color: #c8d6e5;
-    selection-background-color: rgba(0, 180, 216, 0.18);
+    selection-background-color: rgba(0, 119, 182, 0.18);
     selection-color: #e4eaf0;
     outline: none;
     padding: 1px;
@@ -1407,7 +1438,7 @@ QComboBox QAbstractItemView::item {
     border-radius: 12px;
 }
 QComboBox QAbstractItemView::item:selected {
-    background-color: rgba(0, 180, 216, 0.18);
+    background-color: rgba(0, 119, 182, 0.18);
 }
 
 /* ---- Status Bar ------------------------------------------- */
@@ -1468,7 +1499,7 @@ QProgressBar {
     height: 8px;
 }
 QProgressBar::chunk {
-    background-color: #00b4d8;
+    background-color: #0077b6;
     border-radius: 4px;
 }
 
@@ -1488,8 +1519,8 @@ QTabBar::tab {
     margin-right: 4px;
 }
 QTabBar::tab:selected {
-    color: #00b4d8;
-    border-bottom: 2px solid #00b4d8;
+    color: #0077b6;
+    border-bottom: 2px solid #0077b6;
     font-weight: 600;
 }
 
@@ -1506,7 +1537,7 @@ QDialog {
 }
 
 #sectionLabel {
-    color: #00b4d8;
+    color: #0077b6;
     font-family: "Consolas";
     font-size: 11px;
     font-weight: 600;
@@ -1543,14 +1574,14 @@ QMessageBox QPushButton {
 }
 """
 
-# Ergänze get_stylesheet, um den Platzhalter zu füllen
+# Fill __SURFACE__ placeholder using selected theme colors
 def get_stylesheet_v2(theme: str = "dark") -> str:
     colors = THEME_COLORS.get(theme, THEME_COLORS["dark"])
     sheet = get_stylesheet(theme)
     return sheet.replace("__SURFACE__", colors["surface"])
 LIGHT_STYLESHEET = """
 /* ============================================================
-   NEO SSH-Win Manager – Light Theme
+    NEO SSH-Win Manager - Light Theme
    ============================================================ */
 
 /* ---- Custom Titlebar (light) ------------------------------ */
@@ -1613,6 +1644,36 @@ QCheckBox::indicator:checked:hover {
     height: 16px;
     background-color: #0088c8;
     border: 1.5px solid #0066a0;
+    image: url("__CHECKMARK_URL__");
+}
+
+QRadioButton {
+    spacing: 8px;
+}
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #c8d0dc;
+    background-color: #ffffff;
+}
+QRadioButton::indicator:hover {
+    border-color: #9aacbe;
+}
+QRadioButton::indicator:checked {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #005a8a;
+    background-color: #0077b6;
+    image: url("__CHECKMARK_URL__");
+}
+QRadioButton::indicator:checked:hover {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1.5px solid #0066a0;
+    background-color: #0088c8;
     image: url("__CHECKMARK_URL__");
 }
 
@@ -2007,8 +2068,8 @@ QTextEdit#debugLogView {
 }
 
 #userAvatar[admin="true"] {
-    background: rgba(0, 180, 216, 0.12);
-    border: 1px solid rgba(0, 180, 216, 0.38);
+    background: rgba(0, 119, 182, 0.12);
+    border: 1px solid rgba(0, 119, 182, 0.38);
     color: #0f7cb2;
 }
 
@@ -2036,8 +2097,8 @@ QTextEdit#debugLogView {
 }
 
 #userRoleBadge[variant="accent"] {
-    background: rgba(0, 180, 216, 0.12);
-    border: 1px solid rgba(0, 180, 216, 0.34);
+    background: rgba(0, 119, 182, 0.12);
+    border: 1px solid rgba(0, 119, 182, 0.34);
     color: #0f7cb2;
 }
 
@@ -2074,6 +2135,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     border: 1px solid #1590cf;
     background-color: #dff1fb;
 }
+#connectionCard[mounted="true"][selected="true"] {
+    border: 1px solid #007a3d;
+    background-color: #e8f6fb;
+}
 #connectionCard[expanded="true"] {
     border-bottom-left-radius: 0px;
     border-bottom-right-radius: 0px;
@@ -2086,7 +2151,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 #connDetail { color: #6a7a8a; font-size: 11px; }
 
 #cloudIcon { font-size: 22px; color: #b0bac4; }
-#cloudIcon[mounted="true"] { color: #0077b6; }
+#cloudIcon[mounted="true"] { color: #00b4d8; }
 #cloudIcon[state="large"] { font-size: 48px; padding: 8px; }
 
 #driveBadge {
@@ -2313,11 +2378,7 @@ QComboBox#headerGroupsCombo {
     min-height: 22px;
 }
 QComboBox#headerGroupsCombo:hover {
-    border: 1px solid #00b4d8;
-}
-QComboBox#headerGroupsCombo::drop-down {
-    border: none;
-    width: 20px;
+    border: 1px solid #0077b6;
 }
 QComboBox#headerGroupsCombo::down-arrow {
     image: none;
@@ -2338,7 +2399,7 @@ QComboBox#headerGroupsCombo QAbstractItemView {
 
 #versionLabel { color: #7d8fa2; font-size: 11px; font-family: "Consolas"; }
 
-/* ---- Right Panel – content elements (Light) --------------- */
+/* ---- Right Panel - content elements (Light) --------------- */
 #rightPanelScroll {
     background-color: transparent;
     border: none;
@@ -2480,13 +2541,13 @@ QPushButton#rpActionBtn:hover {
 }
 QPushButton#rpActionBtn[btn_type="primary"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #00b4d8, stop:1 #0077b6);
+        stop:0 #0088c8, stop:1 #0077b6);
     border: none;
     color: #deebf7;
 }
 QPushButton#rpActionBtn[btn_type="primary"]:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #22c4e8, stop:1 #0088c8);
+        stop:0 #0099d8, stop:1 #0088c8);
 }
 QPushButton#rpActionBtn[btn_type="danger"] {
     background: rgba(220, 38, 38, 0.08);
@@ -2540,7 +2601,7 @@ QPushButton#actionBtn:disabled:hover {
 
 #actionBtn[btn_type="primary"], #primaryBtn {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #00b4d8, stop:1 #0077b6);
+        stop:0 #0088c8, stop:1 #0077b6);
     border: none;
     color: #deebf7;
     font-weight: 700;
@@ -2551,7 +2612,7 @@ QPushButton#actionBtn:disabled:hover {
 }
 #actionBtn[btn_type="primary"]:hover, #primaryBtn:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #22c4e8, stop:1 #0088c8);
+        stop:0 #0099d8, stop:1 #0088c8);
 }
 #actionBtn[btn_type="primary"]:disabled, #primaryBtn:disabled,
 #actionBtn[btn_type="primary"]:disabled:hover, #primaryBtn:disabled:hover {
@@ -2616,7 +2677,7 @@ QLineEdit[invalid="true"]:focus {
     border: 1px solid #0077b6;
 }
 QLineEdit:focus, QPushButton:focus {
-    border: 1px solid #00b4d8;
+    border: 1px solid #0077b6;
 }
 
 #dialogBtnBar {

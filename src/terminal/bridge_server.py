@@ -17,8 +17,9 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
 # Maximum WebSocket message size: 256 KB
 _MAX_WS_MSG_BYTES = 256 * 1024
 
+# Pending tokens expire after 60 seconds if never consumed by a WebSocket connection
+_TOKEN_EXPIRY_SEC = 60.0
+
 
 @dataclass
 class TerminalSession:
@@ -37,6 +41,12 @@ class TerminalSession:
     channel: "paramiko.Channel"
     websocket: object | None = None
     forwarder_task: asyncio.Task | None = None
+
+
+@dataclass
+class _PendingToken:
+    conn_id: str
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class TerminalBridgeServer:
@@ -50,7 +60,7 @@ class TerminalBridgeServer:
 
     def __init__(self):
         self._sessions: dict[str, TerminalSession] = {}
-        self._pending_tokens: dict[str, str] = {}  # token → conn_id
+        self._pending_tokens: dict[str, _PendingToken] = {}  # token → _PendingToken
         self._port: int = 0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -178,7 +188,7 @@ class TerminalBridgeServer:
         self._sessions[conn_id] = session
 
         token = str(uuid.uuid4())
-        self._pending_tokens[token] = conn_id
+        self._pending_tokens[token] = _PendingToken(conn_id=conn_id)
         logger.debug("Terminal: session created for %s, token %s", conn_id, token[:8] + "…")
         return token
 
@@ -222,6 +232,33 @@ class TerminalBridgeServer:
         self._port = server.sockets[0].getsockname()[1]
         logger.info("Terminal bridge listening on 127.0.0.1:%d", self._port)
         ready_event.set()
+        # Start periodic cleanup of expired pending tokens
+        asyncio.ensure_future(self._cleanup_expired_tokens())
+
+    async def _cleanup_expired_tokens(self):
+        """Periodically remove pending tokens that were never consumed, closing
+        the associated SSH connection to avoid resource leaks."""
+        while True:
+            await asyncio.sleep(30)
+            now = time.monotonic()
+            expired = [
+                token for token, pt in list(self._pending_tokens.items())
+                if now - pt.created_at > _TOKEN_EXPIRY_SEC
+            ]
+            for token in expired:
+                pt = self._pending_tokens.pop(token, None)
+                if pt:
+                    logger.info("Terminal: expiring unused token for conn_id=%s", pt.conn_id)
+                    session = self._sessions.pop(pt.conn_id, None)
+                    if session:
+                        try:
+                            session.channel.close()
+                        except Exception:
+                            pass
+                        try:
+                            session.client.close()
+                        except Exception:
+                            pass
 
     async def _ws_handler(self, websocket, path: str):
         import websockets
@@ -233,11 +270,17 @@ class TerminalBridgeServer:
             return
 
         token = parts[1]
-        conn_id = self._pending_tokens.pop(token, None)
-        if conn_id is None:
+        pending = self._pending_tokens.pop(token, None)
+        if pending is None:
             logger.warning("Terminal: unknown or already-used token %s", token[:8] + "…")
             await websocket.close(1008, "Invalid token")
             return
+        # Check token has not expired (belt-and-suspenders alongside cleanup task)
+        if time.monotonic() - pending.created_at > _TOKEN_EXPIRY_SEC:
+            logger.warning("Terminal: expired token rejected for conn_id=%s", pending.conn_id)
+            await websocket.close(1008, "Token expired")
+            return
+        conn_id = pending.conn_id
 
         session = self._sessions.get(conn_id)
         if session is None:
@@ -258,6 +301,25 @@ class TerminalBridgeServer:
                     break
                 try:
                     if isinstance(message, str):
+                        # JSON control message (e.g. resize from xterm.js)
+                        if message.startswith('{'):
+                            import json as _json
+                            handled = False
+                            try:
+                                ctrl = _json.loads(message)
+                                msg_type = ctrl.get("type")
+                                if msg_type == "resize":
+                                    cols = int(ctrl.get("cols", 80))
+                                    rows = int(ctrl.get("rows", 24))
+                                    if cols > 0 and rows > 0:
+                                        self.resize_session(conn_id, cols, rows)
+                                    handled = True
+                                elif msg_type is not None:
+                                    handled = True  # unknown ctrl msg, ignore
+                            except (ValueError, KeyError, TypeError, AttributeError):
+                                pass  # not valid JSON – send to SSH as-is
+                            if handled:
+                                continue
                         session.channel.sendall(message.encode("utf-8"))
                     else:
                         session.channel.sendall(message)

@@ -270,7 +270,6 @@ class SSHFSController:
             "-oumask=000",
             "-ocreate_umask=000",
             "-odefault_permissions",
-            "-oCreateFileMapping",
         ]
 
         if disable_cache:

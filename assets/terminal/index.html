@@ -87,7 +87,6 @@
 <script src="xterm.js"></script>
 <script src="xterm-addon-fit.js"></script>
 <script src="xterm-addon-web-links.js"></script>
-<script src="qwebchannel.js"></script>
 <script>
 (function() {
   'use strict';
@@ -150,15 +149,12 @@
   ro.observe(document.getElementById('terminal-container'));
   fit();
 
-  // ── QWebChannel bridge (for PTY resize) ──────────────────────
-  let bridge = null;
-  new QWebChannel(qt.webChannelTransport, function(channel) {
-    bridge = channel.objects.bridge;
-  });
-
+  // ── PTY resize via WebSocket control message ────────────────────
   term.onResize(function(size) {
-    if (bridge) {
-      try { bridge.resize(size.cols, size.rows); } catch(e) {}
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({type: 'resize', cols: size.cols, rows: size.rows}));
+      } catch(e) {}
     }
   });
 
@@ -205,12 +201,12 @@
 
   // Exposed globally so the onclick attribute on the button can reach it.
   window.reconnect = function reconnect() {
-    if (bridge) {
-      try { bridge.resize(-1, -1); } catch(e) {}  // sentinel: trigger reconnect
+    if (window.pywebview && window.pywebview.api) {
+      window.pywebview.api.reconnect().catch(function() {});
     }
   };
 
-  // Called by terminal_panel.py via QWebChannel when the session is closed intentionally.
+  // Called by terminal_panel.py (evaluate_js) when the session is closed intentionally.
   window.closeSession = function closeSession() {
     intentionalClose = true;
     if (ws) { ws.close(); }

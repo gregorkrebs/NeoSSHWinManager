@@ -20,6 +20,7 @@ class ConnectionCard(QFrame):
     ssh_requested = pyqtSignal(str)
     open_path_requested = pyqtSignal(str)
     open_explorer_requested = pyqtSignal(str)
+    context_menu_requested = pyqtSignal(str, object)
 
     def __init__(self, conn: Connection, mounted: bool = False, theme: str = "dark", debug_edit: bool = False, parent=None):
         super().__init__(parent)
@@ -226,9 +227,9 @@ class ConnectionCard(QFrame):
         if self._theme == "dark":
             return """
                 QLabel {
-                    background-color: rgba(0, 180, 216, 0.12);
-                    color: #7ddfff;
-                    border: 1px solid rgba(0, 180, 216, 0.35);
+                    background-color: rgba(0, 119, 182, 0.12);
+                    color: #f1f1f1;
+                    border: 1px solid rgba(0, 119, 182, 0.35);
                     border-radius: 8px;
                     padding: 1px 8px;
                     font-size: 9px;
@@ -239,7 +240,7 @@ class ConnectionCard(QFrame):
             return """
                 QLabel {
                     background-color: rgba(0, 119, 182, 0.10);
-                    color: #0077b6;
+                    color: #004a75;
                     border: 1px solid rgba(0, 119, 182, 0.30);
                     border-radius: 4px;
                     padding: 1px 8px;
@@ -266,7 +267,7 @@ class ConnectionCard(QFrame):
             return """
                 QLabel {
                     background-color: rgba(106, 122, 138, 0.15);
-                    color: #617386;
+                    color: #004a75;
                     border: 1px solid rgba(106, 122, 138, 0.30);
                     border-radius: 4px;
                     padding: 1px 6px;
@@ -290,7 +291,7 @@ class ConnectionCard(QFrame):
     def set_terminal_active(self, active: bool):
         """Highlight the SSH button when an integrated terminal session is alive."""
         if active:
-            color = "#00b4d8" if self._theme == "dark" else "#0077b6"
+            color = "#0077b6"
         else:
             color = "#aab4c4"
         self._ssh_btn.setIcon(svg_icon("terminal", color, 16))
@@ -320,6 +321,10 @@ class ConnectionCard(QFrame):
         else:
             self.show_loading(tr("card.loading.connect"))
             self.mount_requested.emit(self._conn.id)
+
+    def contextMenuEvent(self, event):  # noqa: N802
+        self.context_menu_requested.emit(self._conn.id, event.globalPos())
+        event.accept()
 
     def show_loading(self, text=""):
         self._loading = True

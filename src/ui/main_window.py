@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QScrollArea,
     QApplication, QSystemTrayIcon, QDialog,
     QLineEdit, QSpinBox, QComboBox, QCheckBox, QFrame,
-    QFileDialog, QRadioButton, QDialogButtonBox,
+    QFileDialog, QRadioButton, QDialogButtonBox, QMenu,
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPen, QBrush, QShortcut, QKeySequence
@@ -34,10 +34,11 @@ from src.ui.debug_window import DebugWindow
 from src.app_logger import logger
 from src.ui.worker import MountWorker, UnmountWorker
 from src.ui.dialogs.styled_message_box import StyledMessageBox
+from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
-from src.i18n import tr, current_language, available_languages
+from src.i18n import tr, current_language, available_languages, set_language
 from src.channel import display_name
 from PyQt6.QtCore import QThread
 
@@ -146,12 +147,67 @@ class _TemplateDropdown(QFrame):
             self.setFixedWidth(max(parent.width(), 200))
 
 
+class _AuthMethodDialog(FramelessDialog):
+    """Frameless auth chooser for password vs. key login."""
+
+    def __init__(self, parent, conn_name: str, *, has_key: bool, prefer_key: bool):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setObjectName("dialogSurface")
+        self.setWindowTitle(tr("addedit.auth.ask.title"))
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self._fdlg_content)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        prompt = QLabel(tr("addedit.auth.ask.prompt", name=conn_name))
+        prompt.setWordWrap(True)
+        layout.addWidget(prompt)
+
+        self._rb_pw = QRadioButton(tr("addedit.auth.password"))
+        self._rb_key = QRadioButton(tr("addedit.auth.key"))
+        self._rb_key.setEnabled(has_key)
+
+        if has_key and prefer_key:
+            self._rb_key.setChecked(True)
+        else:
+            self._rb_pw.setChecked(True)
+
+        layout.addWidget(self._rb_pw)
+        layout.addWidget(self._rb_key)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+
+        ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setObjectName("primaryBtn")
+        cancel_btn = btns.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setObjectName("secondaryBtn")
+
+        layout.addWidget(btns)
+
+    def selected_auth_method(self) -> str:
+        return "password" if self._rb_pw.isChecked() else "key"
+
+
 class MainWindow(FramelessMainWindow):
 
     def __init__(self):
         super().__init__()
         self._user = Session.current()
         self._mgr = UserConnectionManager(self._user)
+        # Ensure UI language is always initialized from persisted user settings,
+        # even when MainWindow is launched outside the main.py startup path.
+        try:
+            set_language(self._mgr.get_settings().language)
+        except Exception:
+            pass
         self._controller = SSHFSController()
         self._cards: dict[str, ConnectionCard] = {}
         self._selected_id: str | None = None
@@ -160,8 +216,11 @@ class MainWindow(FramelessMainWindow):
         self._panel_mode: str = _PANEL_NONE
         self._panel_conn_id: str | None = None   # which connection the panel belongs to
         self._ef_initial_snapshot: dict | None = None
+        self._settings_initial_snapshot: dict | None = None
+        self._leave_guard_active = False
         self._saving_in_progress = False
         self._shortcuts: list[QShortcut] = []
+        self._explicit_quit = False
         
         # Debug mode settings
         self._debug_mode = False  # Can be toggled via F2
@@ -459,9 +518,16 @@ class MainWindow(FramelessMainWindow):
             btn.setProperty("active", "true")
         if btn_type:
             btn.setProperty("btn_type", btn_type)
-        color = "#ef4444" if btn_type == "danger" else ("#f59e0b" if btn_type == "warning" else "#aab4c4")
-        if active:
+        theme = (self._mgr.get_settings().theme or "dark")
+        if btn_type == "danger":
+            color = "#ef4444" if theme == "dark" else "#b91c1c"
+        elif btn_type == "warning":
+            color = "#f59e0b"
+        elif active:
+            # Keep legacy GitHub accent for active navigation icons in both themes.
             color = "#00b4d8"
+        else:
+            color = "#aab4c4" if theme == "dark" else "#2f4051"
         btn.setIcon(svg_icon(icon_name, color, 18))
         btn.setIconSize(QSize(18, 18))
         if slot:
@@ -514,6 +580,7 @@ class MainWindow(FramelessMainWindow):
             ("settings", "settings", self._sb_settings_btn),
             ("users",    "users",    self._sb_users_btn),
             ("profile",  "key",      self._sb_profile_btn),
+            ("about",    "info",     self._about_btn),
         ]
         for key, icon_name, btn in candidates:
             if btn is None:
@@ -522,7 +589,9 @@ class MainWindow(FramelessMainWindow):
             btn.setProperty("active", "true" if is_active else "false")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
-            btn.setIcon(svg_icon(icon_name, "#00b4d8" if is_active else "#aab4c4", 18))
+            theme = (self._mgr.get_settings().theme or "dark")
+            icon_color = "#00b4d8" if is_active else ("#aab4c4" if theme == "dark" else "#2f4051")
+            btn.setIcon(svg_icon(icon_name, icon_color, 18))
             btn.setIconSize(QSize(18, 18))
 
     def _build_connections_panel(self) -> QWidget:
@@ -566,7 +635,7 @@ class MainWindow(FramelessMainWindow):
         self._mount_all_btn = QPushButton()
         self._mount_all_btn.setObjectName("headerActionBtn")
         self._mount_all_btn.setFixedSize(QSize(30, 30))
-        self._mount_all_btn.setIcon(svg_icon("cloud", "#00b4d8", 16))
+        self._mount_all_btn.setIcon(svg_icon("cloud", "#0077b6", 16))
         self._mount_all_btn.setIconSize(QSize(16, 16))
         self._mount_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mount_all_btn.setToolTip(tr("main.mount_all"))
@@ -837,6 +906,33 @@ class MainWindow(FramelessMainWindow):
         self._rp_btn_bar.setVisible(False)
         v.addWidget(self._rp_btn_bar)
 
+        # Extra action bar for edit mode (in addition to header actions).
+        self._rp_edit_btn_bar = QWidget()
+        self._rp_edit_btn_bar.setObjectName("rpBtnBar")
+        eb = QHBoxLayout(self._rp_edit_btn_bar)
+        eb.setContentsMargins(12, 8, 12, 12)
+        eb.setSpacing(8)
+        self._rp_edit_cancel_btn = QPushButton(tr("dialog.cancel"))
+        self._rp_edit_cancel_btn.setObjectName("secondaryBtn")
+        self._rp_edit_cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_edit_cancel_btn.setToolTip(tr("card.tooltip.cancel_top"))
+        self._rp_edit_cancel_btn.clicked.connect(self._on_rp_cancel)
+        eb.addWidget(self._rp_edit_cancel_btn)
+        self._rp_edit_delete_btn = QPushButton(tr("addedit.button.delete_host"))
+        self._rp_edit_delete_btn.setObjectName("dangerBtn")
+        self._rp_edit_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_edit_delete_btn.clicked.connect(self._on_delete)
+        eb.addWidget(self._rp_edit_delete_btn)
+        eb.addStretch()
+        self._rp_edit_save_btn = QPushButton(tr("addedit.button.save_changes"))
+        self._rp_edit_save_btn.setObjectName("primaryBtn")
+        self._rp_edit_save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_edit_save_btn.setToolTip(tr("card.tooltip.save_top"))
+        self._rp_edit_save_btn.clicked.connect(self._on_rp_save)
+        eb.addWidget(self._rp_edit_save_btn)
+        self._rp_edit_btn_bar.setVisible(False)
+        v.addWidget(self._rp_edit_btn_bar)
+
         return panel
 
     def _build_status_bar(self) -> QWidget:
@@ -929,7 +1025,7 @@ class MainWindow(FramelessMainWindow):
         self._fs_cancel_btn = QPushButton(tr("dialog.cancel"))
         self._fs_cancel_btn.setObjectName("secondaryBtn")
         self._fs_cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._fs_cancel_btn.clicked.connect(self._nav_home)
+        self._fs_cancel_btn.clicked.connect(self._on_fs_cancel)
         bb.addWidget(self._fs_cancel_btn)
         self._fs_save_btn = QPushButton(tr("dialog.save"))
         self._fs_save_btn.setObjectName("primaryBtn")
@@ -969,6 +1065,9 @@ class MainWindow(FramelessMainWindow):
     def _on_fs_save(self):
         if self._panel_mode == _PANEL_SETTINGS:
             self._save_settings_form()
+
+    def _on_fs_cancel(self):
+        self._nav_home()
 
     # ------------------------------------------------------------------
     # Tray
@@ -1030,6 +1129,7 @@ class MainWindow(FramelessMainWindow):
         card.open_explorer_requested.connect(self._on_open_explorer)
         card.info_requested.connect(self._on_info_requested)
         card.edit_requested.connect(self._open_edit_panel)
+        card.context_menu_requested.connect(self._on_card_context_menu)
         card.mousePressEvent = lambda ev, cid=conn.id: self._select_card(cid)
 
         layout.addWidget(card)
@@ -1105,6 +1205,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_close_btn.setVisible(False)
         self._rp_new_session_btn.setVisible(False)
         self._rp_btn_bar.setVisible(False)
+        self._rp_edit_btn_bar.setVisible(False)
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
 
@@ -1217,6 +1318,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_close_btn.setVisible(True)
         self._rp_new_session_btn.setVisible(False)
         self._rp_btn_bar.setVisible(False)
+        self._rp_edit_btn_bar.setVisible(False)
 
         self._clear_right_panel_content()
         self._rp_scroll.setVisible(True)
@@ -1256,6 +1358,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_close_btn.setVisible(True)
         self._rp_new_session_btn.setVisible(False)
         self._rp_btn_bar.setVisible(False)
+        self._rp_edit_btn_bar.setVisible(False)
 
         self._clear_right_panel_content()
         self._rp_scroll.setVisible(True)
@@ -1280,7 +1383,7 @@ class MainWindow(FramelessMainWindow):
         def _section(title):
             lbl = QLabel(title.upper())
             lbl.setObjectName("rpSectionLabel")
-            lbl.setStyleSheet("color: #00b4d8; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
+            lbl.setStyleSheet("color: #0077b6; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
             return lbl
 
         def _row(label, value, value_obj_name="rpValue"):
@@ -1445,6 +1548,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_close_btn.setVisible(False)
         self._rp_new_session_btn.setVisible(False)
         self._rp_btn_bar.setVisible(False)
+        self._rp_edit_btn_bar.setVisible(True)
 
         self._clear_right_panel_content()
         self._rp_scroll.setVisible(True)
@@ -1479,6 +1583,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_close_btn.setVisible(True)
         self._rp_new_session_btn.setVisible(False)
         self._rp_btn_bar.setVisible(True)
+        self._rp_edit_btn_bar.setVisible(False)
 
         self._clear_right_panel_content()
         self._rp_scroll.setVisible(True)
@@ -1492,7 +1597,7 @@ class MainWindow(FramelessMainWindow):
         if not self._guard_leave_form():
             return
         if self._panel_mode == _PANEL_SETTINGS:
-            self._nav_home()
+            # Ignore duplicate/rapid open requests while already in settings.
             return
         if self._panel_conn_id and self._panel_conn_id in self._cards:
             self._cards[self._panel_conn_id].set_info_active(False)
@@ -1502,6 +1607,7 @@ class MainWindow(FramelessMainWindow):
         self._clear_fs_content()
         self._set_fullscreen_header(tr("main.settings"), tr("settings.title"), True)
         self._build_settings_form()
+        self._settings_initial_snapshot = self._snapshot_settings_form()
         self._fs_btn_bar.setVisible(True)
         self._main_stack.setCurrentIndex(1)
         self._set_sidebar_active("settings")
@@ -1524,6 +1630,7 @@ class MainWindow(FramelessMainWindow):
         self._fs_btn_bar.setVisible(False)
         self._main_stack.setCurrentIndex(1)
         self._set_sidebar_active("users")
+        self._settings_initial_snapshot = None
 
     def _build_profile_form(self):
         """Build the profile form for password change (available to all users)."""
@@ -1550,6 +1657,9 @@ class MainWindow(FramelessMainWindow):
         v.setSpacing(16)
 
         # User info section
+        _title_color  = "#1a2332" if _is_light else "#deebf7"
+        _pill_bg      = "#0077b6"
+
         def _section_card(title: str, pill_text: str = ""):
             frame = QFrame()
             frame.setObjectName("fullscreenSectionCard")
@@ -1564,13 +1674,19 @@ class MainWindow(FramelessMainWindow):
             head_layout.setSpacing(10)
 
             head_title = QLabel(title)
-            head_title.setStyleSheet("color: #deebf7; font-size: 14px; font-weight: 700;")
+            head_title.setStyleSheet(
+                f"color: {_title_color}; font-size: 14px; font-weight: 700;"
+            )
             head_layout.addWidget(head_title)
             head_layout.addStretch()
 
             if pill_text:
                 pill = QLabel(pill_text)
-                pill.setStyleSheet("background-color: #00b4d8; color: #ffffff; border-radius: 10px; padding: 2px 8px; font-size: 10px; font-weight: 700;")
+                pill.setStyleSheet(
+                    f"background-color: {_pill_bg}; color: #ffffff; "
+                    f"border-radius: 8px; padding: 2px 8px; "
+                    f"font-size: 10px; font-weight: 700;"
+                )
                 head_layout.addWidget(pill)
 
             layout.addWidget(head)
@@ -1661,7 +1777,7 @@ class MainWindow(FramelessMainWindow):
 
         # Save button
         save_btn = QPushButton(tr("dialog.save"))
-        save_btn.setStyleSheet("background-color: #00b4d8; color: #ffffff; border: none; border-radius: 8px; padding: 10px 20px; font-weight: 600;")
+        save_btn.setObjectName("primaryBtn")
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.clicked.connect(self._save_profile_form)
         pw_l.addWidget(save_btn)
@@ -1735,6 +1851,7 @@ class MainWindow(FramelessMainWindow):
         self._fs_btn_bar.setVisible(False)
         self._main_stack.setCurrentIndex(1)
         self._set_sidebar_active("profile")
+        self._settings_initial_snapshot = None
 
     def _build_users_form(self):
         from src.auth_manager import AuthManager
@@ -2753,7 +2870,7 @@ class MainWindow(FramelessMainWindow):
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtCore import QUrl as _QUrl
         self._sf_putty_download_lbl = QLabel(
-            f'<a href="https://www.putty.org" style="color:#00b4d8;">'
+            f'<a href="https://www.putty.org" style="color:#0077b6;">'
             f'{tr("settings.putty_download_link")}</a>'
         )
         self._sf_putty_download_lbl.setObjectName("hintLabel")
@@ -2884,7 +3001,7 @@ class MainWindow(FramelessMainWindow):
             _key_row_hl.addWidget(self._sf_pro_activate_btn)
             _pro_inner.addWidget(_key_row_w)
             _donate_lbl = QLabel(
-                f'<a href="https://neosshwinmanager.org/pro" style="color:#00b4d8;">'
+                f'<a href="https://neosshwinmanager.org/pro" style="color:#0077b6;">'
                 f'{tr("settings.pro.learn_more")}</a>'
             )
             _donate_lbl.setObjectName("hintLabel")
@@ -3192,7 +3309,10 @@ class MainWindow(FramelessMainWindow):
 
     def _set_saving_state(self, saving: bool):
         self._saving_in_progress = saving
-        for btn_name in ("_rp_save_top_btn", "_rp_save_btn", "_rp_cancel_top_btn", "_rp_cancel_btn"):
+        for btn_name in (
+            "_rp_save_top_btn", "_rp_save_btn", "_rp_cancel_top_btn", "_rp_cancel_btn",
+            "_rp_edit_save_btn", "_rp_edit_cancel_btn", "_rp_edit_delete_btn"
+        ):
             btn = getattr(self, btn_name, None)
             if btn is None:
                 continue
@@ -3228,13 +3348,115 @@ class MainWindow(FramelessMainWindow):
             return False
         return self._snapshot_form() != self._ef_initial_snapshot
 
+    def _snapshot_settings_form(self) -> dict:
+        if self._panel_mode != _PANEL_SETTINGS:
+            return {}
+        return {
+            "start": self._safe_bool_checked("_sf_start", False),
+            "tray": self._safe_bool_checked("_sf_tray", False),
+            "admin": self._safe_bool_checked("_sf_admin", False),
+            "telemetry": self._safe_bool_checked("_sf_telemetry", False),
+            "interval": self._safe_spin_value("_sf_interval", 30),
+            "auto_reconnect": self._safe_bool_checked("_sf_auto_reconnect", False),
+            "auto_remount": self._safe_bool_checked("_sf_auto_remount", True),
+            "disable_cache": self._safe_bool_checked("_sf_sshfs_disable_cache", False),
+            "theme": self._safe_current_data("_sf_theme", "dark"),
+            "lang": self._safe_current_data("_sf_lang", "en"),
+            "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
+            "term_putty": self._safe_bool_checked("_sf_term_putty", False),
+            "term_xterm": self._safe_bool_checked("_sf_term_xterm", True),
+            "putty_path": self._safe_lineedit_text("_sf_putty_path"),
+            "security_level": self._safe_current_data("_sf_security_level", 0),
+            "debug": self._safe_bool_checked("_sf_debug", False),
+        }
+
+    def _settings_form_is_dirty(self) -> bool:
+        if self._panel_mode != _PANEL_SETTINGS:
+            return False
+        if self._settings_initial_snapshot is None:
+            return False
+        return self._snapshot_settings_form() != self._settings_initial_snapshot
+
+    def _ask_settings_dirty_action(self) -> str:
+        dlg = QDialog(self)
+        dlg.setObjectName("dialogSurface")
+        dlg.setWindowTitle(tr("dirty.title"))
+        dlg.setModal(True)
+        dlg.setMinimumWidth(420)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        title_lbl = QLabel(tr("dirty.title"))
+        title_lbl.setObjectName("dialogTitle")
+        layout.addWidget(title_lbl)
+
+        msg_lbl = QLabel(tr("dirty.settings.body"))
+        msg_lbl.setWordWrap(True)
+        layout.addWidget(msg_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        cancel_btn = QPushButton(tr("dialog.cancel"))
+        cancel_btn.setObjectName("secondaryBtn")
+        cancel_btn.clicked.connect(lambda: dlg.done(0))
+        btn_row.addWidget(cancel_btn)
+
+        discard_btn = QPushButton(tr("dirty.discard"))
+        discard_btn.setObjectName("dangerBtn")
+        discard_btn.clicked.connect(lambda: dlg.done(1))
+        btn_row.addWidget(discard_btn)
+
+        apply_btn = QPushButton(tr("dirty.apply"))
+        apply_btn.setObjectName("primaryBtn")
+        apply_btn.setDefault(True)
+        apply_btn.clicked.connect(lambda: dlg.done(2))
+        btn_row.addWidget(apply_btn)
+
+        layout.addLayout(btn_row)
+
+        code = dlg.exec()
+        if code == 2:
+            return "apply"
+        if code == 1:
+            return "discard"
+        return "cancel"
+
     def _guard_leave_form(self) -> bool:
-        if not self._form_is_dirty():
+        if self._leave_guard_active:
+            # Drop re-entrant navigation calls to avoid double-trigger side effects.
+            return False
+
+        self._leave_guard_active = True
+        try:
+            if self._panel_mode in (_PANEL_EDIT, _PANEL_ADD):
+                if not self._form_is_dirty():
+                    return True
+                discard = StyledMessageBox.question(
+                    self, tr("dirty.title"), tr("dirty.body"),
+                    yes_text=tr("dirty.discard"), no_text=tr("dirty.keep")
+                )
+                if discard:
+                    self._ef_initial_snapshot = None
+                return discard
+
+            if self._panel_mode == _PANEL_SETTINGS:
+                if not self._settings_form_is_dirty():
+                    return True
+                action = self._ask_settings_dirty_action()
+                if action == "cancel":
+                    return False
+                if action == "apply":
+                    if not self._save_settings_form(navigate_home=False):
+                        return False
+                self._settings_initial_snapshot = None
+                return True
+
             return True
-        return StyledMessageBox.question(
-            self, tr("dirty.title"), tr("dirty.body"),
-            yes_text=tr("dirty.discard"), no_text=tr("dirty.keep")
-        )
+        finally:
+            self._leave_guard_active = False
 
     def _name_is_duplicate(self, name: str, exclude_id: str | None = None) -> bool:
         """Returns True if another connection already uses this name (case-insensitive)."""
@@ -3268,7 +3490,7 @@ class MainWindow(FramelessMainWindow):
             except RuntimeError:
                 is_valid = False
 
-        for btn_name in ("_rp_save_top_btn", "_rp_save_btn"):
+        for btn_name in ("_rp_save_top_btn", "_rp_save_btn", "_rp_edit_save_btn"):
             btn = getattr(self, btn_name, None)
             if btn is None:
                 continue
@@ -3277,6 +3499,52 @@ class MainWindow(FramelessMainWindow):
             except RuntimeError:
                 pass
 
+    def _template_name_is_duplicate(self, name: str, exclude_id: str | None = None) -> bool:
+        """Returns True if a template with this name already exists (case-insensitive)."""
+        name_lower = name.strip().lower()
+        for c in self._mgr.get_templates():
+            if c.name.lower() == name_lower and c.id != exclude_id:
+                return True
+        return False
+
+    def _suggest_unique_template_name(self, base_name: str, exclude_id: str | None = None) -> str:
+        """Returns a unique template name, appending (1), (2) etc. if the base name is taken."""
+        if not self._template_name_is_duplicate(base_name, exclude_id):
+            return base_name
+        counter = 1
+        while True:
+            candidate = f"{base_name} ({counter})"
+            if not self._template_name_is_duplicate(candidate, exclude_id):
+                return candidate
+            counter += 1
+
+    def _ask_template_name(self, base_name: str, exclude_id: str | None = None) -> str | None:
+        """Shows a styled input dialog for the template name. Returns the chosen name or None if cancelled."""
+        from src.ui.dialogs.styled_message_box import StyledInputDialog
+        suggested = self._suggest_unique_template_name(base_name, exclude_id)
+        while True:
+            text, ok = StyledInputDialog.get_text(
+                self,
+                tr("addedit.template.name.title"),
+                tr("addedit.template.name.label"),
+                suggested,
+            )
+            if not ok:
+                return None
+            if not text:
+                StyledMessageBox.critical(self, tr("dialog.error"), tr("addedit.required.name"))
+                suggested = text
+                continue
+            if not _is_safe_label(text):
+                StyledMessageBox.critical(self, tr("dialog.error"), tr("addedit.name.invalid"))
+                suggested = text
+                continue
+            if self._template_name_is_duplicate(text, exclude_id):
+                StyledMessageBox.critical(self, tr("dialog.error"), tr("addedit.template.name.duplicate"))
+                suggested = text
+                continue
+            return text
+
     def _save_edit_form(self):
         if not getattr(self, "_ef_conn", None):
             self._show_inline_message(tr("dialog.error"), "Formular ist nicht verfügbar. Bitte erneut öffnen.", is_error=True)
@@ -3284,15 +3552,22 @@ class MainWindow(FramelessMainWindow):
         name = self._safe_lineedit_text("_ef_name")
         host = self._safe_lineedit_text("_ef_host")
         user = self._safe_lineedit_text("_ef_user")
+        is_template = self._safe_bool_checked("_ef_template_cb", False)
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
-        elif self._name_is_duplicate(name, exclude_id=self._ef_conn.id): errors.append(tr("addedit.name.duplicate"))
+        elif not is_template and self._name_is_duplicate(name, exclude_id=self._ef_conn.id): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
+
+        if is_template:
+            tpl_name = self._ask_template_name(name, exclude_id=self._ef_conn.id)
+            if tpl_name is None:
+                return
+            name = tpl_name
 
         conn = self._ef_conn
         putty_key_path = self._safe_lineedit_text("_ef_putty_key")
@@ -3311,7 +3586,7 @@ class MainWindow(FramelessMainWindow):
             cli_access_enabled=cli_enabled,
             cli_access_key=self._safe_lineedit_text("_ef_cli_key") if cli_enabled else None,
             groups=self._safe_lineedit_text("_ef_groups"),
-            is_template=self._safe_bool_checked("_ef_template_cb", False),
+            is_template=is_template,
         )
         self._mgr.update(updated)
         self._refresh_list()
@@ -3323,19 +3598,25 @@ class MainWindow(FramelessMainWindow):
         name = self._safe_lineedit_text("_ef_name")
         host = self._safe_lineedit_text("_ef_host")
         user = self._safe_lineedit_text("_ef_user")
+        is_tpl = self._safe_bool_checked("_ef_template_cb", False)
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
-        elif self._name_is_duplicate(name): errors.append(tr("addedit.name.duplicate"))
+        elif not is_tpl and self._name_is_duplicate(name): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
 
+        if is_tpl:
+            tpl_name = self._ask_template_name(name)
+            if tpl_name is None:
+                return
+            name = tpl_name
+
         putty_key_path = self._safe_lineedit_text("_ef_putty_key")
         cli_enabled = self._safe_bool_checked("_ef_cli_cb", False)
-        is_tpl = self._safe_bool_checked("_ef_template_cb", False)
 
         new_conn = Connection(
             name=name, host=host, user=user,
@@ -3357,20 +3638,20 @@ class MainWindow(FramelessMainWindow):
         self._ef_initial_snapshot = self._snapshot_form()
         self._open_info_panel(new_conn.id)
 
-    def _save_settings_form(self):
+    def _save_settings_form(self, navigate_home: bool = True) -> bool:
         if self._sf_term_putty.isChecked():
             import os as _os
             path = self._sf_putty_path.text().strip()
             if not path:
                 self._show_inline_message("PuTTY", tr("settings.putty_missing"), is_error=True)
-                return
+                return False
             if not _os.path.exists(path):
                 self._show_inline_message(
                     tr("settings.putty_not_found_title"),
                     tr("settings.putty_not_found", path=path),
                     is_error=True
                 )
-                return
+                return False
 
         if self._sf_term_putty.isChecked():
             _tc = "putty"
@@ -3404,10 +3685,13 @@ class MainWindow(FramelessMainWindow):
         )
         self._mgr.save_settings(new_settings)
         self._apply_settings_object(new_settings)
+        self._settings_initial_snapshot = self._snapshot_settings_form()
         self._set_status(tr("status.settings_saved"))
-        self._nav_home()
+        if navigate_home:
+            self._nav_home()
         if new_settings.language != old_lang:
             self._show_inline_message("Info", tr("settings.language.restart"))
+        return True
 
     # ------------------------------------------------------------------
     # Inline message helper
@@ -3565,10 +3849,9 @@ class MainWindow(FramelessMainWindow):
         self._selected_id = conn_id
         if conn_id in self._cards:
             card = self._cards[conn_id]
-            if not card.is_mounted:
-                card.setProperty("selected", True)
-                card.style().unpolish(card)
-                card.style().polish(card)
+            card.setProperty("selected", True)
+            card.style().unpolish(card)
+            card.style().polish(card)
 
         # Card click always shows connection details (not sysinfo)
         if self._panel_mode not in (_PANEL_INFO, _PANEL_EDIT) or self._panel_conn_id != conn_id:
@@ -3633,6 +3916,9 @@ class MainWindow(FramelessMainWindow):
         if not conn_id:
             self._set_status(tr("delete.select_one"))
             return
+        self._delete_connection(conn_id)
+
+    def _delete_connection(self, conn_id: str):
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return
@@ -3641,7 +3927,7 @@ class MainWindow(FramelessMainWindow):
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.mounted_confirm", name=conn.name),
-                yes_text="Trotzdem löschen", no_text="Abbrechen"
+                yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel")
             ):
                 return
             self._controller.unmount(conn.drive_letter)
@@ -3649,11 +3935,11 @@ class MainWindow(FramelessMainWindow):
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.confirm", name=conn.name),
-                yes_text="Löschen", no_text="Abbrechen"
+                yes_text=tr("main.delete"), no_text=tr("dialog.cancel")
             ):
                 return
         self._mgr.delete(conn_id)
-        self._close_right_panel()
+        self._close_right_panel_force()
         self._refresh_list()
         self._set_status(tr("status.connection_deleted", name=conn.name))
 
@@ -3662,28 +3948,16 @@ class MainWindow(FramelessMainWindow):
         conn = copy.copy(conn)
 
         if conn.auth_method == "ask":
-            dlg = QDialog(self)
-            dlg.setWindowTitle(tr("addedit.auth.ask.title"))
-            dlg.setModal(True)
-            layout = QVBoxLayout(dlg)
-            layout.addWidget(QLabel(tr("addedit.auth.ask.prompt", name=conn.name)))
-            rb_pw  = QRadioButton(tr("addedit.auth.password"))
-            rb_key = QRadioButton(tr("addedit.auth.key"))
             has_key = bool(conn.key_path)
-            rb_key.setEnabled(has_key)
-            if has_key and not conn.password:
-                rb_key.setChecked(True)
-            else:
-                rb_pw.setChecked(True)
-            layout.addWidget(rb_pw)
-            layout.addWidget(rb_key)
-            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            btns.accepted.connect(dlg.accept)
-            btns.rejected.connect(dlg.reject)
-            layout.addWidget(btns)
+            dlg = _AuthMethodDialog(
+                self,
+                conn.name,
+                has_key=has_key,
+                prefer_key=has_key and not conn.password,
+            )
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return None
-            conn.auth_method = "password" if rb_pw.isChecked() else "key"
+            conn.auth_method = dlg.selected_auth_method()
 
         if conn.auth_method == "password" and not conn.password:
             pw, ok = QInputDialog.getText(
@@ -3865,13 +4139,40 @@ class MainWindow(FramelessMainWindow):
         else:
             self._err_popup("SSH-Terminal", error)
 
-    def _on_open_mounted_path(self, conn_id: str):
-        """Open the SFTP file browser for the mounted connection."""
+    def _on_ssh_terminal_with_backend(self, conn_id: str, backend: str):
+        if backend == "xterm":
+            self._open_terminal_panel(conn_id)
+            return
+
+        conn = self._mgr.get_by_id(conn_id)
+        if not conn:
+            return
+        conn = self._prepare_auth(conn)
+        if conn is None:
+            return
+
+        import copy as _copy
+        from src.ssh_launcher import launch_ssh_terminal
+        settings = _copy.copy(self._mgr.get_settings())
+        settings.terminal_client = backend
+        settings.use_putty = (backend == "putty")
+
+        success, error = launch_ssh_terminal(conn, settings)
+        if success:
+            backend_label = "PuTTY" if backend == "putty" else "SSH"
+            self._set_status(tr("status.ssh_started", backend=backend_label, name=conn.name))
+        else:
+            self._err_popup("SSH-Terminal", error)
+
+    def _open_sftp_browser(self, conn_id: str, mounted_only: bool = True):
+        """Open the SFTP file browser. In mounted_only mode requires active mount."""
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return
         card = self._cards.get(conn_id)
-        if not card or not card.is_mounted:
+        if not card:
+            return
+        if mounted_only and not card.is_mounted:
             return
 
         # Raise existing browser window if already open for this connection
@@ -3897,6 +4198,67 @@ class MainWindow(FramelessMainWindow):
         self._sftp_browsers[conn_id] = browser
         browser.show()
         self._set_status(tr("status.sftp_browser_opened", name=conn.name))
+
+    def _on_open_mounted_path(self, conn_id: str):
+        """Open the SFTP file browser for the mounted connection."""
+        self._open_sftp_browser(conn_id, mounted_only=True)
+
+    @pyqtSlot(str, object)
+    def _on_card_context_menu(self, conn_id: str, global_pos):
+        conn = self._mgr.get_by_id(conn_id)
+        if not conn:
+            return
+        card = self._cards.get(conn_id)
+        if not card:
+            return
+
+        menu = QMenu(self)
+        is_mounted = bool(card.is_mounted)
+
+        act_mount = menu.addAction(tr("card.menu.unmount") if is_mounted else tr("card.menu.mount"))
+        menu.addSeparator()
+
+        act_explorer = None
+        if is_mounted:
+            act_explorer = menu.addAction(tr("card.menu.open_explorer"))
+        act_sftp = menu.addAction(tr("card.menu.sftp_browser"))
+        menu.addSeparator()
+
+        act_connect_ssh = menu.addAction(tr("card.menu.connect_ssh"))
+        ssh_menu = menu.addMenu(tr("card.menu.ssh_open_with"))
+        act_ssh_openssh = ssh_menu.addAction(tr("card.menu.ssh_openssh"))
+        act_ssh_putty = ssh_menu.addAction(tr("card.menu.ssh_putty"))
+        act_ssh_xterm = ssh_menu.addAction(tr("card.menu.ssh_xterm"))
+        menu.addSeparator()
+
+        act_edit = menu.addAction(tr("card.menu.edit"))
+        act_delete = menu.addAction(tr("card.menu.delete"))
+
+        chosen = menu.exec(global_pos)
+        if chosen is None:
+            return
+
+        if chosen == act_mount:
+            if is_mounted:
+                self._on_unmount(conn_id)
+            else:
+                self._on_mount(conn_id)
+        elif act_explorer is not None and chosen == act_explorer:
+            self._on_open_explorer(conn_id)
+        elif chosen == act_sftp:
+            self._open_sftp_browser(conn_id, mounted_only=False)
+        elif chosen == act_connect_ssh:
+            self._on_ssh_requested(conn_id)
+        elif chosen == act_ssh_openssh:
+            self._on_ssh_terminal_with_backend(conn_id, "ssh")
+        elif chosen == act_ssh_putty:
+            self._on_ssh_terminal_with_backend(conn_id, "putty")
+        elif chosen == act_ssh_xterm:
+            self._on_ssh_terminal_with_backend(conn_id, "xterm")
+        elif chosen == act_edit:
+            self._open_edit_panel(conn_id)
+        elif chosen == act_delete:
+            self._delete_connection(conn_id)
 
     def _on_open_explorer(self, conn_id: str):
         """Open the locally mounted drive in Windows Explorer."""
@@ -3931,6 +4293,15 @@ class MainWindow(FramelessMainWindow):
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
+        # Repaint sidebar icon colors for current theme and active item.
+        if self._panel_mode == _PANEL_SETTINGS:
+            self._set_sidebar_active("settings")
+        elif self._panel_mode == _PANEL_USERS:
+            self._set_sidebar_active("users")
+        elif self._panel_mode == _PANEL_PROFILE:
+            self._set_sidebar_active("profile")
+        else:
+            self._set_sidebar_active("home")
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":
@@ -3976,14 +4347,13 @@ class MainWindow(FramelessMainWindow):
         ChangePasswordDialog(user.id, self).exec()
 
     def _on_logout(self):
-        if not StyledMessageBox.question(
-            self, tr("logout.title"), tr("logout.confirm"),
-            yes_text="Abmelden", no_text="Abbrechen"
-        ):
+        from src.ui.dialogs.logout_dialog import LogoutConfirmDialog
+        result = LogoutConfirmDialog.ask(self)
+        if result == "cancel":
             return
-        self._unmount_all()
+        # "logout" unmounts all; "quit" keeps hosts mounted
         Session.logout()
-        self.quit_app()
+        self.quit_app(unmount=(result == "logout"))
 
     def _on_profile(self):
         """Show user profile panel for password change."""
@@ -4012,10 +4382,11 @@ class MainWindow(FramelessMainWindow):
     # Window close
     # ------------------------------------------------------------------
 
-    def quit_app(self):
-        """Proper shutdown: unmount drives, stop bridge, then quit."""
-        self._unmount_all()
-        self._kill_sshfs_processes()
+    def quit_app(self, unmount: bool = True):
+        """Proper shutdown: optionally unmount drives, stop bridge, then quit."""
+        self._explicit_quit = True
+        if unmount:
+            self._shutdown_disconnect_all()
         if self._bridge_server:
             try:
                 self._bridge_server.stop()
@@ -4024,6 +4395,10 @@ class MainWindow(FramelessMainWindow):
         QApplication.quit()
 
     def closeEvent(self, event):
+        if self._explicit_quit:
+            event.accept()
+            return
+
         settings = self._mgr.get_settings()
         if settings.minimize_to_tray:
             event.ignore()
@@ -4185,22 +4560,34 @@ class MainWindow(FramelessMainWindow):
                 self._groups_combo.setCurrentIndex(idx)
         self._groups_combo.blockSignals(False)
 
-    def _unmount_all(self):
-        mounted_map = self._controller.get_mounted_drives()
-        for letter in mounted_map.keys():
-            try:
-                self._controller.unmount(letter)
-            except Exception as e:
-                logger.warning(f"Unmount {letter} fehlgeschlagen: {e}")
-
-    def _kill_sshfs_processes(self):
+    def _shutdown_disconnect_all(self):
+        """Schnelles Trennen beim Beenden: sshfs-Prozesse killen (sofort).
+        Nur wenn das fehlschlägt, normalen Unmount als Fallback versuchen."""
         import subprocess
+        any_killed = False
         for proc_name in ["sshfs.exe", "sshfs-win.exe", "sshfs-win-broker.exe"]:
             try:
-                subprocess.run(["taskkill", "/F", "/IM", proc_name],
-                               capture_output=True, creationflags=0x08000000)
+                result = subprocess.run(
+                    ["taskkill", "/F", "/IM", proc_name],
+                    capture_output=True, creationflags=0x08000000, timeout=5,
+                )
+                if result.returncode == 0:
+                    any_killed = True
             except Exception:
                 pass
+
+        if any_killed:
+            # Prozesse erfolgreich beendet – direkt fertig, kein weiteres Warten.
+            return
+
+        # Fallback: normaler Unmount, aber nur eigene Laufwerke (keine System-Drives).
+        for conn_id in list(self._active_mounts):
+            conn = self._mgr.get_by_id(conn_id)
+            if conn and conn.drive_letter:
+                try:
+                    self._controller.unmount(conn.drive_letter)
+                except Exception as e:
+                    logger.warning(f"Unmount {conn.drive_letter} fehlgeschlagen: {e}")
 
     def _debug_widget_under_mouse(self):
         """Debug the widget currently under the mouse cursor (triggered by F2)."""

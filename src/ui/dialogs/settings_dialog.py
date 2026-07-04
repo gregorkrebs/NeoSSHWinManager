@@ -4,7 +4,7 @@ settings_dialog.py – Settings dialog for NEO SSH-Win Manager.
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QRadioButton,
-    QPushButton, QSpinBox, QFrame, QWidget, QLineEdit,
+    QPushButton, QSpinBox, QFrame, QWidget, QLineEdit, QButtonGroup,
     QFileDialog, QMessageBox, QScrollArea, QApplication, QComboBox
 )
 from PyQt6.QtCore import Qt
@@ -240,14 +240,14 @@ class SettingsDialog(QDialog):
         self._update_btn = QPushButton("Auf Updates prüfen")
         self._update_btn.setObjectName("settingsActionBtn")
         self._update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_btn.setFixedWidth(170)
+        self._update_btn.setFixedWidth(340)
         self._update_btn.setMinimumHeight(32)
         self._update_btn.clicked.connect(self._on_check_updates)
 
         self._create_shortcut_btn = QPushButton(tr("settings.create_shortcut"))
         self._create_shortcut_btn.setObjectName("settingsActionBtn")
         self._create_shortcut_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._create_shortcut_btn.setFixedWidth(170)
+        self._create_shortcut_btn.setFixedWidth(340)
         self._create_shortcut_btn.setMinimumHeight(32)
         self._create_shortcut_btn.clicked.connect(self._on_create_shortcut)
 
@@ -290,9 +290,12 @@ class SettingsDialog(QDialog):
         self._term_putty_radio = QRadioButton(tr("settings.terminal_client.putty"))
         self._term_xterm_radio = QRadioButton(tr("settings.terminal_client.xterm"))
 
-        self._term_ssh_radio.toggled.connect(self._on_terminal_client_toggled)
-        self._term_putty_radio.toggled.connect(self._on_terminal_client_toggled)
-        self._term_xterm_radio.toggled.connect(self._on_terminal_client_toggled)
+        # Explicit group required because each radio is wrapped in its own row widget.
+        self._term_group = QButtonGroup(self)
+        self._term_group.addButton(self._term_ssh_radio)
+        self._term_group.addButton(self._term_putty_radio)
+        self._term_group.addButton(self._term_xterm_radio)
+        self._term_group.buttonToggled.connect(self._on_terminal_client_toggled)
 
         self._putty_path_edit = QLineEdit()
         self._putty_path_edit.setPlaceholderText(r"C:\Program Files\PuTTY\putty.exe")
@@ -426,6 +429,7 @@ class SettingsDialog(QDialog):
         self._term_xterm_radio.setChecked(tc == 'xterm')
         self._putty_path_edit.setText(getattr(s, 'putty_path', r"C:\Program Files\PuTTY\putty.exe"))
         self._putty_path_widget.setVisible(tc == 'putty')
+        self._putty_download_lbl.setVisible(tc == 'putty')
         self._tools_widget.setVisible(s.debug_mode)
         # Language
         lang = getattr(s, 'language', 'en') or 'en'
@@ -438,7 +442,7 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self._theme_combo.setCurrentIndex(idx)
 
-    def _on_terminal_client_toggled(self, _checked: bool):
+    def _on_terminal_client_toggled(self, _button=None, _checked: bool = False):
         is_putty = self._term_putty_radio.isChecked()
         self._putty_path_widget.setVisible(is_putty)
         self._putty_download_lbl.setVisible(is_putty)
