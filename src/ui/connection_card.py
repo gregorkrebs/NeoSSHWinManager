@@ -20,6 +20,7 @@ class ConnectionCard(QFrame):
     ssh_requested = pyqtSignal(str)
     open_path_requested = pyqtSignal(str)
     open_explorer_requested = pyqtSignal(str)
+    context_menu_requested = pyqtSignal(str, object)
 
     def __init__(self, conn: Connection, mounted: bool = False, theme: str = "dark", debug_edit: bool = False, parent=None):
         super().__init__(parent)
@@ -206,7 +207,6 @@ class ConnectionCard(QFrame):
         for i, group in enumerate(groups[:max_pills]):
             pill = QLabel(group)
             pill.setObjectName("groupPill")
-            pill.setStyleSheet(self._get_pill_stylesheet())
             pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
             pill.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             layout.addWidget(pill)
@@ -214,66 +214,11 @@ class ConnectionCard(QFrame):
         if len(groups) > max_pills:
             more = QLabel(f"+{len(groups) - max_pills}")
             more.setObjectName("groupPillMore")
-            more.setStyleSheet(self._get_pill_more_stylesheet())
             more.setAlignment(Qt.AlignmentFlag.AlignCenter)
             more.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             layout.addWidget(more)
         
         return widget
-
-    def _get_pill_stylesheet(self) -> str:
-        """Get stylesheet for group pills based on theme."""
-        if self._theme == "dark":
-            return """
-                QLabel {
-                    background-color: rgba(0, 180, 216, 0.12);
-                    color: #7ddfff;
-                    border: 1px solid rgba(0, 180, 216, 0.35);
-                    border-radius: 8px;
-                    padding: 1px 8px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-        else:
-            return """
-                QLabel {
-                    background-color: rgba(0, 119, 182, 0.10);
-                    color: #0077b6;
-                    border: 1px solid rgba(0, 119, 182, 0.30);
-                    border-radius: 4px;
-                    padding: 1px 8px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-    
-    def _get_pill_more_stylesheet(self) -> str:
-        """Get stylesheet for +N indicator."""
-        if self._theme == "dark":
-            return """
-                QLabel {
-                    background-color: rgba(106, 122, 138, 0.20);
-                    color: #8fa4b8;
-                    border: 1px solid rgba(106, 122, 138, 0.35);
-                    border-radius: 4px;
-                    padding: 1px 6px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-        else:
-            return """
-                QLabel {
-                    background-color: rgba(106, 122, 138, 0.15);
-                    color: #617386;
-                    border: 1px solid rgba(106, 122, 138, 0.30);
-                    border-radius: 4px;
-                    padding: 1px 6px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
 
     def update_connection(self, conn: Connection):
         self._conn = conn
@@ -290,7 +235,7 @@ class ConnectionCard(QFrame):
     def set_terminal_active(self, active: bool):
         """Highlight the SSH button when an integrated terminal session is alive."""
         if active:
-            color = "#00b4d8" if self._theme == "dark" else "#0077b6"
+            color = "#0077b6"
         else:
             color = "#aab4c4"
         self._ssh_btn.setIcon(svg_icon("terminal", color, 16))
@@ -320,6 +265,10 @@ class ConnectionCard(QFrame):
         else:
             self.show_loading(tr("card.loading.connect"))
             self.mount_requested.emit(self._conn.id)
+
+    def contextMenuEvent(self, event):  # noqa: N802
+        self.context_menu_requested.emit(self._conn.id, event.globalPos())
+        event.accept()
 
     def show_loading(self, text=""):
         self._loading = True

@@ -271,7 +271,7 @@ class AuthManager:
         Raises LoginLockedError wenn der Account gesperrt ist.
         """
         key = username.strip().lower()
-        now = time.monotonic()
+        now = time.time()  # wall-clock: survives process restarts correctly
 
         # CWE-307: Aktive Sperre prüfen → sofort mit verbleibender Zeit melden
         with _LOGIN_LOCK:
@@ -298,7 +298,7 @@ class AuthManager:
                 a["count"] += 1
                 lockout = _lockout_for_count(a["count"])
                 if lockout > 0:
-                    a["locked_until"] = time.monotonic() + lockout
+                    a["locked_until"] = time.time() + lockout  # wall-clock for DB persistence
                     logger.warning(
                         f"Login für '{username}' gesperrt für {lockout}s "
                         f"(Versuch #{a['count']})"
@@ -415,7 +415,12 @@ class AuthManager:
         werden geleert; Key-Auth-Verbindungen bleiben funktionsfähig.
 
         Returns das neue Klartext-Passwort oder None wenn der User nicht existiert.
+        Raises PermissionError wenn der Aufrufer kein Admin ist.
         """
+        # SECURITY: verify caller has admin rights (defence-in-depth beyond UI layer)
+        if not Session.is_admin():
+            raise PermissionError("admin_reset_password: Admin-Rechte erforderlich")
+
         import secrets, string
         alphabet = string.ascii_letters + string.digits
         new_pw = ''.join(secrets.choice(alphabet) for _ in range(14))
@@ -447,14 +452,24 @@ class AuthManager:
 
     @staticmethod
     def delete_user(user_id: str) -> bool:
-        """Benutzer und alle zugehörigen Verbindungen löschen (CASCADE)."""
+        """Benutzer und alle zugehörigen Verbindungen löschen (CASCADE).
+        Raises PermissionError wenn der Aufrufer kein Admin ist.
+        """
+        # SECURITY: verify caller has admin rights (defence-in-depth beyond UI layer)
+        if not Session.is_admin():
+            raise PermissionError("delete_user: Admin-Rechte erforderlich")
         with get_connection() as conn:
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return True
 
     @staticmethod
     def list_users() -> List[dict]:
-        """Alle Benutzer auflisten (nur für Admins)."""
+        """Alle Benutzer auflisten (nur für Admins).
+        Raises PermissionError wenn der Aufrufer kein Admin ist.
+        """
+        # SECURITY: verify caller has admin rights (defence-in-depth beyond UI layer)
+        if not Session.is_admin():
+            raise PermissionError("list_users: Admin-Rechte erforderlich")
         with get_connection() as conn:
             rows = conn.execute(
                 "SELECT id, username, is_admin, created_at FROM users ORDER BY username"
@@ -463,10 +478,12 @@ class AuthManager:
 
     @staticmethod
     def get_user_by_username(username: str) -> Optional[dict]:
-        """Sucht einen Benutzer anhand des Benutzernamens (für Windows Auto-Login)."""
+        """Sucht einen Benutzer anhand des Benutzernamens (für Windows Auto-Login).
+        Gibt nur nicht-sensible Felder zurück (kein pw_hash, kein pw_salt, kein enc_key_enc).
+        """
         with get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+                "SELECT id, username, is_admin, enc_key_kdf, created_at FROM users WHERE username = ? COLLATE NOCASE",
                 (username.strip(),)
             ).fetchone()
         return dict(row) if row else None

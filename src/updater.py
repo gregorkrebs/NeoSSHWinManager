@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 import os
+import re
 import sys
 import json
 import urllib.request
@@ -9,6 +12,9 @@ import subprocess
 from packaging import version
 from PyQt6.QtCore import QObject, pyqtSignal
 from src.app_logger import logger
+
+# Regex for safe executable paths (A-Z drive, no shell metacharacters)
+_SAFE_EXE_PATH_RE = re.compile(r'^[A-Za-z]:\\[\w\\\s.\-]+\.exe$')
 
 GITHUB_API_URL = "https://api.github.com/repos/gregorkrebs/neosshwinmanager/releases/latest"
 
@@ -42,20 +48,25 @@ class UpdaterManager(QObject):
                 if version.parse(latest_version_tag) > version.parse(self.current_version):
                     changelog = data.get("body", "No changelog available.")
                     download_url = ""
+                    checksum_url = ""
                     obj_type = "browser"
 
-                    # Search for .exe release asset, prefer CLI version if available
+                    # Search for .exe release asset; also collect sha256sums file if present
                     for asset in data.get("assets", []):
-                        if asset.get("name", "").endswith(".exe") and "cli" not in asset.get("name", "").lower():
+                        name = asset.get("name", "")
+                        if name.endswith(".exe") and "cli" not in name.lower() and not download_url:
                             download_url = asset.get("browser_download_url", "")
                             obj_type = "exe"
-                            break
+                        if name in ("sha256sums.txt", "checksums.txt", "SHA256SUMS"):
+                            checksum_url = asset.get("browser_download_url", "")
 
                     if not download_url:
                         # Fallback to the release page if no direct .exe asset is found
                         download_url = data.get("html_url", "")
                         obj_type = "browser"
 
+                    # Attach checksum URL to download URL via a custom separator for later use
+                    self._checksum_url = checksum_url
                     self.update_available.emit(latest_version_tag, changelog, download_url, obj_type)
                 else:
                     self.no_update_available.emit()
@@ -96,7 +107,46 @@ class UpdaterManager(QObject):
                             if total_size > 0:
                                 percent = int((downloaded / total_size) * 100)
                                 self.download_progress.emit(percent)
-                
+
+                # SECURITY: Verify SHA-256 checksum if a checksum file was found in the release
+                checksum_url = getattr(self, '_checksum_url', '')
+                if checksum_url:
+                    try:
+                        cs_req = urllib.request.Request(checksum_url, headers={"User-Agent": "NeoSSHWinManager-Updater"})
+                        with urllib.request.urlopen(cs_req, timeout=10) as cs_resp:
+                            checksums_text = cs_resp.read().decode('utf-8', errors='replace')
+
+                        # Compute actual hash of downloaded file
+                        sha256 = hashlib.sha256()
+                        with open(self.update_file_path, 'rb') as f:
+                            for chunk in iter(lambda: f.read(65536), b''):
+                                sha256.update(chunk)
+                        actual_hex = sha256.hexdigest()
+
+                        # Find expected hash in checksums file (format: "<hash>  <filename>")
+                        exe_name = os.path.basename(self.update_file_path)
+                        expected_hex = None
+                        for line in checksums_text.splitlines():
+                            parts = line.strip().split()
+                            if len(parts) >= 2 and parts[1].lstrip('*') in (exe_name, 'NeoSSHWinManager.exe'):
+                                expected_hex = parts[0].lower()
+                                break
+
+                        if expected_hex is None:
+                            logger.warning("Checksum file found but no matching entry for exe — skipping verification")
+                        elif not hmac.compare_digest(actual_hex, expected_hex):
+                            os.remove(self.update_file_path)
+                            self.update_file_path = None
+                            raise ValueError(f"SHA-256 mismatch: expected {expected_hex}, got {actual_hex}")
+                        else:
+                            logger.info("Update integrity verified via SHA-256.")
+                    except ValueError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"Checksum verification failed (non-fatal): {e}")
+                else:
+                    logger.warning("No checksum file found in release assets — integrity not verified.")
+
                 self.download_finished.emit(True, self.update_file_path)
             except Exception as e:
                 logger.error(f"Download failed: {e}")
@@ -115,6 +165,14 @@ class UpdaterManager(QObject):
         # Only perform the swap if we are actually running as a compiled .exe
         if not getattr(sys, 'frozen', False):
             logger.info("Not running as frozen exe, skipping physical replace.")
+            return
+
+        # SECURITY: Validate paths before embedding in bat script to prevent injection
+        if not _SAFE_EXE_PATH_RE.match(current_exe):
+            logger.error(f"Updater: unsafe current_exe path rejected: {current_exe}")
+            return
+        if not _SAFE_EXE_PATH_RE.match(self.update_file_path):
+            logger.error(f"Updater: unsafe update_file_path rejected: {self.update_file_path}")
             return
 
         bat_path = os.path.join(tempfile.gettempdir(), "neosshwinmanager_updater.bat")

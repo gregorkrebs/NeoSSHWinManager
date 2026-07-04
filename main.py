@@ -269,20 +269,20 @@ def main():
     init_logger()
     logger.info("Application started (Standard Mode)")
 
+    # Default font – set BEFORE stylesheet so Qt can correctly convert px→pt
+    font = QFont("Segoe UI", 10)
+    app.setFont(font)
+
     # Apply global stylesheet
     from src.ui.theme import THEME_COLORS
     app.setStyleSheet(get_stylesheet("dark").replace("__SURFACE__", THEME_COLORS["dark"]["surface"]))
-    
+
     # Setze Palette für native Popups
     from PyQt6.QtGui import QPalette, QColor
     palette = app.palette()
     palette.setColor(QPalette.ColorRole.Window, QColor(THEME_COLORS["dark"]["surface"]))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(THEME_COLORS["dark"]["text"]))
     app.setPalette(palette)
-
-    # Default font
-    font = QFont("Segoe UI", 10)
-    app.setFont(font)
 
     # ── 3. Database Initialization ────────────────────────────────
     init_db()

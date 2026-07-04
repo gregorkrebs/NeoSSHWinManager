@@ -1,5 +1,6 @@
 import urllib.request
 import urllib.error
+import urllib.parse
 import threading
 from src.app_logger import logger
 from src.config import AppSettings
@@ -17,7 +18,7 @@ def send_telemetry_async(action: str, settings: AppSettings):
 
     def _worker():
         try:
-            url = f"{TELEMETRY_URL}?action={action}"
+            url = f"{TELEMETRY_URL}?action={urllib.parse.quote(action, safe='')}"
             req = urllib.request.Request(url, method='POST')
             req.add_header('User-Agent', 'NeoSSHWinManager/1.0')
             

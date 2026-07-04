@@ -270,15 +270,28 @@ class SSHFSController:
             "-oumask=000",
             "-ocreate_umask=000",
             "-odefault_permissions",
-            "-oCreateFileMapping",
+        ]
+
+        # NOTE: attr_timeout/entry_timeout/negative_timeout are libfuse/SFTP-side cache
+        # knobs — they never reach Explorer. Explorer only ever sees the WinFsp kernel
+        # driver's own cache, which is controlled by the separate FileInfoTimeout/
+        # DirInfoTimeout/VolumeInfoTimeout options and defaults to sshfs-win's built-in
+        # FileInfoTimeout=1000 when unset. Always set these explicitly so the checkbox
+        # actually has an effect.
+        cmd += [
+            "-oFileInfoTimeout=-1",
+            "-oVolumeInfoTimeout=1000",
         ]
 
         if disable_cache:
             cmd += [
-                "-oattr_timeout=0",
-                "-oentry_timeout=0",
+                "-oDirInfoTimeout=0",
+                "-oattr_timeout=1",
+                "-oentry_timeout=1",
                 "-onegative_timeout=0",
             ]
+        else:
+            cmd += ["-oDirInfoTimeout=1000"]
 
         if conn.auth_method == "key" and conn.key_path:
             key_path = conn.key_path.replace("\\", "/")

@@ -21,7 +21,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QProgressDialog,
+    QHeaderView, QLabel, QLineEdit, QMenu, QProgressDialog,
     QPushButton, QSizePolicy, QTreeView, QVBoxLayout, QWidget,
 )
 
@@ -29,7 +29,7 @@ from src.app_logger import logger
 from src.config import Connection
 from src.i18n import tr
 from src.sftp_client import SftpClient, SftpEntry
-from src.ui.dialogs.styled_message_box import StyledMessageBox
+from src.ui.dialogs.styled_message_box import StyledInputDialog, StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
 from src.ui.sftp_worker import (
@@ -315,7 +315,7 @@ class SftpBrowserWindow(FramelessDialog):
             bg       = "#0d0d12"
             surface  = "#0D1117"
             text     = "#c8d6e5"
-            accent   = "#00b4d8"
+            accent   = "#0077b6"
             border   = "#1a2535"
             alt_row  = "#090910"
             sep_col  = "#1e2a3a"
@@ -375,7 +375,7 @@ class SftpBrowserWindow(FramelessDialog):
                 color: #ffffff;
             }}
             QTreeView#sftpTree::item:hover {{
-                background-color: {"rgba(0,180,216,0.10)" if self._theme == "dark" else "rgba(0,119,182,0.08)"};
+                background-color: {"rgba(0,119,182,0.10)" if self._theme == "dark" else "rgba(0,119,182,0.08)"};
             }}
             QHeaderView::section {{
                 background-color: {bg};
@@ -772,8 +772,8 @@ class SftpBrowserWindow(FramelessDialog):
         worker.start()
 
     def _on_rename(self, entry: SftpEntry) -> None:
-        new_name, ok = QInputDialog.getText(
-            self, tr("sftp.rename.title"), tr("sftp.rename.prompt"), text=entry.name
+        new_name, ok = StyledInputDialog.get_text(
+            self, tr("sftp.rename.title"), tr("sftp.rename.prompt"), entry.name
         )
         if not ok or not new_name.strip() or new_name.strip() == entry.name:
             return
@@ -792,7 +792,7 @@ class SftpBrowserWindow(FramelessDialog):
         worker.start()
 
     def _on_mkdir(self) -> None:
-        name, ok = QInputDialog.getText(
+        name, ok = StyledInputDialog.get_text(
             self, tr("sftp.mkdir.title"), tr("sftp.mkdir.prompt")
         )
         if not ok or not name.strip():
