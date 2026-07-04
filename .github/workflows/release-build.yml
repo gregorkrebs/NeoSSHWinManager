@@ -51,9 +51,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-executables
-          path: |
-            dist/NeoSSHWinManager.exe
-            dist/NeoSSHWinManager-cli.exe
+          path: dist/NeoSSHWinManager.exe
           if-no-files-found: error
 
       - name: Upload assets to GitHub release
@@ -66,8 +64,4 @@ jobs:
             throw 'No release tag was provided by the event payload.'
           }
 
-          gh release upload $env:RELEASE_TAG \
-            .\dist\NeoSSHWinManager.exe \
-            .\dist\NeoSSHWinManager-cli.exe \
-            --repo $env:GITHUB_REPOSITORY \
-            --clobber
+          gh release upload $env:RELEASE_TAG .\dist\NeoSSHWinManager.exe --repo $env:GITHUB_REPOSITORY --clobber
