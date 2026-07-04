@@ -6,10 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [1.5.1] — 2026-05-13
+## [1.5.1] — 2026-07-04
 
 ### Added
-- Title bar in a unified design, matching the selected Dark/Light Theme
+- **Integrated in-app terminal:** New `xterm.js`-based SSH terminal embedded directly in the app (via `QWebEngineView`/`QWebChannel`, bridged to a local WebSocket server), selectable in Settings alongside the existing external SSH/PuTTY launchers. Supports multiple concurrent sessions per connection with a tab bar, background persistence when switching panels, and a reconnect button after disconnect.
+- **Native SFTP browser:** New file-browser window (`src/ui/sftp_browser.py`) reachable from the connection card once a host is mounted — directory navigation, upload/download with progress, rename, delete and new-folder, all run off the UI thread via dedicated worker threads.
+- **Pro license system:** Machine-fingerprint based activation (`src/pro_manager.py`) with an offline, HMAC-verified license check and a new "Pro License" section in Settings. The free tier is capped at 3 concurrent integrated-terminal sessions; exceeding it surfaces an upgrade prompt.
+- **Connection templates & duplicate-name detection:** Add/Edit dialog gained a template dropdown (save/apply/delete) and now blocks duplicate connection/template names, auto-suggesting a unique alternative.
+- **Connection card context menu:** Right-click menu for mount/unmount, open in Explorer, open SFTP browser, and connect via OpenSSH/PuTTY/integrated terminal.
+- **Logout confirmation dialog:** Choose between staying logged in, quitting while keeping drives mounted, or quitting and unmounting everything.
+- **Startup prerequisite check:** Blocks launch with download links if WinFsp and/or SSHFS-Win are not installed.
+- **Settings:** New terminal-backend selector (SSH/PuTTY/integrated xterm) and a toggle to disable SSHFS attribute/directory caching for hosts where stale cache data is an issue.
+- New GitHub Actions release-build workflow and a nightly version/push helper script for the release process.
+
+### Changed
+- The connection card's SSH button now opens the integrated terminal when that backend is selected in Settings, falling back to the external client otherwise; "open mounted path" now opens the new SFTP browser instead of the system file explorer directly.
+- Title bar redesigned with a unified look matching the selected Dark/Light theme; accent color updated app-wide (`#00b4d8` → `#0077b6`).
+- SSHFS mounts now set explicit WinFsp attribute/directory/volume-info cache timeouts (tightened further when caching is disabled), and unmounting escalates to force-killing a stuck `sshfs.exe` process after a 10s grace period.
+- Password-based `SSH_ASKPASS` hardening (one-time IPC token instead of plaintext env var) now applies starting at security level 1 instead of requiring level 2, for both the native SSH launcher and PuTTY.
+- System tray "Quit" now routes through the same mount-cleanup/logout confirmation flow as the main window instead of calling `QApplication.quit()` directly.
+- Frameless window resize-cursor handling now works correctly when the mouse is over child widgets, not just the window frame itself.
+- Build: CLI companion executable dropped from `build_dual.ps1` (GUI-only distribution going forward); PyInstaller build now strips symbols and excludes unused stdlib modules (tkinter, unittest, pytest, etc.) to reduce executable size.
+
+### Security
+- `get_user_by_username` no longer selects sensitive columns (password hash/salt, encrypted key) it doesn't need, reducing accidental exposure of credential material in memory.
+- Admin-only account operations (password reset, delete user, list users) now enforce authorization at the `auth_manager` layer instead of relying solely on UI-level gating.
+- Login lockout timers switched from monotonic to wall-clock time so a lockout can no longer be bypassed by restarting the app.
+- The updater validates executable/update file paths before embedding them in its self-replace script, and now verifies a SHA-256 checksum of the downloaded update before applying it (falls back to a warning if the release provides no checksum).
+- Telemetry action parameters are now URL-encoded before being sent, closing a parameter-injection edge case in the query string.
+- Terminal and SFTP sessions use single-use, expiring session tokens, wipe passwords from memory immediately after use, and bind the local bridge server to loopback only; both features share the same TOFU host-key verification and confirmation dialog used elsewhere in the app.
+- The Pro license validation secret (`neo_pro_validate.php`) is excluded from the repository.
+
+### Fixed
+- Second app launch now correctly restores/focuses the main window even when it was hidden to the system tray, instead of doing nothing.
 
 ---
 
