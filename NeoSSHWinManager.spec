@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-
+import re
 
 a = Analysis(
     ['main.py'],
@@ -22,6 +22,26 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# QtWebEngine (Chromium) ships debug-only resource variants and translations
+# for ~50 locales we never use. In --onefile mode every one of these bytes is
+# re-extracted to a fresh %TEMP%\_MEI... folder on every single app launch, so
+# trimming this data cuts both the exe size and the startup extraction time.
+_KEEP_QM_LANGS = {'en', 'de'}
+
+def _keep_datafile(entry):
+    dest = entry[0].replace('\\', '/').lower()
+    if dest.endswith('.debug.pak') or dest.endswith('.debug.bin'):
+        return False
+    if '/qtwebengine_locales/' in dest:
+        return dest.endswith('/en-us.pak') or dest.endswith('/de.pak')
+    m = re.search(r'/qt(?:_help)?_([a-z]{2}(?:_[a-z]{2})?)\.qm$', dest)
+    if m:
+        return m.group(1) in _KEEP_QM_LANGS
+    return True
+
+a.datas = [d for d in a.datas if _keep_datafile(d)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -33,9 +53,9 @@ exe = EXE(
     name='NeoSSHWinManager',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
-    upx=True,
-    upx_exclude=['vcruntime140.dll', 'python3*.dll', 'Qt6Core.dll', 'Qt6Gui.dll'],
+    strip=False,
+    upx=False,
+    upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
