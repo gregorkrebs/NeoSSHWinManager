@@ -693,6 +693,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     border: 1px solid rgba(0, 212, 100, 0.42);
 }
 
+#groupPill {
+    background-color: rgba(0, 119, 182, 0.12);
+    color: #f1f1f1;
+    border: 1px solid rgba(0, 119, 182, 0.35);
+    border-radius: 8px;
+    padding: 1px 8px;
+    font-size: 9px;
+    font-weight: 600;
+}
+#groupPillMore {
+    background-color: rgba(106, 122, 138, 0.20);
+    color: #8fa4b8;
+    border: 1px solid rgba(106, 122, 138, 0.35);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
+}
+
 /* ---- System Info Panel (Inside Card) ---------------------- */
 #systemInfoPanel {
     background-color: #0f1218;
@@ -2169,6 +2188,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     background-color: rgba(0, 180, 80, 0.12);
     color: #007a3d;
     border: 1px solid #007a3d;
+}
+
+#groupPill {
+    background-color: rgba(0, 119, 182, 0.10);
+    color: #004a75;
+    border: 1px solid rgba(0, 119, 182, 0.30);
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 9px;
+    font-weight: 600;
+}
+#groupPillMore {
+    background-color: rgba(106, 122, 138, 0.15);
+    color: #004a75;
+    border: 1px solid rgba(106, 122, 138, 0.30);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
 }
 
 #systemInfoPanel {

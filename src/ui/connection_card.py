@@ -207,7 +207,6 @@ class ConnectionCard(QFrame):
         for i, group in enumerate(groups[:max_pills]):
             pill = QLabel(group)
             pill.setObjectName("groupPill")
-            pill.setStyleSheet(self._get_pill_stylesheet())
             pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
             pill.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             layout.addWidget(pill)
@@ -215,66 +214,11 @@ class ConnectionCard(QFrame):
         if len(groups) > max_pills:
             more = QLabel(f"+{len(groups) - max_pills}")
             more.setObjectName("groupPillMore")
-            more.setStyleSheet(self._get_pill_more_stylesheet())
             more.setAlignment(Qt.AlignmentFlag.AlignCenter)
             more.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             layout.addWidget(more)
         
         return widget
-
-    def _get_pill_stylesheet(self) -> str:
-        """Get stylesheet for group pills based on theme."""
-        if self._theme == "dark":
-            return """
-                QLabel {
-                    background-color: rgba(0, 119, 182, 0.12);
-                    color: #f1f1f1;
-                    border: 1px solid rgba(0, 119, 182, 0.35);
-                    border-radius: 8px;
-                    padding: 1px 8px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-        else:
-            return """
-                QLabel {
-                    background-color: rgba(0, 119, 182, 0.10);
-                    color: #004a75;
-                    border: 1px solid rgba(0, 119, 182, 0.30);
-                    border-radius: 4px;
-                    padding: 1px 8px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-    
-    def _get_pill_more_stylesheet(self) -> str:
-        """Get stylesheet for +N indicator."""
-        if self._theme == "dark":
-            return """
-                QLabel {
-                    background-color: rgba(106, 122, 138, 0.20);
-                    color: #8fa4b8;
-                    border: 1px solid rgba(106, 122, 138, 0.35);
-                    border-radius: 4px;
-                    padding: 1px 6px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
-        else:
-            return """
-                QLabel {
-                    background-color: rgba(106, 122, 138, 0.15);
-                    color: #004a75;
-                    border: 1px solid rgba(106, 122, 138, 0.30);
-                    border-radius: 4px;
-                    padding: 1px 6px;
-                    font-size: 9px;
-                    font-weight: 600;
-                }
-            """
 
     def update_connection(self, conn: Connection):
         self._conn = conn

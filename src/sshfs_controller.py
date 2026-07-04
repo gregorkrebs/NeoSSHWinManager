@@ -272,17 +272,26 @@ class SSHFSController:
             "-odefault_permissions",
         ]
 
+        # NOTE: attr_timeout/entry_timeout/negative_timeout are libfuse/SFTP-side cache
+        # knobs — they never reach Explorer. Explorer only ever sees the WinFsp kernel
+        # driver's own cache, which is controlled by the separate FileInfoTimeout/
+        # DirInfoTimeout/VolumeInfoTimeout options and defaults to sshfs-win's built-in
+        # FileInfoTimeout=1000 when unset. Always set these explicitly so the checkbox
+        # actually has an effect.
+        cmd += [
+            "-oFileInfoTimeout=-1",
+            "-oVolumeInfoTimeout=1000",
+        ]
+
         if disable_cache:
-            # NOTE: attr_timeout/entry_timeout=0 (no caching at all) causes a race with
-            # Windows Explorer's "New Folder" -> inline rename flow: the rename's path
-            # lookup goes over the network with zero grace period, Explorer thinks the
-            # create failed and retries, leaving several duplicate folders behind.
-            # A short 1s grace period avoids that race while still refreshing near-instantly.
             cmd += [
+                "-oDirInfoTimeout=0",
                 "-oattr_timeout=1",
                 "-oentry_timeout=1",
                 "-onegative_timeout=0",
             ]
+        else:
+            cmd += ["-oDirInfoTimeout=1000"]
 
         if conn.auth_method == "key" and conn.key_path:
             key_path = conn.key_path.replace("\\", "/")
