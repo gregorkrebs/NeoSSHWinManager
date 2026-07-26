@@ -19,6 +19,21 @@ from pathlib import Path
 # Data models
 # ---------------------------------------------------------------------------
 
+PROTOCOL_SFTP = "sftp"
+PROTOCOL_FTP = "ftp"
+PROTOCOL_FTPS = "ftps"
+PROTOCOLS = (PROTOCOL_SFTP, PROTOCOL_FTP, PROTOCOL_FTPS)
+
+
+def default_port(protocol: str, implicit_tls: bool = False) -> int:
+    """Standard-Port für ein Protokoll (FTPS implizit: 990, sonst 21 bzw. 22)."""
+    if protocol == PROTOCOL_FTPS and implicit_tls:
+        return 990
+    if protocol in (PROTOCOL_FTP, PROTOCOL_FTPS):
+        return 21
+    return 22
+
+
 @dataclass
 class Connection:
     name: str
@@ -31,12 +46,30 @@ class Connection:
     key_path: str = ""
     putty_key_path: str = ""        # .ppk format key for PuTTY/plink
     drive_letter: str = "Z:"
+    protocol: str = PROTOCOL_SFTP   # "sftp" | "ftp" | "ftps"
+    ftp_implicit_tls: bool = False  # ftps only: implicit TLS (990) statt AUTH TLS
+    ftp_passive: bool = True        # FTP passive mode (Standard, firewall-freundlich)
+    ftp_verify_cert: bool = True    # ftps only: Serverzertifikat prüfen
     cli_access_enabled: bool = False
     cli_access_key: Optional[str] = None
     groups: str = ""                # Kommaseparierte Gruppen/Tags
     is_template: bool = False       # True = Template, False = normale Verbindung
     template_id: Optional[str] = None  # Referenz zu Template
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    @property
+    def is_ftp(self) -> bool:
+        """True für FTP und FTPS – Verbindungen ohne SSH/SFTP-Fähigkeiten."""
+        return self.protocol in (PROTOCOL_FTP, PROTOCOL_FTPS)
+
+    @property
+    def protocol_label(self) -> str:
+        """Kurzbezeichnung für UI-Badges."""
+        if self.protocol == PROTOCOL_FTPS:
+            return "FTPS"
+        if self.protocol == PROTOCOL_FTP:
+            return "FTP"
+        return "SFTP"
 
     def to_dict(self) -> dict:
         return asdict(self)

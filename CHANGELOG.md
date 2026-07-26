@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **FTP and FTPS support:** Connections now carry a protocol (SFTP / FTPS / FTP). The file browser speaks all three — the new `src/ftp_client.py` implements FTP over `ftplib` with explicit TLS (AUTH TLS, port 21), implicit TLS (port 990) and plain unencrypted FTP, MLSD listings with a LIST fallback for older servers, passive/active mode, progress-reporting up- and downloads and automatic re-login after an idle timeout.
+- Add/Edit form gained a protocol selector plus FTP options (implicit TLS, passive mode, certificate verification); the port follows the protocol default (22 / 21 / 990) unless a custom port was entered, and SSH-only fields (key file, drive letter, CLI access, PuTTY key) are hidden for FTP connections.
+- Plain-FTP connections can be handed to the on-board Windows Explorer FTP client from the card context menu (the password stays out of the URL — Explorer asks for it).
+
+### Changed
+- FTP/FTPS connections cannot be mounted as a drive and have no SSH terminal: their card shows a protocol badge and opens the file browser, and mount/terminal/system-info actions report that they are unavailable instead of failing later.
+- Database migrations now run each `ALTER TABLE` independently, so one column that SQLite refuses (e.g. adding a `UNIQUE` column to an old table) no longer silently skips every migration after it.
+
+---
+
 ## [1.5.1] — 2026-07-04
 
 ### Added

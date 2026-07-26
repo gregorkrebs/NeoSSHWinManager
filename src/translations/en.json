@@ -449,5 +449,33 @@
   "settings.pro.key_label": "Pro Key",
 
   "pro.session_limit.title": "Pro Feature",
-  "pro.session_limit.body": "The free version supports up to 3 concurrent terminal sessions.\n\nMore information at www.neosshwinmanager.org/pro"
+  "pro.session_limit.body": "The free version supports up to 3 concurrent terminal sessions.\n\nMore information at www.neosshwinmanager.org/pro",
+
+  "ftp.title": "{proto} Browser – {name}",
+  "ftp.error.title": "{proto} Error",
+  "ftp.mount_unsupported.title": "Not available for {proto}",
+  "ftp.mount_unsupported": "'{name}' is an {proto} connection. Mounting as a drive letter needs SSHFS and is only available for SFTP. Use the file browser instead.",
+  "ftp.ssh_unsupported": "'{name}' is an {proto} connection – there is no SSH terminal for it.",
+  "ftp.explorer_tls_unsupported": "Windows Explorer only supports plain FTP without TLS. Use the built-in browser for FTPS.",
+  "ftp.explorer_failed": "Windows Explorer could not open the FTP address:\n{url}\n\n{err}",
+
+  "card.tooltip.ftp_browser": "Browse files via {proto}",
+  "card.menu.ftp_browser": "Open {proto} browser",
+  "card.menu.open_explorer_ftp": "Open in Windows Explorer (ftp://)",
+  "status.ftp_browser_opened": "{proto} browser opened for '{name}'",
+  "panel.label.protocol": "Protocol",
+
+  "addedit.label.protocol": "Protocol",
+  "addedit.protocol.sftp": "SFTP (over SSH)",
+  "addedit.protocol.ftp": "FTP (unencrypted)",
+  "addedit.protocol.ftps": "FTPS (FTP over TLS)",
+  "addedit.section.ftp": "FTP options",
+  "addedit.ftp.implicit": "Implicit TLS (port 990)",
+  "addedit.ftp.implicit.hint": "Off = explicit TLS (AUTH TLS) on port 21 – the usual setting.",
+  "addedit.ftp.passive": "Passive mode",
+  "addedit.ftp.passive.hint": "Passive mode works behind most firewalls and routers. Only turn it off if the server requires active mode.",
+  "addedit.ftp.verify_cert": "Verify server certificate",
+  "addedit.ftp.verify_cert.hint": "Turn off only for self-signed certificates. The connection stays encrypted, but the server identity is no longer verified.",
+  "addedit.ftp.hint": "FTP connections cannot be mounted as a drive letter and have no SSH terminal – use the file browser.",
+  "addedit.ftp.plain_warning": "Plain FTP transmits password and data unencrypted. Use FTPS whenever the server offers it."
 }

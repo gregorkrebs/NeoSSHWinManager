@@ -16,7 +16,14 @@ from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelScrollArea, NoWheelS
 from src.i18n import tr, available_languages
 
 
-_LANG_LABELS = {"en": "English", "de": "Deutsch"}
+_LANG_LABELS = {
+    "en": "English",
+    "de": "Deutsch",
+    "es": "Español",
+    "ru": "Русский",
+    "nl": "Nederlands",
+    "ar": "العربية",
+}
 
 
 class SettingsDialog(QDialog):

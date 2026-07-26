@@ -1,9 +1,12 @@
 """
-sftp_browser.py – Native SFTP file browser window for NEO SSH-Win Manager.
+sftp_browser.py – Native SFTP/FTP file browser window for NEO SSH-Win Manager.
 
 Opens as a non-modal FramelessDialog when the user clicks the folder button on a
 mounted connection. Provides directory navigation, file download/upload, rename,
 delete, and new-folder operations — all without blocking the Qt UI thread.
+
+The window drives SFTP, FTP and FTPS sessions: the transport is picked from
+Connection.protocol, everything above it (model, workers, UI) is shared.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 from src.app_logger import logger
 from src.config import Connection
+from src.ftp_client import FtpClient
 from src.i18n import tr
 from src.sftp_client import SftpClient, SftpEntry
 from src.ui.dialogs.styled_message_box import StyledInputDialog, StyledMessageBox
@@ -137,7 +141,7 @@ def _fmt_size(size: int) -> str:
 
 class SftpBrowserWindow(FramelessDialog):
     """
-    Non-modal SFTP file browser window.
+    Non-modal SFTP/FTP file browser window.
 
     Created by MainWindow._on_open_mounted_path() and shown with show().
     One instance per connection; reopening an already-open browser raises
@@ -153,7 +157,8 @@ class SftpBrowserWindow(FramelessDialog):
         super().__init__(parent, show_maximize=True)
         self._conn = conn
         self._theme = theme
-        self._client = SftpClient()
+        self._is_ftp = bool(getattr(conn, "is_ftp", False))
+        self._client = FtpClient() if self._is_ftp else SftpClient()
         self._current_path: str = (conn.remote_path or "/").rstrip("/") or "/"
         self._history: list[str] = []
         self._forward_stack: list[str] = []
@@ -166,7 +171,10 @@ class SftpBrowserWindow(FramelessDialog):
         # Debounce: local_path → QTimer to avoid double-upload on save
         self._edit_timers: dict[str, QTimer] = {}
 
-        self.setWindowTitle(tr("sftp.title", name=conn.name))
+        self.setWindowTitle(tr(
+            "ftp.title" if self._is_ftp else "sftp.title",
+            name=conn.name, proto=conn.protocol_label,
+        ))
         self.resize(960, 620)
 
         self._build_ui()
@@ -397,9 +405,18 @@ class SftpBrowserWindow(FramelessDialog):
 
     # ── Connection ───────────────────────────────────────────────────────────
 
+    def _error_title(self) -> str:
+        """'SFTP Error' / 'FTPS Error' – used for all generic error popups."""
+        return tr(
+            "ftp.error.title" if self._is_ftp else "sftp.error.title",
+            proto=self._conn.protocol_label,
+        )
+
     def _connect_and_load(self) -> None:
         self._set_status(tr("sftp.status.connecting"))
-        worker = SftpConnectWorker(self._client, self._conn, self._tofu_callback)
+        # FTP has no host keys — only SFTP needs the trust-on-first-use prompt.
+        tofu = None if self._is_ftp else self._tofu_callback
+        worker = SftpConnectWorker(self._client, self._conn, tofu)
         worker.connected.connect(self._on_connected)
         worker.error.connect(self._on_connect_error)
         self._workers.append(worker)
@@ -504,7 +521,7 @@ class SftpBrowserWindow(FramelessDialog):
     def _on_list_error(self, path: str, msg: str) -> None:
         self._active_list_worker = None
         self._set_status(tr("sftp.status.error", msg=msg))
-        StyledMessageBox.critical(self, tr("sftp.error.title"), msg)
+        StyledMessageBox.critical(self, self._error_title(), msg)
 
     # ── Double click ─────────────────────────────────────────────────────────
 
@@ -552,7 +569,7 @@ class SftpBrowserWindow(FramelessDialog):
             try:
                 os.startfile(lp)
             except Exception as e:
-                StyledMessageBox.critical(self, tr("sftp.error.title"), str(e))
+                StyledMessageBox.critical(self, self._error_title(), str(e))
 
         def _on_error(msg: str) -> None:
             prog.close()
@@ -641,7 +658,7 @@ class SftpBrowserWindow(FramelessDialog):
                 try:
                     os.startfile(lp)
                 except Exception as e:
-                    StyledMessageBox.critical(self, tr("sftp.error.title"), str(e))
+                    StyledMessageBox.critical(self, self._error_title(), str(e))
 
         def _on_error(msg: str) -> None:
             prog.close()
