@@ -36,12 +36,13 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 
 - **One-click mounting** of remote SSH filesystems as Windows drive letters via SSHFS-Win / WinFsp.
 - **Built-in SSH terminal** access per connection — uses Windows OpenSSH or PuTTY.
+- **Built-in file browser for SFTP, FTPS and FTP** — FTP over TLS in explicit (AUTH TLS, port 21) and implicit (port 990) mode, plain FTP for legacy servers, with upload/download, rename, delete and in-place editing. Plain-FTP hosts can also be handed to the on-board Windows Explorer FTP client.
 - **Password authentication** with stored credentials — passwordless login without using SSH keys.
 - **Public key authentication.**
 - **SSH certificate authentication.**
 - **Live remote system info panel** (OS, CPU, RAM, disk, uptime, load, temperature).
 - **Multi-user accounts** with encrypted credential storage (SQLite + cryptography).
-- **Per-user language** (English / German, easily extensible).
+- **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left).
 - **System tray** with quick mount toggles, minimize to tray.
 - **Auto drive-letter detection** (free letters only) and ghost-drive cleanup.
 - "Start with Windows" and "Auto-reconnect on connection loss" options.
@@ -209,7 +210,11 @@ neosshwinmanager/
 │   ├── i18n.py                   # Translation loader
 │   ├── translations/
 │   │   ├── en.json               # English (default)
-│   │   └── de.json               # German
+│   │   ├── de.json               # German
+│   │   ├── es.json               # Spanish
+│   │   ├── ru.json               # Russian
+│   │   ├── nl.json               # Dutch
+│   │   └── ar.json               # Arabic (RTL)
 │   └── ui/
 │       ├── main_window.py
 │       ├── connection_card.py
@@ -231,8 +236,11 @@ neosshwinmanager/
 Language is stored per user. To add a new language:
 
 1. Copy `src/translations/en.json` to `src/translations/<code>.json` and translate the values.
-2. Add the code to `_SUPPORTED` in `src/i18n.py` and the label map in `src/ui/dialogs/settings_dialog.py`.
-3. Restart the app.
+2. Add the code to `_SUPPORTED` in `src/i18n.py` and to the `_LANG_LABELS` maps in
+   `src/ui/dialogs/settings_dialog.py` and `src/ui/main_window.py`.
+3. For a right-to-left language, also add the code to `_RTL` in `src/i18n.py` — the app then
+   mirrors its layout automatically.
+4. Restart the app.
 
 Missing keys automatically fall back to English.
 

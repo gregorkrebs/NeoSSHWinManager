@@ -90,6 +90,17 @@ class SystemTray(QSystemTrayIcon):
         if connections:
             menu.addSeparator()
             for conn in connections:
+                if conn.is_ftp:
+                    # FTP/FTPS cannot be mounted — the entry opens the browser.
+                    act = QAction(f"○ {conn.name} ({conn.protocol_label})", self)
+                    act.setData(conn.id)
+                    act.triggered.connect(
+                        lambda _, cid=conn.id: self._main_window._open_sftp_browser(
+                            cid, mounted_only=False
+                        )
+                    )
+                    menu.addAction(act)
+                    continue
                 state = "✓ " if conn.drive_letter in mounted_set else "○ "
                 act = QAction(f"{state}{conn.name} ({conn.drive_letter})", self)
                 act.setData(conn.id)
