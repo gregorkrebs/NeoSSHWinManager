@@ -449,5 +449,33 @@
   "settings.pro.key_label": "Pro-Key",
 
   "pro.session_limit.title": "Pro-Feature",
-  "pro.session_limit.body": "Die kostenlose Version unterstützt bis zu 3 gleichzeitige Terminal-Sessions.\n\nMehr Informationen unter www.neosshwinmanager.org/pro"
+  "pro.session_limit.body": "Die kostenlose Version unterstützt bis zu 3 gleichzeitige Terminal-Sessions.\n\nMehr Informationen unter www.neosshwinmanager.org/pro",
+
+  "ftp.title": "{proto}-Browser – {name}",
+  "ftp.error.title": "{proto}-Fehler",
+  "ftp.mount_unsupported.title": "Für {proto} nicht verfügbar",
+  "ftp.mount_unsupported": "'{name}' ist eine {proto}-Verbindung. Das Einbinden als Laufwerk benötigt SSHFS und ist nur für SFTP möglich. Bitte den Dateibrowser verwenden.",
+  "ftp.ssh_unsupported": "'{name}' ist eine {proto}-Verbindung – dafür gibt es kein SSH-Terminal.",
+  "ftp.explorer_tls_unsupported": "Der Windows-Explorer unterstützt nur einfaches FTP ohne TLS. Für FTPS bitte den eingebauten Browser verwenden.",
+  "ftp.explorer_failed": "Der Windows-Explorer konnte die FTP-Adresse nicht öffnen:\n{url}\n\n{err}",
+
+  "card.tooltip.ftp_browser": "Dateien per {proto} durchsuchen",
+  "card.menu.ftp_browser": "{proto}-Browser öffnen",
+  "card.menu.open_explorer_ftp": "Im Windows-Explorer öffnen (ftp://)",
+  "status.ftp_browser_opened": "{proto}-Browser für '{name}' geöffnet",
+  "panel.label.protocol": "Protokoll",
+
+  "addedit.label.protocol": "Protokoll",
+  "addedit.protocol.sftp": "SFTP (über SSH)",
+  "addedit.protocol.ftp": "FTP (unverschlüsselt)",
+  "addedit.protocol.ftps": "FTPS (FTP über TLS)",
+  "addedit.section.ftp": "FTP-Optionen",
+  "addedit.ftp.implicit": "Implizites TLS (Port 990)",
+  "addedit.ftp.implicit.hint": "Aus = explizites TLS (AUTH TLS) auf Port 21 – die übliche Einstellung.",
+  "addedit.ftp.passive": "Passiver Modus",
+  "addedit.ftp.passive.hint": "Der passive Modus funktioniert hinter den meisten Firewalls und Routern. Nur abschalten, wenn der Server aktiven Modus verlangt.",
+  "addedit.ftp.verify_cert": "Serverzertifikat prüfen",
+  "addedit.ftp.verify_cert.hint": "Nur bei selbstsignierten Zertifikaten abschalten. Die Verbindung bleibt verschlüsselt, die Identität des Servers wird aber nicht mehr geprüft.",
+  "addedit.ftp.hint": "FTP-Verbindungen lassen sich nicht als Laufwerk einbinden und haben kein SSH-Terminal – bitte den Dateibrowser nutzen.",
+  "addedit.ftp.plain_warning": "Einfaches FTP überträgt Passwort und Daten unverschlüsselt. Wenn der Server FTPS anbietet, bitte FTPS verwenden."
 }

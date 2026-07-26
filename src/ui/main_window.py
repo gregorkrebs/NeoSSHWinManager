@@ -18,6 +18,8 @@ from PyQt6 import sip
 import ctypes
 import ctypes.wintypes
 import json
+import subprocess
+from urllib.parse import quote
 
 # SECURITY FIX (FINDING-01): imports for named-pipe DACL and IPC rate limiting
 import win32security
@@ -27,7 +29,10 @@ import ntsecuritycon
 
 from src.auth_manager import Session, UserConnectionManager
 from src.sshfs_controller import SSHFSController, _is_safe_label
-from src.config import Connection, AppSettings
+from src.config import (
+    Connection, AppSettings, PROTOCOL_FTP, PROTOCOL_FTPS, PROTOCOL_SFTP,
+    default_port,
+)
 from src.ui.connection_card import ConnectionCard
 from src.ui.system_tray import SystemTray
 from src.ui.debug_window import DebugWindow
@@ -38,12 +43,30 @@ from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
-from src.i18n import tr, current_language, available_languages, set_language
+from src.i18n import tr, current_language, available_languages, set_language, is_rtl
 from src.channel import display_name
 from PyQt6.QtCore import QThread
 
 
-_LANG_LABELS = {"en": "English", "de": "Deutsch"}
+_LANG_LABELS = {
+    "en": "English",
+    "de": "Deutsch",
+    "es": "Español",
+    "ru": "Русский",
+    "nl": "Nederlands",
+    "ar": "العربية",
+}
+
+
+def _apply_layout_direction() -> None:
+    """Mirror the UI for right-to-left languages (Arabic)."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is not None:
+        app.setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
+        )
 
 # Right-panel mode constants
 _PANEL_NONE     = "none"
@@ -206,6 +229,7 @@ class MainWindow(FramelessMainWindow):
         # even when MainWindow is launched outside the main.py startup path.
         try:
             set_language(self._mgr.get_settings().language)
+            _apply_layout_direction()
         except Exception:
             pass
         self._controller = SSHFSController()
@@ -1094,7 +1118,8 @@ class MainWindow(FramelessMainWindow):
         mounted_map = self._controller.get_mounted_drives()
 
         for conn in connections:
-            mounted = conn.drive_letter.upper().rstrip("\\") in {
+            # FTP/FTPS hosts are never mounted — SSHFS speaks SSH only.
+            mounted = (not conn.is_ftp) and conn.drive_letter.upper().rstrip("\\") in {
                 k.upper().rstrip("\\") for k in mounted_map.keys()
             }
             container = self._create_connection_container(conn, mounted)
@@ -1157,7 +1182,11 @@ class MainWindow(FramelessMainWindow):
             "_ef_conn", "_ef_name", "_ef_host", "_ef_user", "_ef_path", "_ef_port",
             "_ef_drive", "_ef_auth", "_ef_pw", "_ef_key", "_ef_cli_cb",
             "_ef_cli_widget", "_ef_cli_key", "_ef_cli_copy_btn", "_ef_cli_gen_btn",
-            "_ef_putty_key", "_ef_groups", "_ef_template_cb"
+            "_ef_putty_key", "_ef_groups", "_ef_template_cb",
+            "_ef_protocol", "_ef_ftp_widget", "_ef_ftp_implicit",
+            "_ef_ftp_implicit_hint", "_ef_ftp_passive", "_ef_ftp_verify",
+            "_ef_ftp_verify_hint", "_ef_ftp_plain_warning", "_ef_key_field",
+            "_ef_drive_field", "_ef_cli_section", "_ef_putty_widget",
         ):
             setattr(self, attr, None)
         self._ef_initial_snapshot = None
@@ -1293,8 +1322,6 @@ class MainWindow(FramelessMainWindow):
         edit_locked = is_mounted and not self._mgr.get_settings().debug_mode
 
         self._set_right_panel_header(tr("panel.header.details"), conn.name.upper())
-        # Info button - always visible in info mode
-        self._rp_info_btn.setVisible(True)
         # Edit button: enabled=accent color, disabled=muted (theme-aware)
         theme = self._mgr.get_settings().theme or "dark"
         if edit_locked:
@@ -1307,10 +1334,14 @@ class MainWindow(FramelessMainWindow):
         self._rp_edit_btn.setToolTip(
             tr("card.tooltip.edit_locked") if edit_locked else tr("card.tooltip.edit")
         )
-        # Header actions (overview): Sysinfo → Edit → Terminal → Mount → Close
-        self._rp_terminal_btn.setVisible(True)
-        self._rp_mount_btn.setVisible(True)
-        self._sync_rp_mount_button(conn_id)
+        # Header actions (overview): Sysinfo → Edit → Terminal → Mount → Close.
+        # Terminal, sysinfo and mount all need SSH, so they are hidden for FTP.
+        is_ftp = bool(conn.is_ftp)
+        self._rp_info_btn.setVisible(not is_ftp)
+        self._rp_terminal_btn.setVisible(not is_ftp)
+        self._rp_mount_btn.setVisible(not is_ftp)
+        if not is_ftp:
+            self._sync_rp_mount_button(conn_id)
 
         self._rp_del_btn.setVisible(False)
         self._rp_save_top_btn.setVisible(False)
@@ -1334,6 +1365,9 @@ class MainWindow(FramelessMainWindow):
                 return
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
+            return
+        # System info is collected over SSH — not available for FTP/FTPS.
+        if self._reject_ftp_action(conn, "ftp.ssh_unsupported"):
             return
 
         if self._panel_conn_id and self._panel_conn_id in self._cards:
@@ -1467,7 +1501,8 @@ class MainWindow(FramelessMainWindow):
 
         # General
         v.addWidget(_section(tr("addedit.section.general")))
-        v.addWidget(_row(tr("addedit.label.name"), conn.name))
+        v.addWidget(_row_pair(tr("addedit.label.name"), conn.name,
+                              tr("panel.label.protocol"), conn.protocol_label, 2, 1))
         v.addWidget(_row_pair(tr("addedit.label.host"), conn.host,
                               tr("addedit.label.port"), str(conn.port), 2, 1))
         v.addWidget(_row(tr("addedit.label.user"), conn.user))
@@ -1482,11 +1517,24 @@ class MainWindow(FramelessMainWindow):
         if conn.key_path:
             v.addWidget(_row(tr("addedit.label.key"), conn.key_path))
 
-        # Path & Drive
+        # Path & Drive (FTP has no drive letter — show the TLS setup instead)
         v.addSpacing(4)
         v.addWidget(_section(tr("addedit.section.path")))
-        v.addWidget(_row_pair(tr("addedit.label.path"), conn.remote_path,
-                              tr("addedit.label.drive"), conn.drive_letter, 3, 1))
+        if conn.is_ftp:
+            v.addWidget(_row(tr("addedit.label.path"), conn.remote_path))
+            v.addSpacing(4)
+            v.addWidget(_section(tr("addedit.section.ftp")))
+            _yes, _no = tr("dialog.yes"), tr("dialog.no")
+            if conn.protocol == PROTOCOL_FTPS:
+                v.addWidget(_row_pair(
+                    tr("addedit.ftp.implicit"), _yes if conn.ftp_implicit_tls else _no,
+                    tr("addedit.ftp.verify_cert"), _yes if conn.ftp_verify_cert else _no,
+                    1, 1,
+                ))
+            v.addWidget(_row(tr("addedit.ftp.passive"), _yes if conn.ftp_passive else _no))
+        else:
+            v.addWidget(_row_pair(tr("addedit.label.path"), conn.remote_path,
+                                  tr("addedit.label.drive"), conn.drive_letter, 3, 1))
 
         # CLI
         if conn.cli_access_enabled:
@@ -2238,6 +2286,18 @@ class MainWindow(FramelessMainWindow):
         self._ef_name.setPlaceholderText(tr("addedit.placeholder.name"))
         v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name))
 
+        # Protocol: decides which transport the file browser uses and whether
+        # the SSH-only fields below (key, drive letter, CLI, PuTTY) apply.
+        self._ef_protocol = NoWheelComboBox()
+        self._ef_protocol.addItem(tr("addedit.protocol.sftp"), PROTOCOL_SFTP)
+        self._ef_protocol.addItem(tr("addedit.protocol.ftps"), PROTOCOL_FTPS)
+        self._ef_protocol.addItem(tr("addedit.protocol.ftp"), PROTOCOL_FTP)
+        if is_edit:
+            idx = self._ef_protocol.findData(conn.protocol)
+            if idx >= 0:
+                self._ef_protocol.setCurrentIndex(idx)
+        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol))
+
         self._ef_host = QLineEdit(conn.host if is_edit else "")
         self._ef_host.setPlaceholderText("192.168.1.1")
         self._ef_port = NoWheelSpinBox()
@@ -2281,7 +2341,52 @@ class MainWindow(FramelessMainWindow):
         browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         browse_btn.clicked.connect(self._ef_browse_key)
         key_hl.addWidget(browse_btn)
-        v.addWidget(_ef_field(tr("addedit.label.key"), key_container))
+        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container)
+        v.addWidget(self._ef_key_field)
+
+        # FTP options — only meaningful for FTP/FTPS, hidden for SFTP
+        self._ef_ftp_widget = QWidget()
+        ftp_v = QVBoxLayout(self._ef_ftp_widget)
+        ftp_v.setContentsMargins(0, 4, 0, 0)
+        ftp_v.setSpacing(6)
+        ftp_v.addWidget(self._section_label(tr("addedit.section.ftp")))
+
+        self._ef_ftp_plain_warning = QLabel(tr("addedit.ftp.plain_warning"))
+        self._ef_ftp_plain_warning.setWordWrap(True)
+        self._ef_ftp_plain_warning.setStyleSheet(
+            "background-color: rgba(255, 180, 0, 0.15);"
+            "border: 1px solid rgba(255, 180, 0, 0.35);"
+            "border-radius: 8px; padding: 8px 12px;"
+            "color: #d89000; font-size: 12px; font-weight: 600;"
+        )
+        ftp_v.addWidget(self._ef_ftp_plain_warning)
+
+        self._ef_ftp_implicit = QCheckBox(tr("addedit.ftp.implicit"))
+        self._ef_ftp_implicit.setChecked(conn.ftp_implicit_tls if is_edit else False)
+        self._ef_ftp_implicit.toggled.connect(self._ef_on_protocol_changed)
+        self._ef_ftp_implicit_hint = self._field_label(tr("addedit.ftp.implicit.hint"))
+        self._ef_ftp_implicit_hint.setWordWrap(True)
+        ftp_v.addWidget(self._ef_ftp_implicit)
+        ftp_v.addWidget(self._ef_ftp_implicit_hint)
+
+        self._ef_ftp_verify = QCheckBox(tr("addedit.ftp.verify_cert"))
+        self._ef_ftp_verify.setChecked(conn.ftp_verify_cert if is_edit else True)
+        self._ef_ftp_verify_hint = self._field_label(tr("addedit.ftp.verify_cert.hint"))
+        self._ef_ftp_verify_hint.setWordWrap(True)
+        ftp_v.addWidget(self._ef_ftp_verify)
+        ftp_v.addWidget(self._ef_ftp_verify_hint)
+
+        self._ef_ftp_passive = QCheckBox(tr("addedit.ftp.passive"))
+        self._ef_ftp_passive.setChecked(conn.ftp_passive if is_edit else True)
+        _passive_hint = self._field_label(tr("addedit.ftp.passive.hint"))
+        _passive_hint.setWordWrap(True)
+        ftp_v.addWidget(self._ef_ftp_passive)
+        ftp_v.addWidget(_passive_hint)
+
+        _ftp_hint = self._field_label(tr("addedit.ftp.hint"))
+        _ftp_hint.setWordWrap(True)
+        ftp_v.addWidget(_ftp_hint)
+        v.addWidget(self._ef_ftp_widget)
 
         # Path & Drive
         v.addSpacing(4)
@@ -2289,9 +2394,10 @@ class MainWindow(FramelessMainWindow):
         self._ef_path = QLineEdit(conn.remote_path if is_edit else "/")
         self._ef_path.setPlaceholderText("/home/user")
         self._ef_drive = NoWheelComboBox()
-        used = [c.drive_letter for c in self._mgr.get_all() if (not is_edit or c.id != conn.id)]
+        used = [c.drive_letter for c in self._mgr.get_all()
+                if not c.is_ftp and (not is_edit or c.id != conn.id)]
         available = get_available_drives(exclude=used)
-        if is_edit:
+        if is_edit and conn.drive_letter:
             curr = conn.drive_letter.upper().rstrip("\\") + ":"
             if curr not in available:
                 available.insert(0, curr)
@@ -2301,12 +2407,21 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_drive.findData(conn.drive_letter)
             if idx >= 0:
                 self._ef_drive.setCurrentIndex(idx)
-        v.addWidget(_ef_field_pair(tr("addedit.label.path"), self._ef_path,
-                                   tr("addedit.label.drive"), self._ef_drive, 3, 1))
+        # Same layout as _ef_field_pair, but the drive half stays addressable so
+        # it can be hidden for FTP connections (they are never mounted).
+        path_row = QWidget()
+        path_hl = QHBoxLayout(path_row)
+        path_hl.setContentsMargins(0, 0, 0, 0)
+        path_hl.setSpacing(8)
+        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive)
+        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path), stretch=3)
+        path_hl.addWidget(self._ef_drive_field, stretch=1)
+        v.addWidget(path_row)
 
         # CLI
         v.addSpacing(4)
-        v.addWidget(self._section_label(tr("addedit.section.cli")))
+        self._ef_cli_section = self._section_label(tr("addedit.section.cli"))
+        v.addWidget(self._ef_cli_section)
         self._ef_cli_cb = QCheckBox(tr("addedit.cli.enable"))
         self._ef_cli_cb.setChecked(conn.cli_access_enabled if is_edit else False)
         self._ef_cli_cb.toggled.connect(self._ef_cli_toggle)
@@ -2349,9 +2464,13 @@ class MainWindow(FramelessMainWindow):
 
         # PuTTY (only when enabled globally)
         s = self._mgr.get_settings()
+        self._ef_putty_widget = None
         if s.use_putty:
-            v.addSpacing(4)
-            v.addWidget(self._section_label("PuTTY"))
+            self._ef_putty_widget = QWidget()
+            putty_v = QVBoxLayout(self._ef_putty_widget)
+            putty_v.setContentsMargins(0, 4, 0, 0)
+            putty_v.setSpacing(6)
+            putty_v.addWidget(self._section_label("PuTTY"))
             putty_container = QWidget()
             putty_hl = QHBoxLayout(putty_container)
             putty_hl.setContentsMargins(0, 0, 0, 0)
@@ -2364,8 +2483,9 @@ class MainWindow(FramelessMainWindow):
             putty_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             putty_browse_btn.clicked.connect(self._ef_browse_putty_key)
             putty_hl.addWidget(putty_browse_btn)
-            v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container))
-            v.addWidget(self._field_label(tr("addedit.putty_key.hint")))
+            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container))
+            putty_v.addWidget(self._field_label(tr("addedit.putty_key.hint")))
+            v.addWidget(self._ef_putty_widget)
 
         # Groups/Tags
         v.addSpacing(4)
@@ -2388,14 +2508,101 @@ class MainWindow(FramelessMainWindow):
         self._ef_conn = conn
         for w in (self._ef_name, self._ef_host, self._ef_user):
             w.textChanged.connect(self._validate_edit_form)
+        # Wire up protocol switching only after every field exists, then apply
+        # the initial visibility for the loaded/default protocol.
+        self._ef_protocol.currentIndexChanged.connect(self._ef_on_protocol_changed)
+        self._ef_apply_protocol_visibility()
         self._ef_initial_snapshot = self._snapshot_form()
         self._validate_edit_form()
         self._setup_edit_tab_order()
         QTimer.singleShot(0, self._ef_name.setFocus)
 
+    # ── Protocol-dependent form behaviour ────────────────────────────────
+
+    def _ef_current_protocol(self) -> str:
+        return self._safe_current_data("_ef_protocol", PROTOCOL_SFTP)
+
+    def _ef_on_protocol_changed(self, *_args):
+        """Protocol (or implicit-TLS) changed: adjust port and field visibility."""
+        self._ef_sync_default_port()
+        self._ef_apply_protocol_visibility()
+
+    def _ef_sync_default_port(self):
+        """
+        Move the port to the new protocol's default.
+
+        Only standard ports are rewritten — a custom port the user typed in
+        stays untouched.
+        """
+        spin = getattr(self, "_ef_port", None)
+        if spin is None:
+            return
+        try:
+            current = int(spin.value())
+            if current not in (21, 22, 990):
+                return
+            spin.setValue(default_port(
+                self._ef_current_protocol(),
+                self._safe_bool_checked("_ef_ftp_implicit", False),
+            ))
+        except RuntimeError:
+            pass
+
+    def _ef_apply_protocol_visibility(self):
+        """Show only the fields that apply to the selected protocol."""
+        protocol = self._ef_current_protocol()
+        is_ftp = protocol in (PROTOCOL_FTP, PROTOCOL_FTPS)
+        is_tls = protocol == PROTOCOL_FTPS
+
+        widgets = (
+            # (attribute, visible?)
+            ("_ef_ftp_widget", is_ftp),
+            ("_ef_ftp_plain_warning", protocol == PROTOCOL_FTP),
+            ("_ef_ftp_implicit", is_tls),
+            ("_ef_ftp_implicit_hint", is_tls),
+            ("_ef_ftp_verify", is_tls),
+            ("_ef_ftp_verify_hint", is_tls),
+            # SSH-only fields
+            ("_ef_key_field", not is_ftp),
+            ("_ef_drive_field", not is_ftp),
+            ("_ef_cli_section", not is_ftp),
+            ("_ef_cli_cb", not is_ftp),
+            ("_ef_putty_widget", not is_ftp),
+        )
+        for attr, visible in widgets:
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            try:
+                widget.setVisible(visible)
+            except RuntimeError:
+                pass
+
+        # FTP authenticates with user/password only — key auth would silently
+        # log in with an empty password, so move that selection to "password".
+        auth = getattr(self, "_ef_auth", None)
+        if is_ftp and auth is not None:
+            try:
+                if auth.currentData() == "key":
+                    idx = auth.findData("password")
+                    if idx >= 0:
+                        auth.setCurrentIndex(idx)
+            except RuntimeError:
+                pass
+
+        # The CLI key row follows its checkbox, but never shows for FTP.
+        cli_widget = getattr(self, "_ef_cli_widget", None)
+        if cli_widget is not None:
+            try:
+                cli_widget.setVisible(
+                    (not is_ftp) and self._safe_bool_checked("_ef_cli_cb", False)
+                )
+            except RuntimeError:
+                pass
+
     def _setup_edit_tab_order(self):
         chain = [
-            self._ef_name, self._ef_host, self._ef_port, self._ef_user,
+            self._ef_name, self._ef_protocol, self._ef_host, self._ef_port, self._ef_user,
             self._ef_auth, self._ef_pw, self._ef_key,
             self._ef_path, self._ef_drive,
             self._ef_cli_cb, self._ef_cli_key,
@@ -2444,6 +2651,22 @@ class MainWindow(FramelessMainWindow):
         if getattr(self, "_ef_host", None):
             try:
                 self._ef_host.setText(conn.host)
+            except RuntimeError:
+                pass
+
+        # Protocol (before the port, so the port from the template wins over
+        # the default port the protocol switch would otherwise apply)
+        if getattr(self, "_ef_protocol", None):
+            try:
+                idx = self._ef_protocol.findData(conn.protocol)
+                if idx >= 0:
+                    self._ef_protocol.setCurrentIndex(idx)
+                if getattr(self, "_ef_ftp_implicit", None):
+                    self._ef_ftp_implicit.setChecked(bool(conn.ftp_implicit_tls))
+                if getattr(self, "_ef_ftp_passive", None):
+                    self._ef_ftp_passive.setChecked(bool(conn.ftp_passive))
+                if getattr(self, "_ef_ftp_verify", None):
+                    self._ef_ftp_verify.setChecked(bool(conn.ftp_verify_cert))
             except RuntimeError:
                 pass
 
@@ -3335,6 +3558,10 @@ class MainWindow(FramelessMainWindow):
             "key": self._safe_lineedit_text("_ef_key"),
             "putty_key": self._safe_lineedit_text("_ef_putty_key"),
             "drive": self._safe_current_data("_ef_drive", "Z:"),
+            "protocol": self._safe_current_data("_ef_protocol", PROTOCOL_SFTP),
+            "ftp_implicit_tls": self._safe_bool_checked("_ef_ftp_implicit", False),
+            "ftp_passive": self._safe_bool_checked("_ef_ftp_passive", True),
+            "ftp_verify_cert": self._safe_bool_checked("_ef_ftp_verify", True),
             "cli_enabled": self._safe_bool_checked("_ef_cli_cb", False),
             "cli_key": self._safe_lineedit_text("_ef_cli_key"),
             "groups": self._safe_lineedit_text("_ef_groups"),
@@ -3545,6 +3772,30 @@ class MainWindow(FramelessMainWindow):
                 continue
             return text
 
+    def _ef_collect_protocol_fields(self) -> dict:
+        """
+        Protocol-dependent Connection fields taken from the edit form.
+
+        SSH-only values (key files, drive letter, CLI access) are cleared for
+        FTP/FTPS so a protocol switch cannot leave stale data behind.
+        """
+        protocol = self._ef_current_protocol()
+        is_ftp = protocol in (PROTOCOL_FTP, PROTOCOL_FTPS)
+        cli_enabled = (not is_ftp) and self._safe_bool_checked("_ef_cli_cb", False)
+        return {
+            "protocol": protocol,
+            "ftp_implicit_tls": (protocol == PROTOCOL_FTPS
+                                 and self._safe_bool_checked("_ef_ftp_implicit", False)),
+            "ftp_passive": self._safe_bool_checked("_ef_ftp_passive", True),
+            "ftp_verify_cert": self._safe_bool_checked("_ef_ftp_verify", True),
+            "key_path": "" if is_ftp else self._safe_lineedit_text("_ef_key"),
+            "putty_key_path": "" if is_ftp else self._safe_lineedit_text("_ef_putty_key"),
+            "drive_letter": "" if is_ftp else self._safe_current_data("_ef_drive", "Z:"),
+            "cli_access_enabled": cli_enabled,
+            "cli_access_key": (self._safe_lineedit_text("_ef_cli_key")
+                               if cli_enabled else None),
+        }
+
     def _save_edit_form(self):
         if not getattr(self, "_ef_conn", None):
             self._show_inline_message(tr("dialog.error"), "Formular ist nicht verfügbar. Bitte erneut öffnen.", is_error=True)
@@ -3570,9 +3821,7 @@ class MainWindow(FramelessMainWindow):
             name = tpl_name
 
         conn = self._ef_conn
-        putty_key_path = self._safe_lineedit_text("_ef_putty_key")
-        cli_enabled = self._safe_bool_checked("_ef_cli_cb", False)
-        
+
         updated = Connection(
             id=conn.id,
             name=name, host=host, user=user,
@@ -3580,13 +3829,9 @@ class MainWindow(FramelessMainWindow):
             port=self._safe_spin_value("_ef_port", 22),
             auth_method=self._safe_current_data("_ef_auth", "password"),
             password=self._safe_lineedit_text("_ef_pw"),
-            key_path=self._safe_lineedit_text("_ef_key"),
-            putty_key_path=putty_key_path,
-            drive_letter=self._safe_current_data("_ef_drive", "Z:"),
-            cli_access_enabled=cli_enabled,
-            cli_access_key=self._safe_lineedit_text("_ef_cli_key") if cli_enabled else None,
             groups=self._safe_lineedit_text("_ef_groups"),
             is_template=is_template,
+            **self._ef_collect_protocol_fields(),
         )
         self._mgr.update(updated)
         self._refresh_list()
@@ -3615,8 +3860,11 @@ class MainWindow(FramelessMainWindow):
                 return
             name = tpl_name
 
-        putty_key_path = self._safe_lineedit_text("_ef_putty_key")
-        cli_enabled = self._safe_bool_checked("_ef_cli_cb", False)
+        # Templates are stored without any credentials.
+        fields = self._ef_collect_protocol_fields()
+        if is_tpl:
+            fields["key_path"] = ""
+            fields["putty_key_path"] = ""
 
         new_conn = Connection(
             name=name, host=host, user=user,
@@ -3624,13 +3872,9 @@ class MainWindow(FramelessMainWindow):
             port=self._safe_spin_value("_ef_port", 22),
             auth_method=self._safe_current_data("_ef_auth", "password"),
             password="" if is_tpl else self._safe_lineedit_text("_ef_pw"),
-            key_path="" if is_tpl else self._safe_lineedit_text("_ef_key"),
-            putty_key_path="" if is_tpl else putty_key_path,
-            drive_letter=self._safe_current_data("_ef_drive", "Z:"),
-            cli_access_enabled=cli_enabled,
-            cli_access_key=self._safe_lineedit_text("_ef_cli_key") if cli_enabled else None,
             groups=self._safe_lineedit_text("_ef_groups"),
             is_template=is_tpl,
+            **fields,
         )
         self._mgr.add(new_conn)
         self._refresh_list()
@@ -3889,6 +4133,8 @@ class MainWindow(FramelessMainWindow):
 
         for conn_id, card in self._cards.items():
             conn = card.connection
+            if conn.is_ftp:
+                continue        # never mounted, nothing to poll
             letter_key = conn.drive_letter.upper().rstrip("\\")
             if not letter_key.endswith(":"):
                 letter_key += ":"
@@ -3971,12 +4217,32 @@ class MainWindow(FramelessMainWindow):
 
         return conn
 
+    def _reject_ftp_action(self, conn, message_key: str) -> bool:
+        """
+        Block SSH-only actions (mount, terminal) on FTP/FTPS connections.
+
+        Returns True when the action was rejected and the caller must stop.
+        """
+        if conn is None or not conn.is_ftp:
+            return False
+        proto = conn.protocol_label
+        self._err_popup(
+            tr("ftp.mount_unsupported.title", proto=proto),
+            tr(message_key, name=conn.name, proto=proto),
+        )
+        card = self._cards.get(conn.id)
+        if card:
+            card.hide_loading()
+        return True
+
     @pyqtSlot(str)
     def _on_mount(self, conn_id: str):
         if conn_id in self._workers:
             return
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
+            return
+        if self._reject_ftp_action(conn, "ftp.mount_unsupported"):
             return
         conn = self._prepare_auth(conn)
         if conn is None:
@@ -4117,6 +4383,8 @@ class MainWindow(FramelessMainWindow):
     @pyqtSlot(str)
     def _on_ssh_requested(self, conn_id: str):
         """Dispatcher: routes to integrated xterm panel or external SSH client."""
+        if self._reject_ftp_action(self._mgr.get_by_id(conn_id), "ftp.ssh_unsupported"):
+            return
         settings = self._mgr.get_settings()
         if getattr(settings, "terminal_client", "ssh") == "xterm":
             self._open_terminal_panel(conn_id)
@@ -4127,6 +4395,8 @@ class MainWindow(FramelessMainWindow):
     def _on_ssh_terminal(self, conn_id: str):
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
+            return
+        if self._reject_ftp_action(conn, "ftp.ssh_unsupported"):
             return
         conn = self._prepare_auth(conn)
         if conn is None:
@@ -4140,6 +4410,8 @@ class MainWindow(FramelessMainWindow):
             self._err_popup("SSH-Terminal", error)
 
     def _on_ssh_terminal_with_backend(self, conn_id: str, backend: str):
+        if self._reject_ftp_action(self._mgr.get_by_id(conn_id), "ftp.ssh_unsupported"):
+            return
         if backend == "xterm":
             self._open_terminal_panel(conn_id)
             return
@@ -4165,14 +4437,19 @@ class MainWindow(FramelessMainWindow):
             self._err_popup("SSH-Terminal", error)
 
     def _open_sftp_browser(self, conn_id: str, mounted_only: bool = True):
-        """Open the SFTP file browser. In mounted_only mode requires active mount."""
+        """
+        Open the file browser (SFTP, FTP or FTPS depending on the connection).
+
+        In mounted_only mode an SFTP connection must be mounted; FTP hosts are
+        never mounted, so the requirement does not apply to them.
+        """
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return
         card = self._cards.get(conn_id)
         if not card:
             return
-        if mounted_only and not card.is_mounted:
+        if mounted_only and not conn.is_ftp and not card.is_mounted:
             return
 
         # Raise existing browser window if already open for this connection
@@ -4197,11 +4474,50 @@ class MainWindow(FramelessMainWindow):
         browser.destroyed.connect(lambda: self._sftp_browsers.pop(conn_id, None))
         self._sftp_browsers[conn_id] = browser
         browser.show()
-        self._set_status(tr("status.sftp_browser_opened", name=conn.name))
+        if conn.is_ftp:
+            self._set_status(tr(
+                "status.ftp_browser_opened", name=conn.name, proto=conn.protocol_label
+            ))
+        else:
+            self._set_status(tr("status.sftp_browser_opened", name=conn.name))
 
     def _on_open_mounted_path(self, conn_id: str):
-        """Open the SFTP file browser for the mounted connection."""
+        """Open the file browser for the mounted (SFTP) or FTP connection."""
         self._open_sftp_browser(conn_id, mounted_only=True)
+
+    def _open_ftp_in_explorer(self, conn_id: str):
+        """
+        Hand a plain-FTP connection to the Windows Explorer FTP client.
+
+        Only unencrypted FTP is supported by Explorer — FTPS has to stay in the
+        built-in browser. The password is deliberately left out of the URL
+        (Explorer asks for it) so it never lands in a shell command line or in
+        Explorer's history.
+        """
+        conn = self._mgr.get_by_id(conn_id)
+        if not conn or not conn.is_ftp:
+            return
+        if conn.protocol != PROTOCOL_FTP:
+            self._err_popup(
+                tr("ftp.mount_unsupported.title", proto=conn.protocol_label),
+                tr("ftp.explorer_tls_unsupported"),
+            )
+            return
+
+        user = quote(conn.user or "anonymous", safe="")
+        port = f":{conn.port}" if conn.port and conn.port != 21 else ""
+        path = quote((conn.remote_path or "/").replace("\\", "/"), safe="/")
+        url = f"ftp://{user}@{conn.host}{port}{path}"
+        try:
+            subprocess.Popen(["explorer.exe", url])
+            self._set_status(tr(
+                "status.ftp_browser_opened", name=conn.name, proto=conn.protocol_label
+            ))
+        except OSError as e:
+            self._err_popup(
+                tr("ftp.mount_unsupported.title", proto=conn.protocol_label),
+                tr("ftp.explorer_failed", url=url, err=str(e)),
+            )
 
     @pyqtSlot(str, object)
     def _on_card_context_menu(self, conn_id: str, global_pos):
@@ -4214,22 +4530,40 @@ class MainWindow(FramelessMainWindow):
 
         menu = QMenu(self)
         is_mounted = bool(card.is_mounted)
+        is_ftp = bool(conn.is_ftp)
 
-        act_mount = menu.addAction(tr("card.menu.unmount") if is_mounted else tr("card.menu.mount"))
-        menu.addSeparator()
-
+        act_mount = None
         act_explorer = None
-        if is_mounted:
-            act_explorer = menu.addAction(tr("card.menu.open_explorer"))
-        act_sftp = menu.addAction(tr("card.menu.sftp_browser"))
-        menu.addSeparator()
+        act_explorer_ftp = None
+        act_connect_ssh = None
+        act_ssh_openssh = act_ssh_putty = act_ssh_xterm = None
 
-        act_connect_ssh = menu.addAction(tr("card.menu.connect_ssh"))
-        ssh_menu = menu.addMenu(tr("card.menu.ssh_open_with"))
-        act_ssh_openssh = ssh_menu.addAction(tr("card.menu.ssh_openssh"))
-        act_ssh_putty = ssh_menu.addAction(tr("card.menu.ssh_putty"))
-        act_ssh_xterm = ssh_menu.addAction(tr("card.menu.ssh_xterm"))
-        menu.addSeparator()
+        if is_ftp:
+            # No SSHFS mount and no SSH terminal for FTP/FTPS — the browser is
+            # the main action, with Windows Explorer as the plain-FTP extra.
+            act_sftp = menu.addAction(
+                tr("card.menu.ftp_browser", proto=conn.protocol_label)
+            )
+            if conn.protocol == PROTOCOL_FTP:
+                act_explorer_ftp = menu.addAction(tr("card.menu.open_explorer_ftp"))
+            menu.addSeparator()
+        else:
+            act_mount = menu.addAction(
+                tr("card.menu.unmount") if is_mounted else tr("card.menu.mount")
+            )
+            menu.addSeparator()
+
+            if is_mounted:
+                act_explorer = menu.addAction(tr("card.menu.open_explorer"))
+            act_sftp = menu.addAction(tr("card.menu.sftp_browser"))
+            menu.addSeparator()
+
+            act_connect_ssh = menu.addAction(tr("card.menu.connect_ssh"))
+            ssh_menu = menu.addMenu(tr("card.menu.ssh_open_with"))
+            act_ssh_openssh = ssh_menu.addAction(tr("card.menu.ssh_openssh"))
+            act_ssh_putty = ssh_menu.addAction(tr("card.menu.ssh_putty"))
+            act_ssh_xterm = ssh_menu.addAction(tr("card.menu.ssh_xterm"))
+            menu.addSeparator()
 
         act_edit = menu.addAction(tr("card.menu.edit"))
         act_delete = menu.addAction(tr("card.menu.delete"))
@@ -4238,7 +4572,9 @@ class MainWindow(FramelessMainWindow):
         if chosen is None:
             return
 
-        if chosen == act_mount:
+        if act_explorer_ftp is not None and chosen == act_explorer_ftp:
+            self._open_ftp_in_explorer(conn_id)
+        elif act_mount is not None and chosen == act_mount:
             if is_mounted:
                 self._on_unmount(conn_id)
             else:
@@ -4247,13 +4583,13 @@ class MainWindow(FramelessMainWindow):
             self._on_open_explorer(conn_id)
         elif chosen == act_sftp:
             self._open_sftp_browser(conn_id, mounted_only=False)
-        elif chosen == act_connect_ssh:
+        elif act_connect_ssh is not None and chosen == act_connect_ssh:
             self._on_ssh_requested(conn_id)
-        elif chosen == act_ssh_openssh:
+        elif act_ssh_openssh is not None and chosen == act_ssh_openssh:
             self._on_ssh_terminal_with_backend(conn_id, "ssh")
-        elif chosen == act_ssh_putty:
+        elif act_ssh_putty is not None and chosen == act_ssh_putty:
             self._on_ssh_terminal_with_backend(conn_id, "putty")
-        elif chosen == act_ssh_xterm:
+        elif act_ssh_xterm is not None and chosen == act_ssh_xterm:
             self._on_ssh_terminal_with_backend(conn_id, "xterm")
         elif chosen == act_edit:
             self._open_edit_panel(conn_id)
@@ -4690,6 +5026,8 @@ class MainWindow(FramelessMainWindow):
 
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
+            return
+        if self._reject_ftp_action(conn, "ftp.ssh_unsupported"):
             return
 
         # If already showing terminal for same conn → just bring to front

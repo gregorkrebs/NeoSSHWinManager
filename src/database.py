@@ -125,6 +125,10 @@ def init_db() -> None:
                 key_path      TEXT,
                 putty_key_path TEXT,  -- .ppk format key for PuTTY/plink
                 drive_letter TEXT NOT NULL DEFAULT 'Z:',
+                protocol     TEXT NOT NULL DEFAULT 'sftp',  -- 'sftp' | 'ftp' | 'ftps'
+                ftp_implicit_tls INTEGER NOT NULL DEFAULT 0, -- FTPS implizit (Port 990)
+                ftp_passive      INTEGER NOT NULL DEFAULT 1,
+                ftp_verify_cert  INTEGER NOT NULL DEFAULT 1,
                 sort_order   INTEGER NOT NULL DEFAULT 0,
                 cli_access_enabled INTEGER NOT NULL DEFAULT 0,
                 cli_access_key     TEXT UNIQUE,  -- CLI-Access-Key AES verschlüsselt (hex)
@@ -147,7 +151,7 @@ def init_db() -> None:
                 putty_path               TEXT    DEFAULT '',
                 auto_login               INTEGER DEFAULT 0,  -- Windows Auto-Login
                 auto_reconnect           INTEGER DEFAULT 1,  -- Beim Start automatisch reconnecten
-                language                 TEXT    DEFAULT 'en',  -- UI Sprache (en, de)
+                language                 TEXT    DEFAULT 'en',  -- UI Sprache (en, de, es, ru, nl, ar)
                 theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, light)
                 security_level           INTEGER DEFAULT 0,  -- 0=Strict, 1=Key-Auth, 2=Insecure-PW
                 allow_passwordless_key_auth INTEGER DEFAULT 0,
@@ -176,30 +180,63 @@ def init_db() -> None:
             );
         """)
 
-        # Migration: Add CLI columns if they don't exist
+        # Migration: Add columns that were introduced after the first release.
+        # Each ALTER runs on its own: SQLite rejects a few of them on very old
+        # databases (e.g. ADD COLUMN ... UNIQUE), and a single failure must not
+        # skip every migration that follows it.
+        def _add_column(table: str, column: str, ddl: str, existing: list) -> None:
+            if column in existing:
+                return
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                return
+            except Exception as exc:
+                _db_logger.warning(
+                    f"Migration: Spalte {table}.{column} konnte nicht angelegt werden: {exc}"
+                )
+            if "UNIQUE" not in ddl.upper():
+                return
+            # SQLite cannot add a UNIQUE column to an existing table. The column
+            # itself matters more than the constraint (the values are random
+            # 64-byte keys), so retry without it instead of leaving it missing.
+            try:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} "
+                    f"{ddl.upper().replace('UNIQUE', '').strip()}"
+                )
+                _db_logger.info(
+                    f"Migration: {table}.{column} ohne UNIQUE-Constraint angelegt"
+                )
+            except Exception as exc:
+                _db_logger.warning(
+                    f"Migration: Spalte {table}.{column} endgültig fehlgeschlagen: {exc}"
+                )
+
         try:
             cursor = conn.execute("PRAGMA table_info(connections)")
             cols = [row[1] for row in cursor.fetchall()]
-            if "cli_access_enabled" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN cli_access_enabled INTEGER NOT NULL DEFAULT 0")
-            if "cli_access_key" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN cli_access_key TEXT UNIQUE")
-            if "cli_access_key_iv" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN cli_access_key_iv TEXT")
-            if "putty_key_path" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN putty_key_path TEXT")
-            # CWE-312: Verschlüsselte Metadaten-Spalten
-            for col in ("host_enc", "host_iv", "ssh_user_enc", "ssh_user_iv",
-                        "name_enc", "name_iv", "remote_path_enc", "remote_path_iv"):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE connections ADD COLUMN {col} TEXT")
-            # Neue Spalten für Gruppen/Tags und Templates
-            if "groups" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN groups TEXT DEFAULT ''")
-            if "is_template" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN is_template INTEGER NOT NULL DEFAULT 0")
-            if "template_id" not in cols:
-                conn.execute("ALTER TABLE connections ADD COLUMN template_id TEXT")
+            migrations = [
+                ("cli_access_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                ("cli_access_key", "TEXT UNIQUE"),
+                ("cli_access_key_iv", "TEXT"),
+                ("putty_key_path", "TEXT"),
+                # CWE-312: Verschlüsselte Metadaten-Spalten
+                ("host_enc", "TEXT"), ("host_iv", "TEXT"),
+                ("ssh_user_enc", "TEXT"), ("ssh_user_iv", "TEXT"),
+                ("name_enc", "TEXT"), ("name_iv", "TEXT"),
+                ("remote_path_enc", "TEXT"), ("remote_path_iv", "TEXT"),
+                # Gruppen/Tags und Templates
+                ("groups", "TEXT DEFAULT ''"),
+                ("is_template", "INTEGER NOT NULL DEFAULT 0"),
+                ("template_id", "TEXT"),
+                # FTP/FTPS-Unterstützung
+                ("protocol", "TEXT NOT NULL DEFAULT 'sftp'"),
+                ("ftp_implicit_tls", "INTEGER NOT NULL DEFAULT 0"),
+                ("ftp_passive", "INTEGER NOT NULL DEFAULT 1"),
+                ("ftp_verify_cert", "INTEGER NOT NULL DEFAULT 1"),
+            ]
+            for column, ddl in migrations:
+                _add_column("connections", column, ddl, cols)
         except Exception:
             pass
 

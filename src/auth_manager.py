@@ -637,6 +637,24 @@ class UserConnectionManager:
         except (KeyError, IndexError):
             template_id = None
 
+        # FTP-Felder: Datenbanken vor der FTP-Unterstützung kennen sie nicht
+        try:
+            protocol = row["protocol"] or "sftp"
+        except (KeyError, IndexError):
+            protocol = "sftp"
+        try:
+            ftp_implicit_tls = bool(row["ftp_implicit_tls"])
+        except (KeyError, IndexError):
+            ftp_implicit_tls = False
+        try:
+            ftp_passive = bool(row["ftp_passive"])
+        except (KeyError, IndexError):
+            ftp_passive = True
+        try:
+            ftp_verify_cert = bool(row["ftp_verify_cert"])
+        except (KeyError, IndexError):
+            ftp_verify_cert = True
+
         return Connection(
             id=row["id"],
             name=name,
@@ -649,6 +667,10 @@ class UserConnectionManager:
             key_path=row["key_path"] or "",
             putty_key_path=row["putty_key_path"] or "",
             drive_letter=row["drive_letter"],
+            protocol=protocol,
+            ftp_implicit_tls=ftp_implicit_tls,
+            ftp_passive=ftp_passive,
+            ftp_verify_cert=ftp_verify_cert,
             cli_access_enabled=bool(row["cli_access_enabled"]),
             cli_access_key=cli_key,
             groups=groups,
@@ -729,14 +751,17 @@ class UserConnectionManager:
                 """INSERT INTO connections
                    (id, user_id, name, host, ssh_user, remote_path, port,
                     auth_method, pw_enc, pw_iv, key_path, putty_key_path, drive_letter,
+                    protocol, ftp_implicit_tls, ftp_passive, ftp_verify_cert,
                     sort_order, cli_access_enabled, cli_access_key, cli_access_key_iv,
                     name_enc, name_iv, host_enc, host_iv,
                     ssh_user_enc, ssh_user_iv, remote_path_enc, remote_path_iv,
                     groups, is_template, template_id)
-                   VALUES (?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     c.id, self._user.id, c.port, c.auth_method,
                     pw_enc, pw_iv, c.key_path, c.putty_key_path, c.drive_letter,
+                    c.protocol, int(c.ftp_implicit_tls), int(c.ftp_passive),
+                    int(c.ftp_verify_cert),
                     c.sort_order, int(c.cli_access_enabled), cli_key_enc, cli_key_iv,
                     name_enc, name_iv, host_enc, host_iv,
                     user_enc, user_iv, path_enc, path_iv,
@@ -759,6 +784,7 @@ class UserConnectionManager:
                 """UPDATE connections SET
                    name='', host='', ssh_user='', remote_path='', port=?,
                    auth_method=?, pw_enc=?, pw_iv=?, key_path=?, putty_key_path=?, drive_letter=?,
+                   protocol=?, ftp_implicit_tls=?, ftp_passive=?, ftp_verify_cert=?,
                    cli_access_enabled=?, cli_access_key=?, cli_access_key_iv=?,
                    name_enc=?, name_iv=?, host_enc=?, host_iv=?,
                    ssh_user_enc=?, ssh_user_iv=?, remote_path_enc=?, remote_path_iv=?,
@@ -766,6 +792,8 @@ class UserConnectionManager:
                    WHERE id=? AND user_id=?""",
                 (c.port, c.auth_method, pw_enc, pw_iv,
                  c.key_path, c.putty_key_path, c.drive_letter,
+                 c.protocol, int(c.ftp_implicit_tls), int(c.ftp_passive),
+                 int(c.ftp_verify_cert),
                  int(c.cli_access_enabled), cli_key_enc, cli_key_iv,
                  name_enc, name_iv, host_enc, host_iv,
                  user_enc, user_iv, path_enc, path_iv,

@@ -1,7 +1,7 @@
 """
 i18n.py – Simple translation system for NEO SSH-Win Manager.
 
-Supported languages: English (default) + German.
+Supported languages: English (default), German, Spanish, Russian, Dutch, Arabic.
 Language is stored per user in the app_settings table.
 Translations loaded from src/translations/<lang>.json.
 
@@ -17,7 +17,20 @@ import sys
 from typing import Dict
 
 _DEFAULT_LANG = "en"
-_SUPPORTED = ("en", "de")
+_SUPPORTED = ("en", "de", "es", "ru", "nl", "ar")
+# Languages written right-to-left – the UI mirrors its layout for these.
+_RTL = ("ar",)
+
+# Extra spellings accepted from older settings or locale-like values,
+# mapped onto the supported codes above.
+_ALIASES = {
+    "deutsch": "de", "german": "de",
+    "english": "en",
+    "espanol": "es", "español": "es", "spanish": "es", "cas": "es",
+    "russian": "ru", "русский": "ru", "russkij": "ru",
+    "nederlands": "nl", "dutch": "nl", "vls": "nl", "be-nl": "nl",
+    "arabic": "ar", "عربي": "ar", "العربية": "ar",
+}
 
 _current_lang: str = _DEFAULT_LANG
 _cache: Dict[str, Dict[str, str]] = {}
@@ -28,12 +41,15 @@ def _normalize_lang(lang: str | None) -> str:
     if not lang:
         return _DEFAULT_LANG
     value = str(lang).strip().lower().replace("_", "-")
-    # Accept common variants from older settings or locale-like values.
-    if value in ("de", "de-de", "deutsch", "german") or value.startswith("de-"):
-        return "de"
-    if value in ("en", "en-us", "en-gb", "english") or value.startswith("en-"):
-        return "en"
-    return _DEFAULT_LANG
+    if value in _SUPPORTED:
+        return value
+    if value in _ALIASES:
+        return _ALIASES[value]
+    # Locale-like values ("de-DE", "es-419", "ar-EG", …) fall back to their base code.
+    base = value.split("-", 1)[0]
+    if base in _SUPPORTED:
+        return base
+    return _ALIASES.get(base, _DEFAULT_LANG)
 
 
 def _translations_root() -> str:
@@ -70,6 +86,11 @@ def current_language() -> str:
 
 def available_languages() -> tuple:
     return _SUPPORTED
+
+
+def is_rtl(lang: str | None = None) -> bool:
+    """True if the given (or current) language is written right-to-left."""
+    return (_normalize_lang(lang) if lang else _current_lang) in _RTL
 
 
 def tr(key: str, **kwargs) -> str:

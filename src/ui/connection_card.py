@@ -1,5 +1,9 @@
 """
-connection_card.py – Widget representing a single SSH connection in the list.
+connection_card.py – Widget representing a single connection in the list.
+
+SFTP connections show the mount/unmount toggle and the drive letter. FTP and
+FTPS connections cannot be mounted (SSHFS speaks SSH only), so their card shows
+the protocol badge and the toggle turns into a "open file browser" button.
 """
 
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
@@ -29,6 +33,7 @@ class ConnectionCard(QFrame):
         self._theme = theme
         self._debug_edit = debug_edit
         self._loading = False
+        self._is_ftp = bool(getattr(conn, "is_ftp", False))
         self.setObjectName("connectionCard")
         # Increase height when groups are present
         self.setFixedHeight(68)
@@ -87,7 +92,7 @@ class ConnectionCard(QFrame):
         info_wrapper.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(info_wrapper, stretch=1)
 
-        self._drive_badge = QLabel(self._conn.drive_letter)
+        self._drive_badge = QLabel(self._badge_text())
         self._drive_badge.setObjectName("driveBadge")
         self._drive_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._drive_badge.setFixedSize(QSize(42, 30))
@@ -109,6 +114,8 @@ class ConnectionCard(QFrame):
         self._ssh_btn.setToolTip(tr("card.tooltip.ssh"))
         self._ssh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ssh_btn.clicked.connect(lambda: self.ssh_requested.emit(self._conn.id))
+        # No SSH terminal for FTP/FTPS hosts
+        self._ssh_btn.setVisible(not self._is_ftp)
         layout.addWidget(self._ssh_btn)
 
         self._mount_btn = QPushButton()
@@ -119,7 +126,18 @@ class ConnectionCard(QFrame):
         self._mount_btn.clicked.connect(self._on_toggle)
         layout.addWidget(self._mount_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
+    def _badge_text(self) -> str:
+        """Drive letter for SFTP, protocol name for FTP/FTPS (never mounted)."""
+        return self._conn.protocol_label if self._is_ftp else self._conn.drive_letter
+
+    def _browser_tooltip(self) -> str:
+        return tr("card.tooltip.ftp_browser", proto=self._conn.protocol_label)
+
     def update_mount_state(self, mounted: bool):
+        if self._is_ftp:
+            self._update_ftp_state()
+            return
+
         self._mounted = mounted
 
         self.setProperty("mounted", mounted)
@@ -177,10 +195,42 @@ class ConnectionCard(QFrame):
 
         self.update()
 
+    def _update_ftp_state(self):
+        """Card state for FTP/FTPS: no mount toggle, the button opens the browser."""
+        self._mounted = False
+        self.setProperty("mounted", False)
+        self._cloud_lbl.setPixmap(svg_pixmap("cloud", "#6a7a8a", 32))
+        self._cloud_lbl.setToolTip(self._browser_tooltip())
+        self._drive_badge.setToolTip(self._browser_tooltip())
+        self._drive_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        if self._theme == "light":
+            _edit_active = "#4a5a6a"
+        else:
+            _edit_active = "#aab4c4"
+        self._edit_btn.setIcon(svg_icon("edit", _edit_active, 15))
+        self._edit_btn.setToolTip(tr("card.tooltip.edit"))
+        self._edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edit_btn.setStyleSheet(
+            "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }"
+        )
+
+        if self._loading:
+            return
+
+        self._mount_btn.setIcon(svg_icon("folder", "#aab4c4", 16))
+        self._mount_btn.setText("")
+        self._mount_btn.setToolTip(self._browser_tooltip())
+
+        for w in (self, self._cloud_lbl, self._drive_badge, self._mount_btn):
+            w.style().unpolish(w)
+            w.style().polish(w)
+        self.update()
+
     def _update_detail_text(self):
         """Set detail label with elided remote_path if it would be very long."""
-        drive_text = f"{self._conn.drive_letter}  •  "
-        detail = f"{drive_text}{self._conn.user}@{self._conn.host}:{self._conn.port}"
+        prefix = self._conn.protocol_label if self._is_ftp else self._conn.drive_letter
+        detail = f"{prefix}  •  {self._conn.user}@{self._conn.host}:{self._conn.port}"
         self._detail_lbl.setText(detail)
         # Full text as tooltip so user can see the whole path
         self._detail_lbl.setToolTip(
@@ -222,9 +272,11 @@ class ConnectionCard(QFrame):
 
     def update_connection(self, conn: Connection):
         self._conn = conn
+        self._is_ftp = bool(getattr(conn, "is_ftp", False))
         self._name_lbl.setText(conn.name)
         self._update_detail_text()
-        self._drive_badge.setText(conn.drive_letter)
+        self._drive_badge.setText(self._badge_text())
+        self._ssh_btn.setVisible(not self._is_ftp)
 
     def set_info_active(self, active: bool):
         """Highlight card when the info panel is open for this card."""
@@ -246,7 +298,9 @@ class ConnectionCard(QFrame):
     def _on_cloud_clicked(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        if not self._mounted:
+        if self._is_ftp:
+            self.open_path_requested.emit(self._conn.id)
+        elif not self._mounted:
             self.show_loading(tr("card.loading.connect"))
             self.mount_requested.emit(self._conn.id)
         else:
@@ -255,11 +309,15 @@ class ConnectionCard(QFrame):
     def _on_drive_badge_clicked(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        if self._mounted:
+        if self._is_ftp:
+            self.open_path_requested.emit(self._conn.id)
+        elif self._mounted:
             self.open_explorer_requested.emit(self._conn.id)
 
     def _on_toggle(self):
-        if self._mounted:
+        if self._is_ftp:
+            self.open_path_requested.emit(self._conn.id)
+        elif self._mounted:
             self.show_loading(tr("card.loading.disconnect"))
             self.unmount_requested.emit(self._conn.id)
         else:
@@ -288,7 +346,7 @@ class ConnectionCard(QFrame):
         self._loading = False
         self.setProperty("loading", "false")
         self._edit_btn.setVisible(True)
-        self._ssh_btn.setVisible(True)
+        self._ssh_btn.setVisible(not self._is_ftp)
         self._mount_btn.setEnabled(True)
         self._mount_btn.setProperty("loading", "false")
         self._mount_btn.setText("")

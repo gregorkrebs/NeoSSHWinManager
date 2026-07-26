@@ -321,10 +321,14 @@ def main():
     # Apply user's preferred language
     try:
         from src.auth_manager import UserConnectionManager
-        from src.i18n import set_language
+        from src.i18n import set_language, is_rtl
         ucm = UserConnectionManager(Session.current())
         user_settings = ucm.get_settings()
         set_language(user_settings.language)
+        # Mirror the whole UI for right-to-left languages (Arabic).
+        app.setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
+        )
         app.setStyleSheet(get_stylesheet(user_settings.theme))
         
         # Telemetry Opt-In / Send
