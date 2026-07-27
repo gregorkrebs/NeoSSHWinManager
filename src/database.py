@@ -35,35 +35,53 @@ def _set_secure_permissions(path: Path) -> None:
     Set secure file permissions on the database file.
     - Unix/Linux/macOS: 600 (owner read/write only)
     - Windows: Restricted ACL (owner only)
+
+    Best-effort: setting the DACL needs WRITE_DAC, which the current token
+    only gets implicitly if it actually owns the file. Files/folders created
+    while running as the built-in Administrator account end up owned by the
+    BUILTIN\\Administrators *group* instead of the user, and once UAC Admin
+    Approval Mode is enabled for that account the normal (non-elevated) token
+    no longer carries that group, so WRITE_DAC is denied. That's an ownership
+    problem to fix once with an elevated `icacls /setowner`, not something to
+    crash app startup over — log and keep whatever permissions already exist.
     """
-    if sys.platform == 'win32':
-        sd = win32security.GetFileSecurity(
-            str(path), win32security.DACL_SECURITY_INFORMATION
-        )
-        dacl = win32security.ACL()
-        username = os.environ.get('USERNAME') or os.environ.get('USER')
-        if not username:
-            raise RuntimeError(
-                "ACL-Setzung fehlgeschlagen: Kein Benutzername in der Umgebung (USERNAME/USER)."
+    try:
+        if sys.platform == 'win32':
+            sd = win32security.GetFileSecurity(
+                str(path), win32security.DACL_SECURITY_INFORMATION
             )
-        user_sid = win32security.LookupAccountName(None, username)[0]
-        dacl.AddAccessAllowedAce(
-            win32security.ACL_REVISION,
-            con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE,
-            user_sid
-        )
-        sd.SetSecurityDescriptorDacl(1, dacl, 0)
-        win32security.SetFileSecurity(
-            str(path), win32security.DACL_SECURITY_INFORMATION, sd
-        )
-        _db_logger.debug(f"ACL gesetzt (nur Eigentümer): {path}")
-    else:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+            dacl = win32security.ACL()
+            username = os.environ.get('USERNAME') or os.environ.get('USER')
+            if not username:
+                raise RuntimeError(
+                    "ACL-Setzung fehlgeschlagen: Kein Benutzername in der Umgebung (USERNAME/USER)."
+                )
+            user_sid = win32security.LookupAccountName(None, username)[0]
+            dacl.AddAccessAllowedAce(
+                win32security.ACL_REVISION,
+                con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE,
+                user_sid
+            )
+            sd.SetSecurityDescriptorDacl(1, dacl, 0)
+            win32security.SetFileSecurity(
+                str(path), win32security.DACL_SECURITY_INFORMATION, sd
+            )
+            _db_logger.debug(f"ACL gesetzt (nur Eigentümer): {path}")
+        else:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except Exception as e:
+        _db_logger.warning(f"Konnte sichere Berechtigungen nicht setzen für {path}: {e}")
+
+
+def data_dir() -> Path:
+    """App data directory (%APPDATA%\\SSHWinManager). Pure path computation,
+    no permission side effects — safe to call before any ownership repair."""
+    appdata = os.environ.get("APPDATA", str(Path.home()))
+    return Path(appdata) / "SSHWinManager"
 
 
 def get_db_path() -> Path:
-    appdata = os.environ.get("APPDATA", str(Path.home()))
-    db_dir = Path(appdata) / "SSHWinManager"
+    db_dir = data_dir()
     db_dir.mkdir(parents=True, exist_ok=True)
     db_path = db_dir / "data.db"
 

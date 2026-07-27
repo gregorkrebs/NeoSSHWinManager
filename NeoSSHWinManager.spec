@@ -10,6 +10,11 @@ a = Analysis(
         'PyQt6.sip',
         'win32api', 'win32con', 'winreg',
         'keyring', 'keyring.backends.Windows',
+        # src/permission_repair.py's UAC relaunch (request_elevated_repair) —
+        # PyInstaller's static analysis has a history of missing win32com's
+        # compiled COM shell extension unless hinted explicitly.
+        'win32com.shell', 'win32com.shell.shell', 'win32com.shell.shellcon',
+        'win32event', 'win32process',
     ],
     hookspath=[],
     hooksconfig={},
