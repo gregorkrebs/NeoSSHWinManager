@@ -20,6 +20,9 @@ build/
 dist/
 *.manifest
 
+# Inno Setup installer output
+dist_installer/
+
 # IDE / editor
 .vscode/
 .idea/

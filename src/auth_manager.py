@@ -249,11 +249,29 @@ class AuthManager:
                 (user_id, username.strip(), pw_hash, salt,
                  enc_key_enc, enc_key_iv, 'argon2', int(is_admin))
             )
-            # Default-Einstellungen anlegen
-            conn.execute(
-                "INSERT INTO app_settings (user_id) VALUES (?)",
-                (user_id,)
-            )
+            # Default-Einstellungen anlegen. Falls der Windows-Installer
+            # Sprache/Theme/Autostart voreingestellt hat (install_prefs.json),
+            # übernehmen wir diese für den neuen Benutzer statt der
+            # Spalten-Defaults ('en' / 'dark' / 0).
+            from src.config import read_install_prefs
+            prefs = read_install_prefs()
+            if prefs:
+                conn.execute(
+                    """INSERT INTO app_settings
+                       (user_id, language, theme, start_with_windows)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        user_id,
+                        prefs.get("language", "en"),
+                        prefs.get("theme", "dark"),
+                        int(bool(prefs.get("start_with_windows", False))),
+                    )
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO app_settings (user_id) VALUES (?)",
+                    (user_id,)
+                )
 
         user = AppUser(
             id=user_id,

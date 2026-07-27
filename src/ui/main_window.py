@@ -37,7 +37,7 @@ from src.ui.connection_card import ConnectionCard
 from src.ui.system_tray import SystemTray
 from src.ui.debug_window import DebugWindow
 from src.app_logger import logger
-from src.ui.worker import MountWorker, UnmountWorker
+from src.ui.worker import MountWorker, UnmountWorker, TerminalConnectWorker
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
@@ -236,6 +236,9 @@ class MainWindow(FramelessMainWindow):
         self._cards: dict[str, ConnectionCard] = {}
         self._selected_id: str | None = None
         self._workers: dict[str, QThread] = {}
+        self._terminal_connect_workers: dict[str, TerminalConnectWorker] = {}
+        self._terminal_pending_conn: dict[str, object] = {}
+        self._terminal_connecting: set[str] = set()  # conn_ids with a connect in flight
         self._sftp_browsers: dict[str, object] = {}
         self._panel_mode: str = _PANEL_NONE
         self._panel_conn_id: str | None = None   # which connection the panel belongs to
@@ -5083,13 +5086,23 @@ class MainWindow(FramelessMainWindow):
         self._ensure_panel_sized()
 
     def _create_terminal_session(self, conn_id: str) -> bool:
-        """Create a new SSH session for conn_id and add a tab. Returns True on success."""
+        """
+        Start a new SSH session for conn_id in the background and add its tab
+        once connected. The actual SSH handshake (bridge_server.create_session_token)
+        runs in a TerminalConnectWorker thread — paramiko's connect() only bounds the
+        TCP/banner phase with its `timeout` argument, so a slow or unresponsive auth
+        phase (default auth_timeout=30s) used to freeze the whole window when this
+        ran directly on the Qt main thread.
+        """
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return False
 
         if self._bridge_server is None:
             logger.error("Terminal bridge server not running")
+            return False
+
+        if conn_id in self._terminal_connecting:
             return False
 
         conn_auth = self._prepare_auth(conn)
@@ -5100,10 +5113,32 @@ class MainWindow(FramelessMainWindow):
         self._terminal_session_counter[conn_id] = idx
         session_key = f"{conn_id}#{idx}"
 
-        token = self._bridge_server.create_session_token(session_key, conn_auth)
+        self._start_terminal_connect(session_key, conn_auth)
+        return True
+
+    def _start_terminal_connect(self, session_key: str, conn_auth) -> None:
+        conn_id = session_key.rsplit("#", 1)[0]
+        self._terminal_connecting.add(conn_id)
+        self._set_status(tr("terminal.connecting"))
+        self._terminal_pending_conn[session_key] = conn_auth
+        worker = TerminalConnectWorker(self._bridge_server, session_key, conn_auth)
+        worker.finished.connect(self._on_terminal_connected)
+        self._terminal_connect_workers[session_key] = worker
+        worker.start()
+
+    def _on_terminal_connected(self, session_key: str, token: object):
+        """TerminalConnectWorker finished: build the tab if the SSH session came up."""
+        conn_id = session_key.rsplit("#", 1)[0]
+        self._terminal_connecting.discard(conn_id)
+
+        worker = self._terminal_connect_workers.pop(session_key, None)
+        if worker:
+            worker.deleteLater()
+        conn_auth = self._terminal_pending_conn.pop(session_key, None)
+
         if token is None:
             self._err_popup(tr("terminal.connecting"), tr("terminal.error_connect"))
-            return False
+            return
 
         theme = self._mgr.get_settings().theme or "dark"
         from src.terminal.terminal_panel import TerminalPanel
@@ -5120,7 +5155,6 @@ class MainWindow(FramelessMainWindow):
         self._rebuild_tab_bar(conn_id)
         self._switch_terminal_tab(conn_id, session_key)
         self._update_card_terminal_indicator(conn_id)
-        return True
 
     def _rebuild_tab_bar(self, conn_id: str):
         """Rebuild the tab bar for the given conn_id."""
@@ -5241,6 +5275,9 @@ class MainWindow(FramelessMainWindow):
         if session_key not in tabs:
             return
 
+        if conn_id in self._terminal_connecting:
+            return
+
         # Destroy old session
         self._teardown_session_key(session_key)
         tabs.remove(session_key)
@@ -5260,23 +5297,7 @@ class MainWindow(FramelessMainWindow):
         self._terminal_session_counter[conn_id] = idx
         new_key = f"{conn_id}#{idx}"
 
-        token = self._bridge_server.create_session_token(new_key, conn_auth)
-        if token is None:
-            return
-        theme = self._mgr.get_settings().theme or "dark"
-        from src.terminal.terminal_panel import TerminalPanel
-        panel = TerminalPanel(self._bridge_server, new_key, conn_auth, theme, self)
-        panel.reconnect_requested.connect(lambda sk: self._on_terminal_reconnect(sk))
-        self._terminal_panels[new_key] = panel
-        self._terminal_stack.addWidget(panel)
-        panel.load_session(token)
-
-        tabs.append(new_key)
-        self._terminal_conn_tabs[conn_id] = tabs
-        self._terminal_active_tab[conn_id] = new_key
-        self._rebuild_tab_bar(conn_id)
-        self._switch_terminal_tab(conn_id, new_key)
-        self._update_card_terminal_indicator(conn_id)
+        self._start_terminal_connect(new_key, conn_auth)
 
     def _update_card_terminal_indicator(self, conn_id: str):
         """Set SSH button accent color on card when active sessions exist for conn_id."""

@@ -134,6 +134,25 @@ def get_config_path() -> Path:
     return get_config_dir() / "config.json"
 
 
+def read_install_prefs() -> dict:
+    """
+    Liest die einmaligen Voreinstellungen aus dem Windows-Installer
+    (Sprache, Theme, Autostart – vom Nutzer im Setup-Wizard gewählt).
+    Wird nur beim allerersten Benutzer-Register verwendet; danach ist die
+    Datenbank die Quelle der Wahrheit. Fehlt die Datei oder ist sie
+    unlesbar, wird stillschweigend mit {} weitergemacht (Default-Werte).
+    """
+    prefs_path = get_config_dir() / "install_prefs.json"
+    if not prefs_path.exists():
+        return {}
+    try:
+        with prefs_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def save_config(connections: List[Connection], settings: AppSettings) -> None:
     payload = {
         "connections": [
