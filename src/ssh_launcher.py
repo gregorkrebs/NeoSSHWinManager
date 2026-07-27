@@ -191,7 +191,18 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
 
     client = paramiko.SSHClient()
     # SECURITY FIX: Use RejectPolicy instead of AutoAddPolicy to prevent MITM attacks
-    # Host keys must be manually verified and added to known_hosts
+    # Host keys must be manually verified and added to known_hosts.
+    #
+    # BUGFIX: RejectPolicy only works against whatever HostKeys paramiko already
+    # has loaded in memory — client.get_host_keys() starts empty, so without
+    # load_host_keys() below every single connection was rejected regardless of
+    # what's actually trusted on disk (silently, since the resulting error only
+    # ever reached ssh_launcher's own CONOUT$ write, never surfaced anywhere).
+    known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+    try:
+        client.load_host_keys(known_hosts_path)
+    except Exception:
+        pass
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
     try:

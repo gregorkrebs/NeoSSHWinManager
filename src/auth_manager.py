@@ -7,6 +7,7 @@
 #   - Admin-Benutzer können andere Benutzer verwalten
 #   - SSH-Passwörter werden mit dem benutzerspezifischen enc_key ver-/entschlüsselt
 
+import hashlib
 import uuid
 import sqlite3
 import threading
@@ -546,12 +547,15 @@ class UserConnectionManager:
 
     def migrate_cli_keys(self) -> None:
         """
-        Migration: Verschlüsselt alle plaintext CLI-Keys beim ersten Login nach dem Update.
-        Idempotent — kann beliebig oft aufgerufen werden.
+        Migration: verschlüsselt alte Klartext-CLI-Keys und befüllt für alle
+        eigenen Verbindungen den deterministischen Lookup-Hash
+        (cli_access_key_hash — siehe _hash_cli_key/get_by_cli_key für den
+        Grund: der verschlüsselte Wert selbst ist wegen zufälliger AES-GCM-IVs
+        nicht per "=" vergleichbar). Idempotent — kann beliebig oft aufgerufen werden.
         """
         try:
             with get_connection() as conn:
-                rows = conn.execute(
+                plaintext_rows = conn.execute(
                     """SELECT id, cli_access_key FROM connections
                        WHERE user_id = ?
                        AND cli_access_key IS NOT NULL
@@ -560,21 +564,57 @@ class UserConnectionManager:
                     (self._user.id,)
                 ).fetchall()
 
-            if not rows:
-                return
-
-            for row in rows:
+            for row in plaintext_rows:
                 plaintext_key = row["cli_access_key"]
                 if plaintext_key:
                     cli_key_enc, cli_key_iv = self._encrypt_pw(plaintext_key)
+                    cli_key_hash = self._hash_cli_key(plaintext_key)
                     with get_connection() as db:
                         db.execute(
-                            """UPDATE connections SET cli_access_key = ?, cli_access_key_iv = ?
-                               WHERE id = ? AND user_id = ?""",
-                            (cli_key_enc, cli_key_iv, row["id"], self._user.id)
+                            """UPDATE connections SET cli_access_key = ?, cli_access_key_iv = ?,
+                               cli_access_key_hash = ? WHERE id = ? AND user_id = ?""",
+                            (cli_key_enc, cli_key_iv, cli_key_hash, row["id"], self._user.id)
                         )
 
-            logger.info(f"CLI-Key Migration abgeschlossen für Benutzer {self._user.username}: {len(rows)} Keys verschlüsselt.")
+            if plaintext_rows:
+                logger.info(
+                    f"CLI-Key Migration (Klartext→verschlüsselt) abgeschlossen für "
+                    f"Benutzer {self._user.username}: {len(plaintext_rows)} Keys."
+                )
+
+            # Zweiter Schritt: bereits verschlüsselte Keys, denen (z.B. vor
+            # diesem Fix angelegt) noch der Lookup-Hash fehlt, nachträglich
+            # entschlüsseln und hashen.
+            with get_connection() as conn:
+                unhashed_rows = conn.execute(
+                    """SELECT id, cli_access_key, cli_access_key_iv FROM connections
+                       WHERE user_id = ?
+                       AND cli_access_key IS NOT NULL AND cli_access_key != ''
+                       AND cli_access_key_iv IS NOT NULL AND cli_access_key_iv != ''
+                       AND (cli_access_key_hash IS NULL OR cli_access_key_hash = '')""",
+                    (self._user.id,)
+                ).fetchall()
+
+            backfilled = 0
+            for row in unhashed_rows:
+                try:
+                    plaintext_key = decrypt(row["cli_access_key"], row["cli_access_key_iv"], self._user.enc_key)
+                except Exception as e:
+                    logger.error(f"CLI-Key Hash-Backfill: Entschlüsselung fehlgeschlagen für {row['id']}: {e}")
+                    continue
+                cli_key_hash = self._hash_cli_key(plaintext_key)
+                with get_connection() as db:
+                    db.execute(
+                        "UPDATE connections SET cli_access_key_hash = ? WHERE id = ? AND user_id = ?",
+                        (cli_key_hash, row["id"], self._user.id)
+                    )
+                backfilled += 1
+
+            if backfilled:
+                logger.info(
+                    f"CLI-Key Hash-Backfill abgeschlossen für Benutzer "
+                    f"{self._user.username}: {backfilled} Keys."
+                )
         except Exception as e:
             logger.error(f"CLI-Key Migration fehlgeschlagen: {e}")
 
@@ -582,6 +622,21 @@ class UserConnectionManager:
         if not password:
             return "", ""
         return encrypt(password, self._user.enc_key)
+
+    @staticmethod
+    def _hash_cli_key(cli_key: str) -> Optional[str]:
+        """Deterministic lookup index for a CLI access key.
+
+        cli_access_key itself is AES-GCM ciphertext with a fresh random IV per
+        encryption, so re-encrypting an incoming key can never equal a
+        previously stored ciphertext even for the same plaintext — a plain
+        `WHERE cli_access_key = ?` lookup can only ever miss. SHA-256 of the
+        (128 hex char / 64-byte random) plaintext is safe to use as a direct
+        lookup index: the key space is far too large to hash-brute-force.
+        """
+        if not cli_key:
+            return None
+        return hashlib.sha256(cli_key.encode("utf-8")).hexdigest()
 
     def _decrypt_pw(self, pw_enc: str, pw_iv: str) -> str:
         if not pw_enc or not pw_iv:
@@ -721,12 +776,23 @@ class UserConnectionManager:
         return self._row_to_conn(row) if row else None
 
     def get_by_cli_key(self, cli_key: str) -> Optional[Connection]:
-        """Sucht eine Verbindung anhand des CLI-Keys (global, nur verschlüsselte Keys nach Migration)."""
+        """Sucht eine der eigenen, aktivierten Verbindungen anhand des CLI-Keys.
+
+        Lookup über cli_access_key_hash (siehe _hash_cli_key) statt über den
+        AES-verschlüsselten cli_access_key selbst — der ändert sich bei jeder
+        Verschlüsselung durch die zufällige IV und wäre nie vergleichbar.
+        Scoped auf self._user.id: andere Nutzer könnten ohnehin nicht
+        entschlüsselt werden (jeder hat seinen eigenen enc_key), ein Treffer
+        außerhalb des eigenen Kontos wäre nur eine kaputte Antwort.
+        """
+        key_hash = self._hash_cli_key(cli_key)
+        if not key_hash:
+            return None
         with get_connection() as conn:
-            cli_key_enc, _ = self._encrypt_pw(cli_key)
             row = conn.execute(
-                "SELECT * FROM connections WHERE cli_access_key = ? AND cli_access_key_iv IS NOT NULL AND cli_access_enabled = 1",
-                (cli_key_enc,)
+                "SELECT * FROM connections WHERE cli_access_key_hash = ? "
+                "AND cli_access_enabled = 1 AND user_id = ?",
+                (key_hash, self._user.id)
             ).fetchone()
         return self._row_to_conn(row) if row else None
 
@@ -736,6 +802,7 @@ class UserConnectionManager:
         pw_enc, pw_iv = self._encrypt_pw(c.password)
         cli_key_enc, cli_key_iv = (self._encrypt_pw(c.cli_access_key)
                                    if c.cli_access_key else (None, None))
+        cli_key_hash = self._hash_cli_key(c.cli_access_key)
         # CWE-312: Metadaten verschlüsseln; Klartext-Spalten bleiben leer
         name_enc, name_iv = self._encrypt_pw(c.name)
         host_enc, host_iv = self._encrypt_pw(c.host)
@@ -752,17 +819,17 @@ class UserConnectionManager:
                    (id, user_id, name, host, ssh_user, remote_path, port,
                     auth_method, pw_enc, pw_iv, key_path, putty_key_path, drive_letter,
                     protocol, ftp_implicit_tls, ftp_passive, ftp_verify_cert,
-                    sort_order, cli_access_enabled, cli_access_key, cli_access_key_iv,
+                    sort_order, cli_access_enabled, cli_access_key, cli_access_key_iv, cli_access_key_hash,
                     name_enc, name_iv, host_enc, host_iv,
                     ssh_user_enc, ssh_user_iv, remote_path_enc, remote_path_iv,
                     groups, is_template, template_id)
-                   VALUES (?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     c.id, self._user.id, c.port, c.auth_method,
                     pw_enc, pw_iv, c.key_path, c.putty_key_path, c.drive_letter,
                     c.protocol, int(c.ftp_implicit_tls), int(c.ftp_passive),
                     int(c.ftp_verify_cert),
-                    c.sort_order, int(c.cli_access_enabled), cli_key_enc, cli_key_iv,
+                    c.sort_order, int(c.cli_access_enabled), cli_key_enc, cli_key_iv, cli_key_hash,
                     name_enc, name_iv, host_enc, host_iv,
                     user_enc, user_iv, path_enc, path_iv,
                     c.groups, int(c.is_template), c.template_id,
@@ -774,6 +841,7 @@ class UserConnectionManager:
         pw_enc, pw_iv = self._encrypt_pw(c.password)
         cli_key_enc, cli_key_iv = (self._encrypt_pw(c.cli_access_key)
                                    if c.cli_access_key else (None, None))
+        cli_key_hash = self._hash_cli_key(c.cli_access_key)
         # CWE-312: Metadaten verschlüsseln; Klartext-Spalten leeren
         name_enc, name_iv = self._encrypt_pw(c.name)
         host_enc, host_iv = self._encrypt_pw(c.host)
@@ -785,7 +853,7 @@ class UserConnectionManager:
                    name='', host='', ssh_user='', remote_path='', port=?,
                    auth_method=?, pw_enc=?, pw_iv=?, key_path=?, putty_key_path=?, drive_letter=?,
                    protocol=?, ftp_implicit_tls=?, ftp_passive=?, ftp_verify_cert=?,
-                   cli_access_enabled=?, cli_access_key=?, cli_access_key_iv=?,
+                   cli_access_enabled=?, cli_access_key=?, cli_access_key_iv=?, cli_access_key_hash=?,
                    name_enc=?, name_iv=?, host_enc=?, host_iv=?,
                    ssh_user_enc=?, ssh_user_iv=?, remote_path_enc=?, remote_path_iv=?,
                    groups=?, is_template=?, template_id=?
@@ -794,7 +862,7 @@ class UserConnectionManager:
                  c.key_path, c.putty_key_path, c.drive_letter,
                  c.protocol, int(c.ftp_implicit_tls), int(c.ftp_passive),
                  int(c.ftp_verify_cert),
-                 int(c.cli_access_enabled), cli_key_enc, cli_key_iv,
+                 int(c.cli_access_enabled), cli_key_enc, cli_key_iv, cli_key_hash,
                  name_enc, name_iv, host_enc, host_iv,
                  user_enc, user_iv, path_enc, path_iv,
                  c.groups, int(c.is_template), c.template_id,
