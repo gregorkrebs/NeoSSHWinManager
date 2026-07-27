@@ -35,6 +35,18 @@ def _set_secure_permissions(path: Path) -> None:
     Set secure file permissions on the database file.
     - Unix/Linux/macOS: 600 (owner read/write only)
     - Windows: Restricted ACL (owner only)
+
+    Missing username or a nonexistent path are caller/environment bugs and
+    still raise (see tests/test_security.py::TestWindowsACL). Only the final
+    SetFileSecurity write is best-effort: it needs WRITE_DAC, which the
+    current token only gets implicitly if it actually owns the file. Files
+    created while running as the built-in Administrator account end up
+    owned by the BUILTIN\\Administrators *group* instead of the user, and
+    once UAC Admin Approval Mode is enabled for that account the normal
+    (non-elevated) token no longer carries that group, so WRITE_DAC is
+    denied. That's an ownership problem for src/permission_repair.py to fix,
+    not something to crash app startup over — log and keep whatever
+    permissions already exist.
     """
     if sys.platform == 'win32':
         sd = win32security.GetFileSecurity(
@@ -53,17 +65,26 @@ def _set_secure_permissions(path: Path) -> None:
             user_sid
         )
         sd.SetSecurityDescriptorDacl(1, dacl, 0)
-        win32security.SetFileSecurity(
-            str(path), win32security.DACL_SECURITY_INFORMATION, sd
-        )
-        _db_logger.debug(f"ACL gesetzt (nur Eigentümer): {path}")
+        try:
+            win32security.SetFileSecurity(
+                str(path), win32security.DACL_SECURITY_INFORMATION, sd
+            )
+            _db_logger.debug(f"ACL gesetzt (nur Eigentümer): {path}")
+        except Exception as e:
+            _db_logger.warning(f"Konnte sichere Berechtigungen nicht setzen für {path}: {e}")
     else:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def get_db_path() -> Path:
+def data_dir() -> Path:
+    """App data directory (%APPDATA%\\SSHWinManager). Pure path computation,
+    no permission side effects — safe to call before any ownership repair."""
     appdata = os.environ.get("APPDATA", str(Path.home()))
-    db_dir = Path(appdata) / "SSHWinManager"
+    return Path(appdata) / "SSHWinManager"
+
+
+def get_db_path() -> Path:
+    db_dir = data_dir()
     db_dir.mkdir(parents=True, exist_ok=True)
     db_path = db_dir / "data.db"
 
@@ -133,6 +154,7 @@ def init_db() -> None:
                 cli_access_enabled INTEGER NOT NULL DEFAULT 0,
                 cli_access_key     TEXT UNIQUE,  -- CLI-Access-Key AES verschlüsselt (hex)
                 cli_access_key_iv  TEXT,         -- IV für cli_access_key (hex)
+                cli_access_key_hash TEXT,        -- SHA-256(Klartext-Key), fürs Lookup (AES-GCM nutzt zufällige IVs → Ciphertext ist nicht wiederholbar vergleichbar)
                 groups       TEXT DEFAULT '',    -- Kommaseparierte Gruppen/Tags
                 is_template  INTEGER NOT NULL DEFAULT 0,  -- 1 = Template, 0 = normale Verbindung
                 template_id  TEXT,               -- Referenz zu Template (falls von Template erstellt)
@@ -219,6 +241,7 @@ def init_db() -> None:
                 ("cli_access_enabled", "INTEGER NOT NULL DEFAULT 0"),
                 ("cli_access_key", "TEXT UNIQUE"),
                 ("cli_access_key_iv", "TEXT"),
+                ("cli_access_key_hash", "TEXT"),
                 ("putty_key_path", "TEXT"),
                 # CWE-312: Verschlüsselte Metadaten-Spalten
                 ("host_enc", "TEXT"), ("host_iv", "TEXT"),

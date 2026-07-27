@@ -50,6 +50,8 @@
   "prereq.dialog.download_winfsp": "تنزيل WinFSP",
   "prereq.dialog.download_sshfs": "تنزيل SSHFS-Win",
   "prereq.dialog.exit": "إنهاء البرنامج",
+  "permrepair.title": "إصلاح الأذونات",
+  "permrepair.body": "يحتاج NeoSSHWinManager إلى إصلاح أذونات الملفات في مجلد البيانات مرة واحدة (بقايا من تثبيت/تحديث قديم). يتطلب هذا رفع صلاحيات المسؤول لفترة وجيزة (سيظهر طلب UAC). هل تريد الإصلاح الآن؟",
   "dialog.cancel": "إلغاء",
   "dialog.save": "حفظ",
   "dialog.close": "إغلاق",

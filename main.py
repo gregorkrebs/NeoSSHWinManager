@@ -47,6 +47,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pass-helper":
         ctypes.windll.kernel32.CloseHandle(handle)
     sys.exit(0)
 
+# ── 0.2 Elevated Rechte-Reparatur-Helfer (via UAC-Relaunch, siehe
+# src/permission_repair.py) ─────────────────────────────────────────────────
+# Headless: läuft NUR die Eigentümer-Übernahme und beendet sich, keine GUI,
+# kein Single-Instance-Check, kein zweiter Tray-Eintrag.
+if len(sys.argv) > 2 and sys.argv[1] == "--repair-permissions":
+    sys.path.insert(0, os.path.dirname(__file__))
+    from src.permission_repair import repair_owner
+    _paths = [Path(p) for p in sys.argv[2].split(";") if p]
+    sys.exit(0 if repair_owner(_paths) else 1)
+
 # ── 0.5 CLI-Modus ist nicht Sache der GUI-EXE ───────────────────────────────
 # Eine --windowed EXE hat keine nutzbare stdin/stdout im Parent-Terminal.
 # Für CLI-Zugriff existiert NeoSSHWinManager-cli.exe (console-subsystem).
@@ -285,6 +295,13 @@ def main():
     app.setPalette(palette)
 
     # ── 3. Database Initialization ────────────────────────────────
+    # One-time repair check first: fixes ownership left over from an older
+    # install/update (see src/permission_repair.py) before init_db() tries
+    # to harden permissions on it.
+    from src.database import data_dir
+    from src.permission_repair import run_startup_check
+    run_startup_check(data_dir())
+
     init_db()
 
     # ── 3.5 Windows Auto-Login (wenn aktiviert) ────────────────────

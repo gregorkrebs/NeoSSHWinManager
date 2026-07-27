@@ -50,6 +50,8 @@
   "prereq.dialog.download_winfsp": "Download WinFSP",
   "prereq.dialog.download_sshfs": "Download SSHFS-Win",
   "prereq.dialog.exit": "Exit Program",
+  "permrepair.title": "Repair Permissions",
+  "permrepair.body": "NeoSSHWinManager needs to repair file permissions in its data folder once (left over from an older install/update). This requires a brief administrator elevation (a UAC prompt will follow). Repair now?",
   "dialog.cancel": "Cancel",
   "dialog.save": "Save",
   "dialog.close": "Close",

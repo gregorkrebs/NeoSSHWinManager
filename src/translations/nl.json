@@ -50,6 +50,8 @@
   "prereq.dialog.download_winfsp": "WinFSP downloaden",
   "prereq.dialog.download_sshfs": "SSHFS-Win downloaden",
   "prereq.dialog.exit": "Programma afsluiten",
+  "permrepair.title": "Rechten herstellen",
+  "permrepair.body": "NeoSSHWinManager moet eenmalig de bestandsrechten in de gegevensmap herstellen (overblijfsel van een oudere installatie/update). Dit vereist kort beheerdersrechten (er volgt een UAC-melding). Nu herstellen?",
   "dialog.cancel": "Annuleren",
   "dialog.save": "Opslaan",
   "dialog.close": "Sluiten",

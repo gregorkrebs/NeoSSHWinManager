@@ -444,18 +444,23 @@ class MainWindow(FramelessMainWindow):
                             else:
                                 conn = self._mgr.get_by_cli_key(request.get("key", ""))
                                 if conn:
-                                    # SECURITY FIX (FINDING-01): Do NOT include the
-                                    # password in the IPC response. The CLI client
-                                    # must obtain credentials through a secure
-                                    # side-channel (e.g. OS keyring) or prompt the
-                                    # user, not receive them over the pipe.
+                                    # Password auth must work over --connect-cli too — that's
+                                    # the whole point of the feature (explicit product decision,
+                                    # revisiting FINDING-01's original blanket omission). Sending
+                                    # it over this pipe is safe in the same way the key_path was
+                                    # already considered safe: CreateNamedPipeW above uses
+                                    # _make_pipe_security_attributes(), which restricts the pipe
+                                    # to the current user's SID only, so only this same account's
+                                    # own processes can ever connect; the 64-byte cli_access_key
+                                    # is itself a strong bearer secret gating this response; and
+                                    # _check_rate() above throttles repeated attempts per PID.
                                     response = {"success": True, "connection": {
                                         "id": conn.id, "name": conn.name,
                                         "host": conn.host, "user": conn.user,
                                         "port": conn.port, "remote_path": conn.remote_path,
                                         "auth_method": conn.auth_method,
                                         "key_path": conn.key_path,
-                                        # password intentionally omitted (FINDING-01)
+                                        "password": conn.password,
                                     }}
                                 else:
                                     response = {"success": False, "error": "Ungültiger Access Key."}

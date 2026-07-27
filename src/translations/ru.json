@@ -50,6 +50,8 @@
   "prereq.dialog.download_winfsp": "Скачать WinFSP",
   "prereq.dialog.download_sshfs": "Скачать SSHFS-Win",
   "prereq.dialog.exit": "Выйти из программы",
+  "permrepair.title": "Исправить права доступа",
+  "permrepair.body": "NeoSSHWinManager необходимо один раз исправить права доступа к файлам в папке данных (остались от старой установки/обновления). Потребуется кратковременное повышение прав администратора (появится запрос UAC). Исправить сейчас?",
   "dialog.cancel": "Отмена",
   "dialog.save": "Сохранить",
   "dialog.close": "Закрыть",

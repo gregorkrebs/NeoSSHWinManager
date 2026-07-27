@@ -209,14 +209,17 @@ class SSHFSController:
     # Mount
     # ------------------------------------------------------------------
 
-    def mount(self, conn: Connection, disable_cache: bool = False) -> MountResult:
+    def mount(self, conn: Connection, disable_cache: bool = False,
+              safe_writes: bool = True) -> MountResult:
         """Nur sshfs.exe direkt – erzeugt ein lokales WinFsp-Laufwerk."""
-        result = self._mount_direct(conn, disable_cache=disable_cache)
+        result = self._mount_direct(conn, disable_cache=disable_cache,
+                                    safe_writes=safe_writes)
         if result.success:
             self._set_drive_label(conn)
         return result
 
-    def _mount_direct(self, conn: Connection, disable_cache: bool = False) -> MountResult:
+    def _mount_direct(self, conn: Connection, disable_cache: bool = False,
+                      safe_writes: bool = True) -> MountResult:
         from src.app_logger import logger
 
         sshfs_exe = _find_sshfs_exe()
@@ -278,20 +281,61 @@ class SSHFSController:
         # DirInfoTimeout/VolumeInfoTimeout options and defaults to sshfs-win's built-in
         # FileInfoTimeout=1000 when unset. Always set these explicitly so the checkbox
         # actually has an effect.
-        cmd += [
-            "-oFileInfoTimeout=-1",
-            "-oVolumeInfoTimeout=1000",
-        ]
+        #
+        # WICHTIG (NUL-Byte-Korruption): -oFileInfoTimeout=-1 war die Ursache für
+        # Dateien, die nach dem Schreiben nur noch aus Nullbytes bestanden. Die
+        # sshfs.exe-Hilfe sagt zu dieser Option wörtlich: "metadata timeout (millis,
+        # -1 for data caching)" – d.h. genau der Wert -1 aktiviert das WinFsp-
+        # DATEN-Caching, jeder endliche Wert lässt nur (begrenztes) Metadaten-Caching zu.
+        #
+        # Ablauf des Fehlers: Beim Anlegen/Überschreiben setzt sshfs die Remote-
+        # Dateigröße zuerst auf die Endgröße – SFTP füllt diesen Bereich mit Nullen. Die
+        # echten Bytes liegen zunächst nur im flüchtigen Write-Back-Datencache. Mit -1
+        # hält WinFsp diesen (Null-)Datenzustand dauerhaft für gültig und liefert beim
+        # (verzögerten) Zurücklesen die Null-Füllung aus; ein hartes taskkill /F von
+        # sshfs.exe beim Unmount verwirft noch nicht geschriebene Cache-Seiten zusätzlich.
+        #
+        # safe_writes (Default an) stellt das ab – nur von diesem sshfs-win-Build
+        # dokumentierte Optionen:
+        #   FileInfoTimeout=1000 : endlich statt -1 → Daten-Caching AUS.
+        #   -osshfs_sync         : synchrone SFTP-Writes → vor dem ACK am Server,
+        #                          taskkill /F kann nichts mehr verlieren.
+        #   -ono_readahead       : synchrone Reads → keine spekulativen Null-Seiten.
+        if safe_writes:
+            cmd += [
+                "-oFileInfoTimeout=1000",
+                "-oVolumeInfoTimeout=1000",
+                "-osshfs_sync",
+                "-ono_readahead",
+            ]
+        else:
+            cmd += [
+                "-oFileInfoTimeout=-1",
+                "-oVolumeInfoTimeout=1000",
+            ]
 
+        # WICHTIG (neue Ordner/Dateien erst nach manuellem Explorer-Refresh sichtbar):
+        # DirInfoTimeout/attr_timeout/entry_timeout betreffen nur den WinFsp-Kernel-
+        # Cache. sshfs.exe führt darunter ein zweites, komplett unabhängiges
+        # Verzeichnis-Cache (dir_cache/dcache_*, sshfs --help), das bisher nie gesetzt
+        # wurde und mit seinem Default dcache_dir_timeout=20s lief – 20x länger als der
+        # WinFsp-Cache oben. dcache_dir_timeout steuert laut --help konkret die Namen
+        # (d.h. ob ein frisch angelegter Ordner/Datei überhaupt in der Liste auftaucht),
+        # unabhängig vom Refresh-Button: der fragt zwar WinFsp neu ab, aber sshfs
+        # antwortet innerhalb der 20s weiterhin aus seinem eigenen Namens-Cache.
         if disable_cache:
             cmd += [
                 "-oDirInfoTimeout=0",
                 "-oattr_timeout=1",
                 "-oentry_timeout=1",
                 "-onegative_timeout=0",
+                "-odir_cache=no",
             ]
         else:
-            cmd += ["-oDirInfoTimeout=1000"]
+            cmd += [
+                "-oDirInfoTimeout=1000",
+                "-odcache_dir_timeout=1",
+            ]
 
         if conn.auth_method == "key" and conn.key_path:
             key_path = conn.key_path.replace("\\", "/")
