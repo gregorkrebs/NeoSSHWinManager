@@ -47,6 +47,12 @@ jobs:
         shell: pwsh
         run: .\build_dual.ps1
 
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc installer\NeoSSHWinManager.iss
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -54,6 +60,7 @@ jobs:
           path: |
             dist/NeoSSHWinManager.exe
             dist/NeoSSHWinManager-cli.exe
+            dist_installer/*.exe
           if-no-files-found: error
 
       - name: Upload assets to GitHub release
@@ -66,4 +73,5 @@ jobs:
             throw 'No release tag was provided by the event payload.'
           }
 
-          gh release upload $env:RELEASE_TAG .\dist\NeoSSHWinManager.exe .\dist\NeoSSHWinManager-cli.exe --repo $env:GITHUB_REPOSITORY --clobber
+          $installer = Get-ChildItem dist_installer\*.exe | Select-Object -First 1 -ExpandProperty FullName
+          gh release upload $env:RELEASE_TAG .\dist\NeoSSHWinManager.exe .\dist\NeoSSHWinManager-cli.exe $installer --repo $env:GITHUB_REPOSITORY --clobber

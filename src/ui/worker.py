@@ -45,3 +45,28 @@ class UnmountWorker(QThread):
             self.finished.emit(self.conn_id, result)
         except Exception as e:
             self.finished.emit(self.conn_id, MountResult(False, f"Thread Error: {str(e)}"))
+
+
+class TerminalConnectWorker(QThread):
+    """
+    Worker thread to establish the SSH session behind an embedded xterm.js
+    terminal tab without blocking the UI. paramiko's connect() only bounds
+    the TCP/banner phase with its `timeout` argument — the auth phase can
+    still block for its own auth_timeout (default 30 s), which previously
+    froze the whole window since bridge_server.create_session_token() was
+    called directly on the Qt main thread.
+    """
+    finished = pyqtSignal(str, object)  # session_key, token (str) or None
+
+    def __init__(self, bridge_server, session_key: str, conn):
+        super().__init__()
+        self.bridge_server = bridge_server
+        self.session_key = session_key
+        self.conn = conn
+
+    def run(self):
+        try:
+            token = self.bridge_server.create_session_token(self.session_key, self.conn)
+        except Exception:
+            token = None
+        self.finished.emit(self.session_key, token)

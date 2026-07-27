@@ -176,14 +176,28 @@ class UpdaterManager(QObject):
             return
 
         bat_path = os.path.join(tempfile.gettempdir(), "neosshwinmanager_updater.bat")
-        
-        # Batch script that waits for the main process to exit, then replaces the file
+        exe_name = os.path.basename(current_exe)
+
+        # Batch script that waits for the main process to exit, then replaces the file.
+        # After the move, a freshly written .exe is scanned by Windows Defender's
+        # real-time protection on first execution; if that scan still holds a lock
+        # when the PyInstaller bootloader tries to extract its embedded python DLL,
+        # the launch fails with "Failed to load Python DLL". So we wait a bit for
+        # the scan to settle, then retry the launch a few times (safe: the app's
+        # single-instance mutex makes extra launch attempts no-ops once one succeeds).
         bat_content = f"""@echo off
 echo Warte auf das Beenden von NeoSSHWinManager...
 timeout /t 3 /nobreak >nul
 del "{current_exe}" /f /q
 move /y "{self.update_file_path}" "{current_exe}"
-start "" "{current_exe}"
+timeout /t 2 /nobreak >nul
+for /L %%i in (1,1,5) do (
+    start "" "{current_exe}"
+    timeout /t 2 /nobreak >nul
+    tasklist /fi "imagename eq {exe_name}" | find /i "{exe_name}" >nul
+    if not errorlevel 1 goto launched
+)
+:launched
 del "%~f0"
 """
         try:
