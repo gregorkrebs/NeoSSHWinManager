@@ -28,6 +28,7 @@ _db_logger = logging.getLogger(__name__)
 if sys.platform == 'win32':
     import win32security
     import ntsecuritycon as con
+    import pywintypes
 
 
 def _set_secure_permissions(path: Path) -> None:
@@ -37,21 +38,30 @@ def _set_secure_permissions(path: Path) -> None:
     - Windows: Restricted ACL (owner only)
 
     Missing username or a nonexistent path are caller/environment bugs and
-    still raise (see tests/test_security.py::TestWindowsACL). Only the final
-    SetFileSecurity write is best-effort: it needs WRITE_DAC, which the
-    current token only gets implicitly if it actually owns the file. Files
-    created while running as the built-in Administrator account end up
-    owned by the BUILTIN\\Administrators *group* instead of the user, and
-    once UAC Admin Approval Mode is enabled for that account the normal
-    (non-elevated) token no longer carries that group, so WRITE_DAC is
-    denied. That's an ownership problem for src/permission_repair.py to fix,
-    not something to crash app startup over — log and keep whatever
-    permissions already exist.
+    still raise (see tests/test_security.py::TestWindowsACL). Reading and
+    writing the DACL are both best-effort against ERROR_ACCESS_DENIED: they
+    need WRITE_DAC/READ_CONTROL, which the current token only gets implicitly
+    if it actually owns the file. Files created while running as the built-in
+    Administrator account end up owned by the BUILTIN\\Administrators *group*
+    instead of the user, and once UAC Admin Approval Mode is enabled for that
+    account the normal (non-elevated) token no longer carries that group, so
+    DACL access is denied. A prior broken/hardened ACL left on disk (e.g. from
+    an older buggy version) can deny access even to an elevated token. That's
+    an ownership/ACL problem for src/permission_repair.py to fix, not
+    something to crash app startup over — log and keep whatever permissions
+    already exist. Any other error (e.g. the path not existing at all) is a
+    caller/environment bug and still raises.
     """
     if sys.platform == 'win32':
-        sd = win32security.GetFileSecurity(
-            str(path), win32security.DACL_SECURITY_INFORMATION
-        )
+        try:
+            sd = win32security.GetFileSecurity(
+                str(path), win32security.DACL_SECURITY_INFORMATION
+            )
+        except pywintypes.error as e:
+            if e.winerror == 5:  # ERROR_ACCESS_DENIED
+                _db_logger.warning(f"Konnte ACL nicht lesen (Zugriff verweigert) für {path}: {e}")
+                return
+            raise
         dacl = win32security.ACL()
         username = os.environ.get('USERNAME') or os.environ.get('USER')
         if not username:
