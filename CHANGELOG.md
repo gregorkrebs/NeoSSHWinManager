@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.5.3] — 2026-07-31
+
+### Fixed
+- **Startup crash on broken/orphaned ACLs:** `_set_secure_permissions()` in `src/database.py` only treated the DACL *write* step as best-effort; the *read* step right before it (`GetFileSecurity`) was unguarded and crashed the whole app with `pywintypes.error: Access is denied` whenever the data directory had a broken ACL that `permission_repair.py` couldn't fully resolve (ownership repair alone doesn't fix a broken DACL). Now degrades to a logged warning instead, matching the existing best-effort handling of the write step.
+- **Pro activation always failed with a network error:** `VALIDATION_ENDPOINT` pointed at the apex domain (`neosshwinmanager.org`), which 301-redirects to `www.neosshwinmanager.org`. Python's `urllib` never replays a POST body across that redirect (it either downgrades to a bodyless GET, or refuses outright on 307/308), so every activation attempt failed before reaching the validation endpoint. Now points directly at `https://www.neosshwinmanager.org/neo_pro_validate.php`, no redirect involved.
+
+---
+
 ## [1.5.2] — 2026-07-27
 
 ### Added
