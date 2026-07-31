@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 PRO_KEY_PATTERN = re.compile(r"^NEO-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
 
-VALIDATION_ENDPOINT = "https://neosshwinmanager.org/neo_pro_validate.php"
+VALIDATION_ENDPOINT = "https://www.neosshwinmanager.org/neo_pro_validate.php"
 
 # Must match the value in pro.local.php on the server.
 # This constant is embedded in the client binary — it is NOT the full server
