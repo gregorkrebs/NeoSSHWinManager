@@ -3249,7 +3249,7 @@ class MainWindow(FramelessMainWindow):
         try:
             from src.ui.dialogs.about_dialog import APP_VERSION
             from src.updater import UpdaterManager
-            from src.ui.dialogs.update_dialog import UpdateDialog
+            from src.ui.dialogs.update_dialog import run_update_dialog, run_pending_update_dialog
         except Exception as e:
             self._show_inline_message("Update", str(e), is_error=True)
             return
@@ -3269,26 +3269,19 @@ class MainWindow(FramelessMainWindow):
 
         def _on_update_available(version: str, changelog: str, download_url: str, obj_type: str):
             try:
-                dlg = UpdateDialog(self, version, changelog, download_url, obj_type)
-                dlg.start_background_download.connect(lambda: updater.download_update_async(download_url))
-                updater.download_progress.connect(dlg.update_progress)
-
-                def _on_finished(success: bool, msg: str):
-                    if success:
-                        updater.install_on_exit()
-                    dlg.on_download_finished(success, msg)
-
-                updater.download_finished.connect(_on_finished)
-                dlg.exec()
+                run_update_dialog(self, updater, version, changelog, download_url, obj_type)
             finally:
                 _reset_btn()
 
         def _on_no_update():
-            StyledMessageBox.information(self, "Update", tr("settings.up_to_date"))
+            # An installer may already be waiting on disk (downloaded earlier).
+            if not run_pending_update_dialog(self, updater):
+                StyledMessageBox.information(self, "Update", tr("settings.up_to_date"))
             _reset_btn()
 
         def _on_failed(msg: str):
-            StyledMessageBox.warning(self, tr("dialog.error"), tr("settings.update_check_failed", msg=msg))
+            if not run_pending_update_dialog(self, updater):
+                StyledMessageBox.warning(self, tr("dialog.error"), tr("settings.update_check_failed", msg=msg))
             _reset_btn()
 
         updater.update_available.connect(_on_update_available)
@@ -3296,6 +3289,9 @@ class MainWindow(FramelessMainWindow):
             updater.no_update_available.connect(_on_no_update)
         if hasattr(updater, "check_failed"):
             updater.check_failed.connect(_on_failed)
+
+        from src.telemetry import attach_update_telemetry
+        attach_update_telemetry(updater, 'settings', self._mgr.get_settings())
 
         updater.check_for_updates_async()
 

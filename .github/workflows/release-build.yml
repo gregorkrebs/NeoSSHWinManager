@@ -74,4 +74,14 @@ jobs:
           }
 
           $installer = Get-ChildItem dist_installer\*.exe | Select-Object -First 1 -ExpandProperty FullName
-          gh release upload $env:RELEASE_TAG .\dist\NeoSSHWinManager.exe .\dist\NeoSSHWinManager-cli.exe $installer --repo $env:GITHUB_REPOSITORY --clobber
+
+          # sha256sums.txt lets the in-app updater verify the installer it
+          # downloads (src/updater.py looks for exactly this asset name).
+          $files = @('.\dist\NeoSSHWinManager.exe', '.\dist\NeoSSHWinManager-cli.exe', $installer)
+          $lines = foreach ($f in $files) {
+            $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            "$h  $([System.IO.Path]::GetFileName($f))"
+          }
+          $lines | Out-File -FilePath sha256sums.txt -Encoding ascii
+
+          gh release upload $env:RELEASE_TAG .\dist\NeoSSHWinManager.exe .\dist\NeoSSHWinManager-cli.exe $installer .\sha256sums.txt --repo $env:GITHUB_REPOSITORY --clobber

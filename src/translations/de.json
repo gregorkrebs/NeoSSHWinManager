@@ -479,5 +479,20 @@
   "addedit.ftp.verify_cert": "Serverzertifikat prüfen",
   "addedit.ftp.verify_cert.hint": "Nur bei selbstsignierten Zertifikaten abschalten. Die Verbindung bleibt verschlüsselt, die Identität des Servers wird aber nicht mehr geprüft.",
   "addedit.ftp.hint": "FTP-Verbindungen lassen sich nicht als Laufwerk einbinden und haben kein SSH-Terminal – bitte den Dateibrowser nutzen.",
-  "addedit.ftp.plain_warning": "Einfaches FTP überträgt Passwort und Daten unverschlüsselt. Wenn der Server FTPS anbietet, bitte FTPS verwenden."
+  "addedit.ftp.plain_warning": "Einfaches FTP überträgt Passwort und Daten unverschlüsselt. Wenn der Server FTPS anbietet, bitte FTPS verwenden.",
+
+  "update.window_title": "Update verfügbar",
+  "update.title": "Version {version} ist verfügbar!",
+  "update.lead": "Es liegt eine neue Version von NEO SSH-Win Manager vor. Der Installer wird jetzt heruntergeladen und beim nächsten Programmstart ausgeführt.",
+  "update.ready_lead": "Der Installer für diese Version wurde bereits heruntergeladen.",
+  "update.downloaded_lead": "Download abgeschlossen. Der Installer ist bereit.",
+  "update.install_next_start": "Update beim nächsten Programmstart installieren",
+  "update.install_next_start.hint": "Der Installer startet, bevor sich das Programm öffnet. Danach – ob installiert oder abgebrochen – startet das Programm wie gewohnt.",
+  "update.btn.later": "Später",
+  "update.btn.browser": "Im Browser herunterladen",
+  "update.btn.download": "Installer herunterladen",
+  "update.btn.downloading": "Lade herunter…",
+  "update.btn.install_now": "Jetzt neu starten & installieren",
+  "update.btn.installing": "Installer wird gestartet…",
+  "update.btn.download_failed": "Fehler beim Herunterladen"
 }
