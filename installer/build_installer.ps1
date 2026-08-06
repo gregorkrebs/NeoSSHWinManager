@@ -24,6 +24,25 @@ if (-not (Test-Path $iscc)) {
 }
 
 Write-Host "[2/2] Compiling installer..." -ForegroundColor Cyan
+
+# Drop setups of older versions, so dist_installer\ only ever holds the current
+# one (the release workflow picks the first *.exe it finds there).
+$outDir = Join-Path $repoRoot 'dist_installer'
+if (Test-Path $outDir) {
+    Get-ChildItem (Join-Path $outDir 'NeoSSHWinManager-Setup-*.exe') -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Write-Host ("      removing stale installer {0}" -f $_.Name) -ForegroundColor DarkGray
+            Remove-Item $_.FullName -Force
+        }
+}
+
 & $iscc "$PSScriptRoot\NeoSSHWinManager.iss"
 
-Write-Host "Done! Setup.exe is in dist_installer\." -ForegroundColor Green
+# The version in the installer name comes from src\version.txt (see the .iss).
+$version = (Get-Content (Join-Path $repoRoot 'src\version.txt') -Raw -Encoding UTF8).Trim()
+$setup = Join-Path $repoRoot "dist_installer\NeoSSHWinManager-Setup-$version.exe"
+if (-not (Test-Path $setup)) {
+    throw "Expected installer '$setup' was not produced."
+}
+
+Write-Host "Done! $setup" -ForegroundColor Green
