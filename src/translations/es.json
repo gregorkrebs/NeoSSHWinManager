@@ -477,5 +477,20 @@
   "addedit.ftp.verify_cert": "Verificar el certificado del servidor",
   "addedit.ftp.verify_cert.hint": "Desactívalo solo con certificados autofirmados. La conexión sigue cifrada, pero ya no se verifica la identidad del servidor.",
   "addedit.ftp.hint": "Las conexiones FTP no se pueden montar como letra de unidad ni tienen terminal SSH: usa el explorador de archivos.",
-  "addedit.ftp.plain_warning": "El FTP simple transmite la contraseña y los datos sin cifrar. Usa FTPS siempre que el servidor lo ofrezca."
+  "addedit.ftp.plain_warning": "El FTP simple transmite la contraseña y los datos sin cifrar. Usa FTPS siempre que el servidor lo ofrezca.",
+
+  "update.window_title": "Actualización disponible",
+  "update.title": "¡La versión {version} está disponible!",
+  "update.lead": "Hay una nueva versión de NEO SSH-Win Manager. El instalador se descarga ahora y se ejecutará en el próximo inicio del programa.",
+  "update.ready_lead": "El instalador de esta versión ya se ha descargado.",
+  "update.downloaded_lead": "Descarga completada. El instalador está listo.",
+  "update.install_next_start": "Instalar la actualización en el próximo inicio del programa",
+  "update.install_next_start.hint": "El instalador se ejecuta antes de que se abra la aplicación. Después, tanto si se instala como si se cancela, la aplicación se inicia con normalidad.",
+  "update.btn.later": "Más tarde",
+  "update.btn.browser": "Descargar en el navegador",
+  "update.btn.download": "Descargar instalador",
+  "update.btn.downloading": "Descargando…",
+  "update.btn.install_now": "Reiniciar e instalar ahora",
+  "update.btn.installing": "Iniciando el instalador…",
+  "update.btn.download_failed": "Error en la descarga"
 }

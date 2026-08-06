@@ -1,8 +1,11 @@
 ; NeoSSHWinManager Windows installer (Inno Setup 6)
 ;
 ; Builds a Setup.exe from the already-built dist\ executables (run
-; build_dual.ps1 first). The app version is read directly from the built
-; GUI exe's version resource, so it can never drift from file_version_info.txt.
+; build_dual.ps1 first). The app version comes from src\version.txt - the
+; single source of truth the app itself reads at runtime. build_dual.ps1
+; propagates the same value into file_version_info.txt, so the exe version
+; resource matches; the check below fails the compile if it does not (which
+; means dist\ holds a stale build).
 ;
 ; Compile with: ISCC.exe installer\NeoSSHWinManager.iss
 ; (or run installer\build_installer.ps1, which does both steps)
@@ -14,8 +17,19 @@
 #define MyAppURL "https://github.com/gregorkrebs/NeoSSHWinManager"
 #define MyAppId "{B4E6F1A2-7C3D-4E5A-9F8B-1D2C3E4F5A6B}"
 
-#define RawVersion GetVersionNumbersString(SourcePath + "..\dist\" + MyAppExeName)
-#define MyAppVersion Copy(RawVersion, 1, RPos(".", RawVersion) - 1)
+#define VersionFileHandle FileOpen(SourcePath + "..\src\version.txt")
+#define MyAppVersion Trim(FileRead(VersionFileHandle))
+#expr FileClose(VersionFileHandle)
+
+#if MyAppVersion == ""
+  #error Could not read a version from src\version.txt
+#endif
+
+#define ExeVersion GetVersionNumbersString(SourcePath + "..\dist\" + MyAppExeName)
+#if ExeVersion != MyAppVersion + ".0"
+  #pragma message "dist\" + MyAppExeName + " reports version '" + ExeVersion + "', src\version.txt says '" + MyAppVersion + "'"
+  #error The built exe does not match src\version.txt (see message above) - rebuild it with build_dual.ps1
+#endif
 
 [Setup]
 AppId={{#MyAppId}

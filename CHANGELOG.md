@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [1.5.4]
+
+### Added
+- **Use of the update function is now part of opt-in telemetry.** Users who have consented to telemetry transmit additional information regarding whether they use the update function, how they access it, and whether an update was actually performed: `update_check` (with `source=startup|settings` and `result=available|uptodate|failed`), `update_action` (which button was pressed: Download, Browser, Later, Install Now, Enable/Disable for next startup), `update_download` (`ok|failed`), and `update_result`. Each event also includes the currently running version. No new personal data is collected; the events act as counters without any identifying markers, and the entire transmission remains subject to the `telemetry_enabled` setting.
+- It is not possible to determine whether an update was actually successful while the process is underway: the installer provides no feedback and only executes after the application has closed. Therefore, `launch_pending_installer()` creates a file named `update_attempt.json` alongside the pending update marker. Upon the next startup, the running version is compared with the recorded target version: the result is `installed` if they match, and `not_installed` if the installation was aborted or failed. Entries older than one week are discarded without analysis rather than being included in the statistics for the wrong day.
+
+### Changed
+- **Auto-update now installs via the Windows installer instead of swapping the exe.** The update check downloads the release's `Setup.exe` (never the portable exe again) into `%APPDATA%\SSHWinManager\updates` and remembers it in `pending_update.json`. If the update is armed, the *next* program start hands over to a helper script that waits for the app to exit, runs the installer, and starts the app again afterwards — whether the installer completed or was cancelled. This guarantees the update is actually applied and keeps the installed copy's registry entries, shortcuts and uninstall information in sync.
+- Releases now ship a `sha256sums.txt` asset, so the SHA-256 verification the updater has always attempted actually runs — a downloaded installer whose hash does not match is discarded instead of installed.
+- The update dialog now offers "Install update at next program start" (a checkbox that can be toggled at any time) and "Restart and install now". A running update check also reports an installer that was already downloaded earlier, so a declined update can be armed later without downloading again — including when the app is offline and the GitHub check fails.
+
+### Fixed
+- **Auto-update silently did nothing; the old version kept starting.** The settings screens called `install_on_exit()` immediately after the download finished, not on exit: the generated batch script waited 3 seconds and then tried to `del` the *running* executable, which Windows refuses. The subsequent `move` failed too, so the old exe was simply restarted. Every step was unchecked and its output discarded, so nothing was logged or shown. On top of that, an installed copy usually lives in a directory the user may not write to at all, and the path validation used to reject perfectly normal paths (anything containing `(`, `)` or `~`, e.g. `C:\Program Files (x86)\…`) without any user-visible error. The whole exe-swap mechanism is gone — see above.
+- The update check picked the portable `NeoSSHWinManager.exe` release asset, so even a successful swap left an installed copy registered under the old version. It now looks for the `Setup` asset and falls back to the release page in the browser if a release does not ship one.
 
 ---
 

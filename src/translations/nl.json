@@ -477,5 +477,20 @@
   "addedit.ftp.verify_cert": "Servercertificaat controleren",
   "addedit.ftp.verify_cert.hint": "Schakel dit alleen uit bij zelfondertekende certificaten. De verbinding blijft versleuteld, maar de identiteit van de server wordt niet meer gecontroleerd.",
   "addedit.ftp.hint": "FTP-verbindingen kunnen niet als stationsletter worden gekoppeld en hebben geen SSH-terminal — gebruik de bestandsbrowser.",
-  "addedit.ftp.plain_warning": "Gewone FTP verstuurt wachtwoord en gegevens onversleuteld. Gebruik FTPS zodra de server dit aanbiedt."
+  "addedit.ftp.plain_warning": "Gewone FTP verstuurt wachtwoord en gegevens onversleuteld. Gebruik FTPS zodra de server dit aanbiedt.",
+
+  "update.window_title": "Update beschikbaar",
+  "update.title": "Versie {version} is beschikbaar!",
+  "update.lead": "Er is een nieuwe versie van NEO SSH-Win Manager. Het installatieprogramma wordt nu gedownload en wordt bij de volgende programmastart uitgevoerd.",
+  "update.ready_lead": "Het installatieprogramma voor deze versie is al gedownload.",
+  "update.downloaded_lead": "Download voltooid. Het installatieprogramma staat klaar.",
+  "update.install_next_start": "Update installeren bij de volgende programmastart",
+  "update.install_next_start.hint": "Het installatieprogramma start voordat de app wordt geopend. Daarna start de app gewoon, of de update nu is geïnstalleerd of geannuleerd.",
+  "update.btn.later": "Later",
+  "update.btn.browser": "In browser downloaden",
+  "update.btn.download": "Installatieprogramma downloaden",
+  "update.btn.downloading": "Bezig met downloaden…",
+  "update.btn.install_now": "Nu herstarten en installeren",
+  "update.btn.installing": "Installatieprogramma starten…",
+  "update.btn.download_failed": "Downloaden mislukt"
 }

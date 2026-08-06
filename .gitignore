@@ -34,6 +34,11 @@ dist_installer/
 SECURITY_AUDIT.md
 .DS_Store
 
+# Local-only release helpers (tag/push/GitHub-release plumbing, not needed to
+# build the app - build_dual.ps1, scripts/sync_version.ps1 and
+# installer/build_installer.ps1 stay tracked because the CI uses them)
+scripts/release/
+
 # Local runtime / user data
 crash_report.txt
 *.log

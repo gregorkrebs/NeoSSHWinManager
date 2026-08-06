@@ -479,5 +479,20 @@
   "addedit.ftp.verify_cert": "Verify server certificate",
   "addedit.ftp.verify_cert.hint": "Turn off only for self-signed certificates. The connection stays encrypted, but the server identity is no longer verified.",
   "addedit.ftp.hint": "FTP connections cannot be mounted as a drive letter and have no SSH terminal – use the file browser.",
-  "addedit.ftp.plain_warning": "Plain FTP transmits password and data unencrypted. Use FTPS whenever the server offers it."
+  "addedit.ftp.plain_warning": "Plain FTP transmits password and data unencrypted. Use FTPS whenever the server offers it.",
+
+  "update.window_title": "Update available",
+  "update.title": "Version {version} is available!",
+  "update.lead": "A new version of NEO SSH-Win Manager is ready. The installer is downloaded now and runs the next time you start the app.",
+  "update.ready_lead": "The installer for this version has already been downloaded.",
+  "update.downloaded_lead": "Download complete. The installer is ready to run.",
+  "update.install_next_start": "Install update at next program start",
+  "update.install_next_start.hint": "The installer runs before the app opens. Afterwards – whether it was installed or cancelled – the app starts as usual.",
+  "update.btn.later": "Later",
+  "update.btn.browser": "Download in browser",
+  "update.btn.download": "Download installer",
+  "update.btn.downloading": "Downloading…",
+  "update.btn.install_now": "Restart and install now",
+  "update.btn.installing": "Starting installer…",
+  "update.btn.download_failed": "Download failed"
 }

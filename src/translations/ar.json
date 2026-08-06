@@ -477,5 +477,20 @@
   "addedit.ftp.verify_cert": "التحقق من شهادة الخادم",
   "addedit.ftp.verify_cert.hint": "عطّل هذا الخيار فقط مع الشهادات الموقّعة ذاتياً. يبقى الاتصال مشفّراً، لكن لن يتم التحقق من هوية الخادم بعد ذلك.",
   "addedit.ftp.hint": "لا يمكن وصل اتصالات FTP كحرف محرك أقراص ولا تتوفر لها طرفية SSH — يرجى استخدام متصفح الملفات.",
-  "addedit.ftp.plain_warning": "ينقل FTP البسيط كلمة المرور والبيانات دون تشفير. استخدم FTPS كلما كان الخادم يدعمه."
+  "addedit.ftp.plain_warning": "ينقل FTP البسيط كلمة المرور والبيانات دون تشفير. استخدم FTPS كلما كان الخادم يدعمه.",
+
+  "update.window_title": "يتوفر تحديث",
+  "update.title": "الإصدار {version} متوفر الآن!",
+  "update.lead": "يتوفر إصدار جديد من NEO SSH-Win Manager. سيتم تنزيل المُثبِّت الآن وتشغيله عند بدء البرنامج في المرة القادمة.",
+  "update.ready_lead": "تم تنزيل مُثبِّت هذا الإصدار بالفعل.",
+  "update.downloaded_lead": "اكتمل التنزيل. المُثبِّت جاهز للتشغيل.",
+  "update.install_next_start": "تثبيت التحديث عند بدء البرنامج في المرة القادمة",
+  "update.install_next_start.hint": "يبدأ المُثبِّت قبل فتح التطبيق. بعد ذلك، سواء تم التثبيت أو الإلغاء، يبدأ التطبيق كالمعتاد.",
+  "update.btn.later": "لاحقًا",
+  "update.btn.browser": "التنزيل في المتصفح",
+  "update.btn.download": "تنزيل المُثبِّت",
+  "update.btn.downloading": "جارٍ التنزيل…",
+  "update.btn.install_now": "إعادة التشغيل والتثبيت الآن",
+  "update.btn.installing": "جارٍ تشغيل المُثبِّت…",
+  "update.btn.download_failed": "فشل التنزيل"
 }

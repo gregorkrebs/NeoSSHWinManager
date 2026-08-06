@@ -238,6 +238,18 @@ def main():
     except Exception:
         APP_VERSION = "?"
 
+    # ── Pending update ────────────────────────────────────────────────────
+    # If an update installer was downloaded and armed, hand over to it before
+    # anything else touches the database or the UI: a helper script waits for
+    # this process to exit, runs the installer and starts the app again — also
+    # when the installer is cancelled.
+    try:
+        from src.updater import maybe_install_pending_update
+        if maybe_install_pending_update(APP_VERSION):
+            sys.exit(0)
+    except Exception:
+        pass  # never block startup because of the updater
+
     # Windows taskbar icon fix (AppUserModelID)
     try:
         myappid = f'neo.sshwinmanager.{APP_VERSION}'
@@ -336,6 +348,7 @@ def main():
         sys.exit(0)
 
     # Apply user's preferred language
+    user_settings = None
     try:
         from src.auth_manager import UserConnectionManager
         from src.i18n import set_language, is_rtl
@@ -365,7 +378,20 @@ def main():
         
         from src.telemetry import send_telemetry_async
         send_telemetry_async('login', user_settings)
-        
+
+        # Wurde ein zuvor angestoßenes Update tatsächlich durchgeführt? Das
+        # sieht man erst jetzt: läuft die Zielversion, hat der Installer
+        # gegriffen, sonst wurde er abgebrochen oder ist gescheitert.
+        from src.updater import take_update_attempt
+        _attempt = take_update_attempt()
+        if _attempt:
+            send_telemetry_async(
+                'update_result',
+                user_settings,
+                result='installed' if APP_VERSION == _attempt.get("to_version") else 'not_installed',
+                target=_attempt.get("to_version"),
+            )
+
     except Exception as e:
         logger.warning(f"Language/theme/telemetry init failed: {e}")
 
@@ -419,18 +445,26 @@ def main():
 
         # Start Update Check
         from src.updater import UpdaterManager
+        from src.ui.dialogs.update_dialog import run_update_dialog, run_pending_update_dialog
         updater = UpdaterManager(app.applicationVersion())
-        
+
         def _on_update_available(version: str, changelog: str, download_url: str, obj_type: str):
-            from src.ui.dialogs.update_dialog import UpdateDialog
-            dlg = UpdateDialog(window, version, changelog, download_url, obj_type)
-            dlg.start_background_download.connect(lambda: updater.download_update_async(download_url))
-            updater.download_progress.connect(dlg.update_progress)
-            updater.download_finished.connect(dlg.on_download_finished)
-            dlg.exec()
-            
+            run_update_dialog(window, updater, version, changelog, download_url, obj_type)
+
+        def _on_no_update():
+            # A leftover installer for a *newer* version can only exist if the
+            # user declined it earlier — offer it again instead of hiding it.
+            run_pending_update_dialog(window, updater)
+
         updater.update_available.connect(_on_update_available)
-        app.aboutToQuit.connect(updater.install_on_exit)
+        updater.check_failed.connect(lambda _msg: _on_no_update())
+        updater.no_update_available.connect(_on_no_update)
+
+        # Prüfung beim Programmstart von der manuellen aus den Einstellungen
+        # unterscheidbar machen (siehe src/telemetry.py).
+        from src.telemetry import attach_update_telemetry
+        attach_update_telemetry(updater, 'startup', user_settings)
+
         updater.check_for_updates_async()
 
         sys.exit(app.exec())
