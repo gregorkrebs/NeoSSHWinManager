@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [1.5.4]
 
 ### Added
 - **Use of the update function is now part of opt-in telemetry.** Users who have consented to telemetry transmit additional information regarding whether they use the update function, how they access it, and whether an update was actually performed: `update_check` (with `source=startup|settings` and `result=available|uptodate|failed`), `update_action` (which button was pressed: Download, Browser, Later, Install Now, Enable/Disable for next startup), `update_download` (`ok|failed`), and `update_result`. Each event also includes the currently running version. No new personal data is collected; the events act as counters without any identifying markers, and the entire transmission remains subject to the `telemetry_enabled` setting.
