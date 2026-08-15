@@ -11,12 +11,161 @@
 #   - Key auth:      putty -i <keyfile.ppk> user@host -P <port>
 
 import os
+import re
+import json
+import datetime
 import subprocess
 import shutil
 from src.config import Connection, AppSettings
 from src.app_logger import logger
 from src.utils.secure_memory import SecureBytes
 from src.sshfs_controller import _is_safe_label
+
+
+# ------------------------------------------------------------------
+# CLI-Verlauf: Best-effort-Mitschnitt für den externen CLI-Zugriff
+# (NeoSSHWinManager-cli.exe). Der CLI-Prozess besitzt nie den enc_key
+# der GUI-Session, daher wird Klartext an die GUI-Instanz gesendet, die
+# den Eintrag verschlüsselt ablegt (siehe cli_log-Handler in
+# src/ui/main_window.py::_ipc_listener). Jeder Fehler hier wird
+# verschluckt — Logging darf die eigentliche SSH-Session nie stören.
+# ------------------------------------------------------------------
+
+_CLI_LOG_MAX_BYTES = 256 * 1024  # Cap pro Verlaufseintrag
+
+# CSI-, OSC- und einfache Zweizeichen-Escapes — reicht für normale
+# Shell-Ein-/Ausgabe; Vollbild-TUI-Programme (vim, htop, less) bleiben
+# nach dem Stripping unübersichtlich, das ist ein akzeptierter Kompromiss
+# für ein Audit-Log, kein Terminal-Replay.
+_ANSI_ESCAPE_RE = re.compile(
+    r'\x1b(?:'
+    r'\[[0-?]*[ -/]*[@-~]'
+    r'|\][^\x07\x1b]*(?:\x07|\x1b\\)'
+    r'|[@-Z\\-_]'
+    r')'
+)
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _strip_ansi(text: str) -> str:
+    """Entfernt nur die VT100/ANSI-Escape-Sequenzen selbst (CSI/OSC/2-Byte).
+    Lässt Steuerzeichen wie Backspace oder \\r unangetastet — dafür ist
+    _render_terminal_text zuständig, das sie tatsächlich auswertet statt sie
+    blind als Zeilenumbruch zu behandeln."""
+    return _ANSI_ESCAPE_RE.sub('', text)
+
+
+def _render_terminal_text(raw: bytes) -> str:
+    """Baut aus rohen Terminal-Bytes ein lesbares Klartext-Transkript, das dem
+    entspricht, was tatsächlich auf dem Bildschirm stand — nicht dem rohen
+    Byte-Strom.
+
+    Der bisherige Ansatz (nur ANSI-Escapes entfernen, jedes \\r als \\n
+    behandeln) ließ zwei Klassen von Störungen im Log stehen, die genau wie
+    "falsch geloggte" Befehle aussahen:
+      - Backspace/DEL (0x08/0x7f) beim Tippfehler-Korrigieren blieben als
+        rohe Steuerzeichen im Text stehen, statt das korrigierte Zeichen
+        tatsächlich zu entfernen — "lz" + Backspace + "s" landete als
+        "lz\\x08 \\x08s" im Log statt als "ls".
+      - Ein einzelnes \\r (ohne \\n) wird von praktisch jedem
+        Fortschrittsbalken (pip, apt, curl, docker pull, npm …) benutzt, um
+        dieselbe Zeile neu zu zeichnen — das wurde bisher als Zeilenumbruch
+        interpretiert und produzierte pro Update eine neue Zeile statt den
+        Endzustand zu zeigen.
+
+    Diese Funktion bildet stattdessen nach, was ein echtes Terminal tut:
+    pro Zeile wird eine Zeichenliste mit Cursorposition geführt; Backspace/
+    DEL löschen das Zeichen links vom Cursor, \\r setzt den Cursor an den
+    Zeilenanfang (nachfolgende Zeichen überschreiben statt einzufügen), \\n
+    schließt die Zeile ab. Kein vollständiger VT100-Emulator — Cursor-
+    Bewegung/Lösch-Sequenzen innerhalb einer Zeile (z.B. von aufwendigen
+    Prompt-Themes) werden weiterhin nur entfernt, nicht ausgewertet; das ist
+    ein bewusster Kompromiss, der den weitaus häufigeren Fall (Tippfehler,
+    Fortschrittsanzeigen) korrekt abdeckt, ohne einen echten Terminal-
+    Emulator nachzubauen.
+    """
+    text = _strip_ansi(raw.decode("utf-8", errors="replace"))
+
+    lines: list[list[str]] = [[]]
+    col = 0
+    for ch in text:
+        if ch == '\n':
+            lines.append([])
+            col = 0
+        elif ch == '\r':
+            col = 0
+        elif ch in ('\x08', '\x7f'):  # Backspace / DEL
+            if col > 0:
+                col -= 1
+                del lines[-1][col]
+        elif ch == '\x07':  # BEL — hörbar, kein sichtbarer Effekt
+            continue
+        elif ch == '\t':
+            lines[-1][col:col] = [' ']
+            col += 1
+        else:
+            if col < len(lines[-1]):
+                lines[-1][col] = ch
+            else:
+                lines[-1].append(ch)
+            col += 1
+
+    return "\n".join("".join(line) for line in lines)
+
+
+def _cap_for_log(text: str) -> tuple[str, bool]:
+    """Kappt Text auf _CLI_LOG_MAX_BYTES (UTF-8). Gibt (text, truncated) zurück."""
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= _CLI_LOG_MAX_BYTES:
+        return text, False
+    return encoded[:_CLI_LOG_MAX_BYTES].decode("utf-8", errors="ignore") + "\n[... gekürzt ...]", True
+
+
+def _send_cli_log(cli_key: str, entry: dict) -> None:
+    """Sendet einen CLI-Verlaufseintrag an die laufende GUI-Instanz.
+
+    Eigenständige, kurze IPC-Verbindung (eigener Connect/Write/Read/Close) —
+    unabhängig vom cli_connect-Handshake in cli_main.py, damit dieser Pfad
+    unverändert bleibt. Kurzer Timeout und vollständig verschluckte Fehler,
+    da Logging den Exit-Code/die Laufzeit des CLI-Tools nie beeinflussen darf.
+    """
+    if not cli_key:
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
+        PIPE_READMODE_MESSAGE = 0x00000002
+        kernel32 = ctypes.windll.kernel32
+
+        if not kernel32.WaitNamedPipeW(pipe_name, 2000):
+            return
+        h_pipe = kernel32.CreateFileW(
+            pipe_name, 0xC0000000, 0, None, 3, 0, None
+        )
+        if h_pipe == -1:
+            return
+        try:
+            mode = ctypes.wintypes.DWORD(PIPE_READMODE_MESSAGE)
+            kernel32.SetNamedPipeHandleState(h_pipe, ctypes.byref(mode), None, None)
+
+            request = json.dumps({"action": "cli_log", "key": cli_key, "entry": entry}).encode("utf-8")
+            written = ctypes.wintypes.DWORD()
+            kernel32.WriteFile(h_pipe, request, len(request), ctypes.byref(written), None)
+
+            # Antwort abräumen (Inhalt irrelevant, best effort) statt die
+            # Pipe mit einer noch ausstehenden Response zu schließen.
+            buf = ctypes.create_string_buffer(4096)
+            read = ctypes.wintypes.DWORD()
+            kernel32.ReadFile(h_pipe, buf, 4096, ctypes.byref(read), None)
+        finally:
+            kernel32.CloseHandle(h_pipe)
+    except Exception:
+        pass
 
 
 def launch_ssh_terminal(conn: Connection, settings: AppSettings) -> tuple[bool, str]:
@@ -114,17 +263,32 @@ def _launch_native_ssh(conn: Connection, settings: AppSettings | None = None) ->
         return False, str(e)
 
 
-def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
+def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None, cli_key: str = None) -> int:
     """
     Starts an interactive SSH shell directly in this terminal via Paramiko.
     No extra window, no ssh.exe subprocess, no SSH_ASKPASS issues.
     Used for CLI mode.
+
+    Returns an exit code so the caller can propagate failures:
+        0   erfolgreich
+        1   Verbindung, Authentifizierung oder Ausführung fehlgeschlagen
+        n   im --exec-Modus der Exit-Code des entfernten Kommandos
+
+    Vorher gab die Funktion nichts zurück und cli_main meldete pauschal 0 —
+    ein vollständig gescheiterter Verbindungsaufbau sah für Aufrufer wie ein
+    Erfolg aus.
+
+    cli_key: der Access-Key, mit dem sich cli_main.py bereits per cli_connect
+    authentifiziert hat. Wird — falls gesetzt — wiederverwendet, um am Ende
+    einen CLI-Verlaufseintrag (Befehl/Session + Ausgabe + Zeitstempel) an die
+    GUI-Instanz zu senden (siehe _send_cli_log). None/leer = kein Logging
+    (z.B. wenn cli_main.py künftig ohne Key aufgerufen werden könnte).
     """
     try:
         import paramiko
     except ImportError:
         print("Error: paramiko is not installed. Please run 'pip install paramiko'.")
-        return
+        return 1
 
     import sys
     import msvcrt
@@ -162,18 +326,66 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
         (_old_in_mode.value & ~ENABLE_PROCESSED_INPUT) | ENABLE_VIRTUAL_TERMINAL_INPUT,
     )
 
-    def _con_write(handle, data: bytes):
-        """Writes bytes directly to a Windows console handle using WriteFile."""
-        written = ctypes.wintypes.DWORD(0)
-        ctypes.windll.kernel32.WriteFile(
-            handle, data, len(data), ctypes.byref(written), None
-        )
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    # Im --exec-Modus arbeitet die CLI für Skripte: dort wird stdout/stderr fast
+    # immer umgeleitet. CONOUT$ ist aber der Konsolenbildschirmpuffer und nicht
+    # der stdout des Prozesses — ein WriteFile dorthin meldet Erfolg, landet
+    # jedoch niemals in der Umleitung des Aufrufers. Deshalb in diesem Modus
+    # ausschließlich über die echten Prozess-Streams schreiben.
+    non_interactive = bool(exec_command)
+
+    def _stream_write(stream, data: bytes):
+        """Schreibt auf den echten Prozess-Stream; übersteht Umleitung."""
+        try:
+            buf = getattr(stream, "buffer", None)
+            if buf is not None:
+                buf.write(data)
+                buf.flush()
+            else:
+                stream.write(data.decode("utf-8", errors="replace"))
+                stream.flush()
+        except Exception:
+            pass
+
+    def _con_write(handle, data: bytes, fallback):
+        """
+        Writes bytes directly to a Windows console handle using WriteFile.
+        Ohne gültiges Konsolenhandle (etwa wenn der Prozess gar keine Konsole
+        hat) geht die Ausgabe auf den echten Stream statt ins Leere.
+        """
+        if handle and handle != INVALID_HANDLE_VALUE:
+            written = ctypes.wintypes.DWORD(0)
+            ok = ctypes.windll.kernel32.WriteFile(
+                handle, data, len(data), ctypes.byref(written), None
+            )
+            if ok and written.value == len(data):
+                return
+        _stream_write(fallback, data)
 
     def _write_stdout(data: bytes):
-        _con_write(_hOut, data)
+        if non_interactive:
+            _stream_write(sys.stdout, data)
+        else:
+            _con_write(_hOut, data, sys.stdout)
 
     def _write_stderr(data: bytes):
-        _con_write(_hErr, data)
+        if non_interactive:
+            _stream_write(sys.stderr, data)
+        else:
+            _con_write(_hErr, data, sys.stderr)
+
+    def _write_status(text: str):
+        """
+        Begleitmeldungen. Im --exec-Modus nach stderr, damit stdout
+        ausschließlich die Ausgabe des entfernten Kommandos enthält und sich
+        sauber weiterverarbeiten lässt.
+        """
+        data = text.encode("utf-8", errors="replace")
+        if non_interactive:
+            _stream_write(sys.stderr, data)
+        else:
+            _con_write(_hOut, data, sys.stdout)
 
     host = conn_data.get("host", "")
     port = int(conn_data.get("port", 22))
@@ -187,7 +399,7 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
     if password:
         password_secure = SecureBytes.from_string(password)
 
-    _write_stdout(f"Verbinde mit {user}@{host}:{port} ...\r\n".encode())
+    _write_status(f"Verbinde mit {user}@{host}:{port} ...\r\n")
 
     client = paramiko.SSHClient()
     # SECURITY FIX: Use RejectPolicy instead of AutoAddPolicy to prevent MITM attacks
@@ -216,7 +428,7 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
                 client.connect(host, port=port, username=user, password="", timeout=15)
     except Exception as e:
         _write_stderr(f"Fehler: SSH-Verbindung fehlgeschlagen: {e}\r\n".encode())
-        return
+        return 1
     finally:
         # SECURITY FIX: Wipe password from memory after connection attempt
         if password_secure:
@@ -224,21 +436,70 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
 
     # ── Non-interaktiver Modus: einzelnen Befehl ausführen und beenden ──
     if exec_command:
+        rc = 1
+        out = b""
+        err = b""
+        error_text = ""
+        started_at = _now_iso()
+        # Kein festes Zeitlimit mehr: 30 s reichten für nichts Ernsthaftes
+        # (Testläufe, npm install, Backups) und brachen mitten in der
+        # Ausführung ab. ssh selbst kennt hier ebenfalls keine Grenze.
+        # Wer eine will, setzt NEOSSH_EXEC_TIMEOUT in Sekunden.
+        _t = os.environ.get("NEOSSH_EXEC_TIMEOUT", "").strip()
         try:
-            stdin_, stdout_, stderr_ = client.exec_command(exec_command, timeout=30)
+            exec_timeout = float(_t) if _t else None
+        except ValueError:
+            exec_timeout = None
+        try:
+            stdin_, stdout_, stderr_ = client.exec_command(exec_command, timeout=exec_timeout)
             out = stdout_.read()
             err = stderr_.read()
+            # Exit-Code des entfernten Kommandos durchreichen, damit Skripte
+            # darauf prüfen können.
+            rc = stdout_.channel.recv_exit_status()
             if out:
                 _write_stdout(out)
             if err:
                 _write_stderr(err)
         except Exception as e:
-            _write_stderr(f"Fehler beim Ausführen des Befehls: {e}\r\n".encode())
+            # socket.timeout & Co. haben oft einen leeren str(e) — dann bliebe
+            # nur "Fehler beim Ausführen des Befehls:" ohne jeden Hinweis.
+            grund = str(e) or type(e).__name__
+            # socket.timeout ist seit Python 3.10 ein Alias von TimeoutError.
+            if isinstance(e, TimeoutError):
+                grund = f"Zeitlimit überschritten ({grund}); ggf. NEOSSH_EXEC_TIMEOUT erhöhen"
+            error_text = f"Fehler beim Ausführen des Befehls: {grund}"
+            _write_stderr((error_text + "\r\n").encode())
+            rc = 1
         finally:
             client.close()
-        return
+
+        if cli_key:
+            log_text = _render_terminal_text(out)
+            stderr_text = _render_terminal_text(err) or error_text
+            if stderr_text:
+                log_text = f"{log_text}\n[stderr]\n{stderr_text}" if log_text else stderr_text
+            log_text, was_truncated = _cap_for_log(log_text)
+            _send_cli_log(cli_key, {
+                "kind": "exec",
+                "command": exec_command,
+                "output": log_text,
+                "exit_code": rc,
+                "started_at": started_at,
+                "ended_at": _now_iso(),
+                "truncated": was_truncated,
+            })
+        return rc
 
     # Interaktive Shell öffnen
+    session_started_at = _now_iso()
+    # Mitschnitt für den CLI-Verlauf — die Remote-PTY echot Eingaben bereits
+    # über den Output-Kanal zurück, ein separates Abgreifen von stdin ist
+    # daher nicht nötig. Nur bis zum Cap gefüllt; überzähliges markiert
+    # transcript_truncated, ohne die eigentliche Konsolen-Ausgabe zu kürzen.
+    transcript = bytearray()
+    transcript_truncated = False
+
     channel = client.invoke_shell(term="xterm-256color", width=220, height=50)
     channel.settimeout(0.0)
 
@@ -283,6 +544,16 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
     stdin_thread = threading.Thread(target=stdin_to_channel, daemon=True)
     stdin_thread.start()
 
+    def _record(data: bytes):
+        """Hängt an den Verlaufs-Mitschnitt an, bis zum Cap; berührt nie die
+        eigentliche Konsolen-Ausgabe (die läuft weiterhin unbegrenzt über
+        _write_stdout/_write_stderr)."""
+        nonlocal transcript_truncated
+        if len(transcript) < _CLI_LOG_MAX_BYTES:
+            transcript.extend(data)
+        else:
+            transcript_truncated = True
+
     try:
         while not channel.closed:
             # Read output from the server and write it directly to stdout
@@ -291,16 +562,19 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
                 if not data:
                     break
                 _write_stdout(data)
+                _record(data)
             elif channel.recv_stderr_ready():
                 data = channel.recv_stderr(4096)
                 if data:
                     _write_stderr(data)
+                    _record(data)
             elif channel.exit_status_ready():
                 # Noch verbleibende Daten lesen
                 while channel.recv_ready():
                     data = channel.recv(4096)
                     if data:
                         _write_stdout(data)
+                        _record(data)
                 break
             else:
                 import time
@@ -317,6 +591,21 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None):
             ctypes.windll.kernel32.SetConsoleMode(_hIn,  _old_in_mode.value)
         except Exception:
             pass
+
+        if cli_key:
+            log_text = _render_terminal_text(bytes(transcript))
+            log_text, cap_truncated = _cap_for_log(log_text)
+            _send_cli_log(cli_key, {
+                "kind": "session",
+                "command": None,
+                "output": log_text,
+                "exit_code": None,
+                "started_at": session_started_at,
+                "ended_at": _now_iso(),
+                "truncated": transcript_truncated or cap_truncated,
+            })
+
+    return 0
 
 
 def _is_safe_ssh_identifier(value: str) -> bool:

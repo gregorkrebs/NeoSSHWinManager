@@ -88,6 +88,20 @@ class Connection:
 
 
 @dataclass
+class CliHistoryEntry:
+    """Ein Eintrag im CLI-Verlauf eines Hosts (siehe UserConnectionManager.get_cli_history)."""
+    id: int
+    conn_id: str
+    kind: str                      # "exec" | "session"
+    command: Optional[str]         # None bei kind="session"
+    output: str
+    exit_code: Optional[int]       # None bei kind="session"
+    truncated: bool
+    started_at: str                # ISO8601 UTC
+    ended_at: Optional[str]
+
+
+@dataclass
 class AppSettings:
     start_with_windows: bool = False
     minimize_to_tray: bool = True

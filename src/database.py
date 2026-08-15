@@ -210,6 +210,24 @@ def init_db() -> None:
                 activated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_checked TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS cli_history (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                conn_id      TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                kind         TEXT NOT NULL,   -- 'exec' | 'session'
+                command_enc  TEXT,   -- verschlüsselter Befehl (nur kind='exec')
+                command_iv   TEXT,
+                output_enc   TEXT,   -- verschlüsselte Ausgabe/Mitschnitt
+                output_iv    TEXT,
+                exit_code    INTEGER,   -- nur kind='exec'
+                truncated    INTEGER NOT NULL DEFAULT 0,
+                started_at   TEXT NOT NULL,   -- ISO8601 UTC
+                ended_at     TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_cli_history_conn
+                ON cli_history(user_id, conn_id, started_at);
         """)
 
         # Migration: Add columns that were introduced after the first release.

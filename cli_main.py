@@ -69,8 +69,13 @@ def _handle_cli_connect(key: str, exec_cmd: str = None) -> int:
         sys.path.insert(0, base)
 
     from src.ssh_launcher import launch_ssh_in_current_terminal
-    launch_ssh_in_current_terminal(conn_data, exec_command=exec_cmd)
-    return 0
+    # Rückgabewert durchreichen: vorher wurde er verworfen und pauschal 0
+    # gemeldet — ein gescheiterter Verbindungsaufbau war für Aufrufer damit
+    # nicht von einem Erfolg zu unterscheiden.
+    # cli_key (derselbe Access-Key wie oben) wird durchgereicht, damit am
+    # Ende ein CLI-Verlaufseintrag an die GUI-Instanz gesendet werden kann.
+    rc = launch_ssh_in_current_terminal(conn_data, exec_command=exec_cmd, cli_key=key)
+    return rc if isinstance(rc, int) else 0
 
 
 def main() -> int:
