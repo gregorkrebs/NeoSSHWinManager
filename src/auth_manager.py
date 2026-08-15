@@ -20,7 +20,7 @@ from src.crypto import (
     hash_password, verify_password, generate_enc_key,
     encrypt_key, decrypt_key, encrypt, decrypt, is_available
 )
-from src.config import Connection, AppSettings
+from src.config import Connection, AppSettings, CliHistoryEntry
 from src.app_logger import logger
 from src.utils.secure_memory import SecureBytes, secure_wipe_bytes
 
@@ -895,6 +895,90 @@ class UserConnectionManager:
                 (conn_id, self._user.id)
             )
         return result.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # CLI-Verlauf
+    # ------------------------------------------------------------------
+
+    # Maximal gespeicherte Einträge pro Host — begrenzt DB-Wachstum bei
+    # dauerhaft genutztem CLI-Zugriff.
+    _CLI_HISTORY_MAX_ROWS = 500
+
+    def add_cli_history(
+        self, conn_id: str, kind: str,
+        command: Optional[str], output: str, exit_code: Optional[int],
+        started_at: str, ended_at: Optional[str], truncated: bool = False,
+    ) -> None:
+        """Speichert einen CLI-Verlaufseintrag (Befehl+Ausgabe verschlüsselt).
+
+        Best effort: wird vom IPC-Listener aufgerufen, nachdem der CLI-Prozess
+        bereits getrennt hat — ein Fehler hier darf die aufrufende SSH-Session
+        nie beeinflusst haben (das ist zu dem Zeitpunkt bereits vorbei), daher
+        werden Fehler geloggt statt propagiert.
+        """
+        try:
+            command_enc, command_iv = (self._encrypt_pw(command) if command else (None, None))
+            output_enc, output_iv = self._encrypt_pw(output or "")
+            with get_connection() as conn:
+                conn.execute(
+                    """INSERT INTO cli_history
+                       (id, user_id, conn_id, kind, command_enc, command_iv,
+                        output_enc, output_iv, exit_code, truncated, started_at, ended_at)
+                       VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (self._user.id, conn_id, kind, command_enc, command_iv,
+                     output_enc, output_iv, exit_code, int(truncated), started_at, ended_at)
+                )
+                # Pruning nach Einfüge-Reihenfolge (id), nicht nach started_at:
+                # eine lang laufende interaktive Session kann später eingefügt
+                # werden als mehrere kurze --exec-Aufrufe, die währenddessen
+                # liefen — started_at-Sortierung könnte sie fälschlich zuerst
+                # verwerfen.
+                conn.execute(
+                    """DELETE FROM cli_history
+                       WHERE conn_id = ? AND user_id = ?
+                       AND id NOT IN (
+                           SELECT id FROM cli_history
+                           WHERE conn_id = ? AND user_id = ?
+                           ORDER BY id DESC LIMIT ?
+                       )""",
+                    (conn_id, self._user.id, conn_id, self._user.id, self._CLI_HISTORY_MAX_ROWS)
+                )
+        except Exception as e:
+            logger.error(f"CLI-Verlauf konnte nicht gespeichert werden: {e}")
+
+    def get_cli_history(self, conn_id: str) -> List[CliHistoryEntry]:
+        """CLI-Verlauf für einen Host, neueste zuerst."""
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM cli_history WHERE conn_id = ? AND user_id = ?
+                   ORDER BY started_at DESC, id DESC""",
+                (conn_id, self._user.id)
+            ).fetchall()
+
+        entries = []
+        for row in rows:
+            command = (self._decrypt_pw(row["command_enc"], row["command_iv"])
+                       if row["command_enc"] else None)
+            output = self._decrypt_pw(row["output_enc"] or "", row["output_iv"] or "")
+            entries.append(CliHistoryEntry(
+                id=row["id"],
+                conn_id=row["conn_id"],
+                kind=row["kind"],
+                command=command,
+                output=output,
+                exit_code=row["exit_code"],
+                truncated=bool(row["truncated"]),
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+            ))
+        return entries
+
+    def clear_cli_history(self, conn_id: str) -> None:
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM cli_history WHERE conn_id = ? AND user_id = ?",
+                (conn_id, self._user.id)
+            )
 
     # ------------------------------------------------------------------
     # Einstellungen

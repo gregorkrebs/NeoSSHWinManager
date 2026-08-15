@@ -78,6 +78,7 @@ _PANEL_ADD      = "add"
 _PANEL_USERS    = "users"
 _PANEL_PROFILE  = "profile"
 _PANEL_TERMINAL = "terminal"
+_PANEL_CLI_HISTORY = "cli_history"
 
 try:
     with open(os.path.join(os.path.dirname(__file__), "..", "version.txt"), "r", encoding="utf-8") as f:
@@ -399,6 +400,33 @@ class MainWindow(FramelessMainWindow):
         PIPE_READMODE_MESSAGE = 0x00000002
         PIPE_WAIT             = 0x00000000
 
+        def _read_full_message(pipe_handle):
+            """Reads one complete message from a message-mode pipe.
+
+            A single ReadFile call with a fixed buffer silently mangles any
+            message larger than that buffer (Win32 message-mode pipes signal
+            this via ReadFile returning False with ERROR_MORE_DATA, not via
+            an error the JSON parser would explain) — the caller would just
+            see a truncated payload fail to parse, with no request ever
+            handled. cli_log entries carry command output and can exceed the
+            old fixed 64KB assumption, so this loops until the message is
+            fully drained. Returns None on a genuine read failure.
+            """
+            ERROR_MORE_DATA = 234
+            MAX_MESSAGE_BYTES = 2 * 1024 * 1024  # Sicherheitsnetz gegen Endlos-Clients
+            chunk = ctypes.create_string_buffer(65536)
+            read = ctypes.wintypes.DWORD()
+            data = bytearray()
+            while True:
+                ok = ctypes.windll.kernel32.ReadFile(pipe_handle, chunk, 65536, ctypes.byref(read), None)
+                data.extend(chunk.raw[:read.value])
+                if ok:
+                    return bytes(data)
+                if ctypes.windll.kernel32.GetLastError() != ERROR_MORE_DATA:
+                    return None
+                if len(data) > MAX_MESSAGE_BYTES:
+                    return None
+
         while self._ipc_running:
             try:
                 sa = _make_pipe_security_attributes()
@@ -406,7 +434,7 @@ class MainWindow(FramelessMainWindow):
                 pipe = ctypes.windll.kernel32.CreateNamedPipeW(
                     self._ipc_pipe_name, PIPE_ACCESS_DUPLEX,
                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    5, 65536, 65536, 5000,
+                    5, 1048576, 1048576, 5000,
                     sa_ptr  # SECURITY FIX (FINDING-01): proper DACL instead of None
                 )
                 if pipe == -1:
@@ -428,11 +456,10 @@ class MainWindow(FramelessMainWindow):
                 except Exception:
                     pass
 
-                buf  = ctypes.create_string_buffer(65536)
-                read = ctypes.wintypes.DWORD()
-                if ctypes.windll.kernel32.ReadFile(pipe, buf, 65536, ctypes.byref(read), None):
+                raw = _read_full_message(pipe)
+                if raw is not None:
                     try:
-                        request = json.loads(buf.value[:read.value].decode('utf-8'))
+                        request = json.loads(raw.decode('utf-8'))
                         if request.get("action") == "cli_connect":
                             # SECURITY FIX (FINDING-01): Rate limit by PID
                             if not _check_rate(connecting_pid):
@@ -476,6 +503,35 @@ class MainWindow(FramelessMainWindow):
                                 response = {"success": True, "password": password}
                             else:
                                 response = {"success": False, "error": "Invalid or expired token."}
+                        elif request.get("action") == "cli_log":
+                            # CLI-Verlauf: gleiche Key-Prüfung und Rate-Limit wie
+                            # cli_connect. Verschlüsselung passiert bewusst hier
+                            # (GUI-Prozess) — der CLI-Prozess besitzt den enc_key
+                            # nie, das Passwort läuft über denselben, DACL-
+                            # beschränkten Pipe-Kanal schon heute im Klartext.
+                            if not _check_rate(connecting_pid):
+                                logger.warning(
+                                    f"IPC: Rate-Limit erreicht für PID {connecting_pid} — "
+                                    "cli_log abgelehnt."
+                                )
+                                response = {"success": False, "error": "Rate-Limit erreicht. Bitte warten."}
+                            else:
+                                conn = self._mgr.get_by_cli_key(request.get("key", ""))
+                                if conn:
+                                    entry = request.get("entry") or {}
+                                    self._mgr.add_cli_history(
+                                        conn.id,
+                                        kind=entry.get("kind", "exec"),
+                                        command=entry.get("command"),
+                                        output=entry.get("output", ""),
+                                        exit_code=entry.get("exit_code"),
+                                        started_at=entry.get("started_at", ""),
+                                        ended_at=entry.get("ended_at"),
+                                        truncated=bool(entry.get("truncated", False)),
+                                    )
+                                    response = {"success": True}
+                                else:
+                                    response = {"success": False, "error": "Ungültiger Access Key."}
                         else:
                             response = {"success": False, "error": "Unbekannte Aktion."}
                         res = json.dumps(response).encode('utf-8')
@@ -1549,6 +1605,11 @@ class MainWindow(FramelessMainWindow):
             v.addSpacing(4)
             v.addWidget(_section(tr("addedit.section.cli")))
             v.addWidget(_row(tr("addedit.cli.label"), tr("addedit.cli.enable") + " ✓"))
+            history_btn = QPushButton(tr("addedit.cli.view_history"))
+            history_btn.setObjectName("secondaryBtn")
+            history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            history_btn.clicked.connect(lambda _checked, cid=conn.id: self._open_cli_history_panel(cid))
+            v.addWidget(history_btn)
 
         v.addStretch()
         self._rp_layout.addWidget(body)
@@ -1563,6 +1624,57 @@ class MainWindow(FramelessMainWindow):
         sip.setObjectName("sysinfoFullPanel")
         self._rp_layout.addWidget(sip)
         self._current_info_panel = sip
+
+    def _open_cli_history_panel(self, conn_id: str):
+        """Show the CLI history (Befehle + Sitzungen via NeoSSHWinManager-cli.exe) for a host."""
+        if self._panel_mode in (_PANEL_EDIT, _PANEL_ADD):
+            if not self._guard_leave_form():
+                return
+        conn = self._mgr.get_by_id(conn_id)
+        if not conn:
+            return
+        # CLI-Zugriff existiert ohnehin nur für SSH-Hosts (im Edit-Formular
+        # für FTP ausgeblendet) — Guard trotzdem der Konsistenz mit den
+        # anderen SSH-only-Panels halber.
+        if self._reject_ftp_action(conn, "ftp.ssh_unsupported"):
+            return
+
+        if self._panel_conn_id and self._panel_conn_id in self._cards:
+            self._cards[self._panel_conn_id].set_info_active(False)
+
+        self._panel_mode = _PANEL_CLI_HISTORY
+        self._panel_conn_id = conn_id
+
+        card = self._cards.get(conn_id)
+        if card:
+            card.set_info_active(True)
+
+        self._set_right_panel_header(tr("panel.header.clihistory"), conn.name.upper())
+        self._rp_info_btn.setVisible(False)
+        self._rp_edit_btn.setVisible(False)
+        self._rp_terminal_btn.setVisible(True)
+        self._rp_mount_btn.setVisible(True)
+        self._sync_rp_mount_button(conn_id)
+        self._rp_del_btn.setVisible(False)
+        self._rp_save_top_btn.setVisible(False)
+        self._rp_cancel_top_btn.setVisible(False)
+        self._rp_close_btn.setVisible(True)
+        self._rp_new_session_btn.setVisible(False)
+        self._rp_btn_bar.setVisible(False)
+        self._rp_edit_btn_bar.setVisible(False)
+
+        self._clear_right_panel_content()
+        self._rp_scroll.setVisible(True)
+        self._terminal_area.setVisible(False)
+        self._build_cli_history_fullpanel(conn)
+        self._right_panel_widget.setVisible(True)
+        self._ensure_panel_sized()
+
+    def _build_cli_history_fullpanel(self, conn: Connection):
+        """Fill the right panel content area with CliHistoryPanel."""
+        from src.ui.cli_history_panel import CliHistoryPanel
+        panel = CliHistoryPanel(conn, self._mgr, parent=self._rp_content, settings=self._mgr.get_settings())
+        self._rp_layout.addWidget(panel)
 
     def _open_edit_panel(self, conn_id: str):
         """Show the inline edit form for the given connection."""
