@@ -13,6 +13,8 @@ import sys
 import shutil
 import time
 import ctypes
+import threading
+import psutil
 from ctypes import wintypes
 from dataclasses import dataclass
 from src.config import Connection
@@ -150,47 +152,103 @@ def _drive_letter_in_use(drive_letter: str) -> bool:
     return bool(bitmask & (1 << idx))
 
 
+def _drive_root_definitely_absent(drive_letter: str) -> bool:
+    """Return True only when Windows reports the definitive no-root state."""
+    letter = drive_letter.rstrip("\\/").rstrip(":").upper()
+    if len(letter) != 1 or letter not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        return False
+    try:
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(
+            ctypes.c_wchar_p(f"{letter}:\\")
+        )
+    except (AttributeError, OSError):
+        return False
+    return drive_type == 1  # DRIVE_NO_ROOT_DIR
+
+
 def _find_sshfs_pid_for_drive(drive_letter: str) -> int | None:
     """
     Findet die PID des sshfs.exe-Prozesses der diesen Laufwerksbuchstaben mounted.
     Sucht in der CommandLine nach dem Buchstaben (z.B. 'F:').
     """
-    # SECURITY FIX: Validate drive letter to prevent command injection
-    letter = drive_letter.rstrip("\\").rstrip(":").upper()
-    if not letter or len(letter) != 1 or not letter.isalpha():
+    # SECURITY FIX: Validate drive letter to prevent command injection.
+    letter = drive_letter.rstrip("\\/").rstrip(":").upper()
+    if len(letter) != 1 or letter not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         return None
-    letter = letter[0]  # Ensure single character
-
     target_arg = f"{letter}:"
 
     try:
-        # Fallback: Use native Windows tasklist if psutil is not available
-        # We search for sshfs.exe and filter manually by CommandLine to find the one with the target drive letter.
-        output = subprocess.check_output(
-            ['wmic', 'process', 'where', "name='sshfs.exe'", 'get', 'CommandLine,ProcessId', '/format:csv'],
-            creationflags=0x08000000,
-            text=True
-        )
-        for line in output.splitlines():
-            if target_arg in line:
-                # WMIC CSV Format: Node,CommandLine,ProcessId
-                parts = line.strip().split(',')
-                if len(parts) >= 3:
-                    return int(parts[-1])
-    except Exception:
-        # Last attempt using tasklist (less details, but better than nothing)
-        try:
-            task_out = subprocess.check_output(['tasklist', '/FI', 'IMAGENAME eq sshfs.exe', '/FO', 'CSV'],
-                                              creationflags=0x08000000, text=True)
-            # Here we unfortunately cannot check the CommandLine, only if it is running. This is a fallback and may lead to false positives if multiple sshfs.exe are running.
-            pass
-        except Exception:
-            pass
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                if (proc.info.get("name") or "").lower() != "sshfs.exe":
+                    continue
+
+                # The mount point is a standalone argv item (for example X:).
+                # Exact matching avoids selecting a different mount merely because
+                # an option or remote path contains the same drive-letter prefix.
+                for arg in proc.info.get("cmdline") or ():
+                    normalized = str(arg).strip().strip('"').rstrip("\\/").upper()
+                    if normalized == target_arg:
+                        return int(proc.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except (psutil.Error, OSError):
+        # Process enumeration is best-effort. The caller can still try WinFsp's
+        # launchctl and verify whether the drive disappeared.
+        pass
 
     return None
 
 
 class SSHFSController:
+
+    def __init__(self):
+        self._process_lock = threading.RLock()
+        self._mount_processes: dict[str, subprocess.Popen] = {}
+        self._label_generations: dict[str, object] = {}
+
+    @staticmethod
+    def _drive_char(drive_letter: str) -> str | None:
+        letter = drive_letter.rstrip("\\/").rstrip(":").upper()
+        if len(letter) == 1 and letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            return letter
+        return None
+
+    def _remember_mount_process(self, drive_letter: str, proc: subprocess.Popen):
+        letter = self._drive_char(drive_letter)
+        if letter:
+            with self._process_lock:
+                self._mount_processes[letter] = proc
+
+    def _forget_mount_process(self, drive_letter: str, expected=None):
+        letter = self._drive_char(drive_letter)
+        if not letter:
+            return
+        with self._process_lock:
+            current = self._mount_processes.get(letter)
+            if expected is None or current is expected:
+                self._mount_processes.pop(letter, None)
+
+    def _get_mount_process(self, drive_letter: str):
+        letter = self._drive_char(drive_letter)
+        if not letter:
+            return None
+        with self._process_lock:
+            proc = self._mount_processes.get(letter)
+            if proc is not None and proc.poll() is not None:
+                self._mount_processes.pop(letter, None)
+                return None
+            return proc
+
+    def _stop_mount_process(self, drive_letter: str, proc: subprocess.Popen):
+        """Best-effort cleanup for a mount process that did not become usable."""
+        try:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        self._forget_mount_process(drive_letter, expected=proc)
 
     @staticmethod
     def check_sshfs_win_installed() -> bool:
@@ -226,7 +284,11 @@ class SSHFSController:
         if not sshfs_exe:
             return MountResult(False, "sshfs.exe nicht gefunden. Bitte SSHFS-Win installieren.")
 
-        letter = conn.drive_letter.rstrip("\\").rstrip(":")
+        letter = self._drive_char(conn.drive_letter)
+        if letter is None:
+            return MountResult(False, f"Ungültiger Laufwerksbuchstabe: {conn.drive_letter!r}")
+        if _drive_letter_in_use(f"{letter}:"):
+            return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.")
 
         logger.info(f"=== SSHFS Mount Debug ===")
         logger.info(f"Connection name: {conn.name}")
@@ -260,8 +322,7 @@ class SSHFSController:
             f"{letter}:",
             f"-p{conn.port}",
             f"-ovolname={safe_name}",
-            "-odebug",
-            "-ologlevel=debug1",
+            "-f",
             f"-o{_ssh_host_key_check_option()}",
             f"-oUserKnownHostsFile={known_hosts_path}",
             "-oreconnect",
@@ -375,20 +436,33 @@ class SSHFSController:
         env = os.environ.copy()
         env["PATH"] = f"{sshfs_bin_dir};{env.get('PATH', '')}"
 
+        proc = None
         try:
             logger.debug(f"SSHFS command: {' '.join(cmd)}")
             logger.info(f"SSHFS bin dir: {sshfs_bin_dir}")
 
+            # Preparing a key or connection can take long enough for another
+            # device to claim the letter, so check again immediately before Popen.
+            if _drive_letter_in_use(f"{letter}:"):
+                return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.")
+
             proc = subprocess.Popen(
                 cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdin=(
+                    subprocess.PIPE
+                    if conn.auth_method in ("password", "ask") and conn.password
+                    else subprocess.DEVNULL
+                ),
+                stdout=subprocess.DEVNULL,
+                # "Quit only" deliberately keeps mounts alive after the GUI exits.
+                # A PIPE would then lose its reader and can block/terminate sshfs.
+                stderr=subprocess.DEVNULL,
                 env=env,
                 creationflags=0x08000000,
             )
 
             logger.info(f"SSHFS process started with PID: {proc.pid}")
+            self._remember_mount_process(letter, proc)
 
             if conn.auth_method in ("password", "ask") and conn.password:
                 try:
@@ -402,88 +476,68 @@ class SSHFSController:
                         proc.stdin.flush()
                         logger.info("Password sent to stdin successfully")
                     finally:
+                        if proc.stdin is not None:
+                            proc.stdin.close()
                         # SECURITY FIX: Wipe password from memory immediately after use
                         password_secure.wipe()
                 except Exception as e:
                     logger.error(f"stdin Fehler: {e}")
+                    self._stop_mount_process(letter, proc)
                     return MountResult(False, f"stdin Fehler: {e}")
 
-            import threading
-            debug_lines = []
-            done = threading.Event()
-
-            def _read_stderr():
+            def _wait_for_exit():
                 try:
-                    for raw in proc.stderr:
-                        line = raw.decode("utf-8", errors="replace").strip()
-                        if not line:
-                            continue
-                        logger.info(f"SSHFS stderr: {line}")
-                        debug_lines.append(line)
-                        if "service sshfs has been started" in line:
-                            logger.info("SSHFS service started successfully")
-                            done.set()
-                            return
-                        for err in ["Permission denied", "Connection refused",
-                                    "Connection reset", "No route to host",
-                                    "mount point in use", "no such identity",
-                                    "bad port", "read: ", "Unable to authenticate",
-                                    "Host key verification failed",
-                                    "REMOTE HOST IDENTIFICATION HAS CHANGED"]:
-                            if err in line:
-                                logger.error(f"SSHFS error detected: {err}")
-                                done.set()
-                                return
+                    proc.wait()
                 except Exception as e:
-                    logger.error(f"Error reading stderr: {e}")
-                    done.set()
+                    logger.debug(f"Error waiting for SSHFS process: {e}")
+                finally:
+                    # Compare-and-remove prevents an old process from deleting a
+                    # newer remount that happens to reuse the same drive letter.
+                    self._forget_mount_process(letter, expected=proc)
 
-            threading.Thread(target=_read_stderr, daemon=True).start()
-            logger.info("Waiting for SSHFS to complete mount...")
-            done.wait(timeout=30)
-            logger.info(f"SSHFS mount wait completed. Done event: {done.is_set()}")
-
-            full = "\n".join(debug_lines)
-            full_lower = full.lower()
-
-            logger.info(f"SSHFS process poll status: {proc.poll()}")
-            logger.info(f"SSHFS stderr output length: {len(full)}")
-            logger.info(f"SSHFS stderr output: {full[:500]}")
-
-            if proc.poll() is None:
-                logger.info("SSHFS process still running, checking drive letter...")
-                time.sleep(0.5)
+            threading.Thread(target=_wait_for_exit, daemon=True).start()
+            logger.info("Waiting for SSHFS drive to become ready...")
+            deadline = time.monotonic() + 30.0
+            stable_polls = 0
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
                 if _drive_letter_in_use(f"{letter}:"):
-                    logger.info(f"Drive {letter}: is in use after 0.5s")
-                    return MountResult(True, f"Laufwerk {letter}: eingebunden (sshfs.exe)")
-                time.sleep(2.0)
-                if _drive_letter_in_use(f"{letter}:"):
-                    logger.info(f"Drive {letter}: is in use after 2.0s")
-                    return MountResult(True, f"Laufwerk {letter}: eingebunden (sshfs.exe)")
-                logger.error(f"Drive {letter}: is NOT in use after waiting")
+                    stable_polls += 1
+                    # It was free before Popen and must now remain present while
+                    # this foreground sshfs process is alive for three polls.
+                    if stable_polls >= 3:
+                        logger.info(
+                            f"Drive {letter}: mounted and SSHFS process is running"
+                        )
+                        return MountResult(
+                            True,
+                            f"Laufwerk {letter}: eingebunden (sshfs.exe)",
+                        )
+                else:
+                    stable_polls = 0
+                time.sleep(0.1)
 
-            if "no such identity" in full_lower:
-                logger.error(f"SSH key not found: {conn.key_path}")
-                return MountResult(False, f"Private Key (IdentityFile) wurde nicht gefunden:\n{conn.key_path}")
-            if "mount point in use" in full_lower:
-                logger.error(f"Mount point {letter}: already in use")
-                return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt (oder wird gerade getrennt).")
-            if "permission denied" in full_lower or "unable to authenticate" in full_lower:
-                logger.error("SSHFS authentication failed")
-                return MountResult(False, "Authentifizierung fehlgeschlagen.\nBitte Passwort oder SSH-Key überprüfen.")
-            if "connection refused" in full_lower:
-                logger.error(f"SSHFS connection refused to {conn.host}:{conn.port}")
-                return MountResult(False, f"Verbindung abgelehnt ({conn.host}:{conn.port}).\nIst der SSH-Dienst auf dem Zielgerät aktiv?")
-            if "connection reset" in full_lower or "read: " in full_lower:
-                logger.error(f"SSHFS connection reset to {conn.host}:{conn.port}")
-                return MountResult(False,
-                    f"Die Verbindung wurde unterbrochen oder zurückgesetzt ({conn.host}:{conn.port}).\n"
-                    f"Mögliches Netzwerkproblem oder Firewall-Blockade.")
-
-            logger.error(f"SSHFS unknown error. Full output: {full}")
-            return MountResult(False, full[-300:] or "Ein unbekannter Fehler in sshfs.exe ist aufgetreten.")
+            returncode = proc.poll()
+            logger.error(
+                f"Drive {letter}: did not become ready; sshfs returncode={returncode}"
+            )
+            self._stop_mount_process(letter, proc)
+            if returncode is not None:
+                return MountResult(
+                    False,
+                    f"sshfs.exe wurde vor dem Einbinden beendet (Code {returncode}).\n"
+                    "Bitte Zugangsdaten, SSH-Key und Server-Verbindung prüfen.",
+                )
+            return MountResult(
+                False,
+                f"Zeitüberschreitung beim Einbinden von Laufwerk {letter}:.",
+            )
 
         except Exception as e:
+            if proc is not None:
+                self._stop_mount_process(letter, proc)
+            logger.exception(f"Unexpected SSHFS mount error for {letter}:")
             return MountResult(False, str(e))
 
     # ------------------------------------------------------------------
@@ -502,16 +556,34 @@ class SSHFSController:
           - WNetGetConnection returns the UNC path → set MountPoints2 key
         """
         import winreg
-        import threading
-
-        letter = conn.drive_letter.rstrip("\\").rstrip(":")
+        letter = self._drive_char(conn.drive_letter)
+        if letter is None:
+            return
         name = conn.name
+        generation = object()
+        with self._process_lock:
+            self._label_generations[letter] = generation
+
+        def is_current_mount() -> bool:
+            with self._process_lock:
+                is_current = self._label_generations.get(letter) is generation
+            return is_current and _drive_letter_in_use(f"{letter}:")
+
+        def finish_generation():
+            with self._process_lock:
+                if self._label_generations.get(letter) is generation:
+                    self._label_generations.pop(letter, None)
 
         def _apply():
             if delay > 0:
                 time.sleep(delay)
 
             from src.app_logger import logger
+
+            if not is_current_mount():
+                logger.debug(f"Label: skip stale update for {letter}:")
+                finish_generation()
+                return
 
             # Check if direct WinFsp mount or net use
             actual_unc = self._get_actual_unc(letter)
@@ -532,6 +604,9 @@ class SSHFSController:
             # Registry DriveIcons – Explorer-Override (höchste Priorität)
             # SECURITY FIX: Validate registry key name to prevent registry traversal/injection
             try:
+                if not is_current_mount():
+                    finish_generation()
+                    return
                 di_path = (
                     f"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\DriveIcons\\{letter}"
                 )
@@ -552,6 +627,9 @@ class SSHFSController:
                     "Explorer\\MountPoints2"
                 )
                 try:
+                    if not is_current_mount():
+                        finish_generation()
+                        return
                     reg_key = actual_unc.replace("\\", "#")
                     # SECURITY FIX: Validate registry key and value to prevent registry injection
                     if not _is_safe_label(name):
@@ -567,11 +645,16 @@ class SSHFSController:
 
             # Notify shell – ONLY for this drive letter
             try:
-                path_w = f"{letter}:\\".encode("utf-16le")
+                if not is_current_mount():
+                    finish_generation()
+                    return
+                path_w = ctypes.c_wchar_p(f"{letter}:\\")
                 ctypes.windll.shell32.SHChangeNotify(0x00000100, 0x0005, path_w, None)
                 ctypes.windll.shell32.SHChangeNotify(0x00008000, 0x0000, None, None)
             except Exception:
                 pass
+            finally:
+                finish_generation()
 
         threading.Thread(target=_apply, daemon=True).start()
 
@@ -594,11 +677,10 @@ class SSHFSController:
     # ------------------------------------------------------------------
 
     def unmount(self, drive_letter: str) -> MountResult:
-        letter = drive_letter.rstrip("\\")
-        if not letter.endswith(":"):
-            letter += ":"
-        letter_up = letter.upper()
-        drive_char = letter_up[0]
+        drive_char = self._drive_char(drive_letter)
+        if drive_char is None:
+            return MountResult(False, f"Ungültiger Laufwerksbuchstabe: {drive_letter!r}")
+        letter_up = f"{drive_char}:"
 
         try:
             from src.app_logger import logger
@@ -609,10 +691,6 @@ class SSHFSController:
             if logger:
                 logger.debug(f"Unmount {letter_up}: {msg}")
 
-        def verify(after_sec=0.5) -> bool:
-            time.sleep(after_sec)
-            return not _drive_letter_in_use(letter_up)
-
         log("Start unmount")
 
         # Read UNC before unmount (for net use mounts)
@@ -620,23 +698,62 @@ class SSHFSController:
         is_network_mount = unc_before is not None
         log(f"Mount type: {'net use' if is_network_mount else 'WinFsp direct'} | UNC={unc_before!r}")
 
+        def verify(after_sec=0.5) -> bool:
+            time.sleep(after_sec)
+            if not _drive_letter_in_use(letter_up):
+                return True
+            return (
+                not is_network_mount
+                and _find_sshfs_pid_for_drive(drive_char) is None
+                and _drive_root_definitely_absent(letter_up)
+            )
+
         def cleanup():
+            if tracked_proc is not None:
+                self._forget_mount_process(drive_char, expected=tracked_proc)
             self._cleanup_drive_label(letter_up, known_unc=unc_before)
+
+        # Prefer the process handle retained at mount time. Process discovery is
+        # only needed after an application restart or for legacy mounts.
+        tracked_proc = None if is_network_mount else self._get_mount_process(drive_char)
+        direct_pid = (
+            tracked_proc.pid
+            if tracked_proc is not None
+            else (None if is_network_mount else _find_sshfs_pid_for_drive(drive_char))
+        )
+
+        # Unmount is intentionally idempotent. WinFsp or the polling timer may
+        # remove the drive before this worker starts; that is already success.
+        drive_present = _drive_letter_in_use(letter_up)
+        if (
+            not is_network_mount
+            and direct_pid is None
+            and (
+                not drive_present
+                or _drive_root_definitely_absent(letter_up)
+            )
+        ):
+            log("Drive is already disconnected")
+            cleanup()
+            return MountResult(True, f"Laufwerk {letter_up} war bereits getrennt.")
 
         # ── Strategy A: Direct WinFsp Mount ──────────────────────────
         if not is_network_mount:
             # Step 1: Find and terminate sshfs.exe process for this drive letter
-            pid = _find_sshfs_pid_for_drive(drive_char)
+            pid = direct_pid
             log(f"sshfs PID for {drive_char}: = {pid!r}")
 
             if pid:
                 try:
-                    subprocess.run(
+                    kill_result = subprocess.run(
                         ["taskkill", "/F", "/PID", str(pid)],
                         capture_output=True, timeout=5,
                         creationflags=0x08000000,
                     )
-                    log(f"PID {pid} terminated.")
+                    if kill_result.returncode == 0:
+                        log(f"PID {pid} terminated.")
+                    else:
+                        log(f"taskkill PID {pid} returned {kill_result.returncode}")
                 except Exception as e:
                     log(f"taskkill PID error: {e}")
 
@@ -647,20 +764,26 @@ class SSHFSController:
                 log("No sshfs process found for this drive letter.")
 
             # Step 2: WinFsp launchctl as fallback
-            for winfsp_bin in [
+            winfsp_bin = next((path for path in [
                 r"C:\Program Files\WinFsp\bin\launchctl.exe",
+                r"C:\Program Files\WinFsp\bin\launchctl-x64.exe",
+                r"C:\Program Files\WinFsp\bin\launchctl-a64.exe",
+                r"C:\Program Files\WinFsp\bin\launchctl-x86.exe",
                 r"C:\Program Files (x86)\WinFsp\bin\launchctl.exe",
-            ]:
-                if os.path.exists(winfsp_bin):
-                    for cls in ["sshfs", "sshfs-win"]:
-                        try:
-                            subprocess.run(
-                                [winfsp_bin, "stop", cls, drive_char],
-                                capture_output=True, timeout=5,
-                                creationflags=0x08000000,
-                            )
-                        except Exception:
-                            pass
+                r"C:\Program Files (x86)\WinFsp\bin\launchctl-x64.exe",
+                r"C:\Program Files (x86)\WinFsp\bin\launchctl-a64.exe",
+                r"C:\Program Files (x86)\WinFsp\bin\launchctl-x86.exe",
+            ] if os.path.exists(path)), None)
+            if winfsp_bin:
+                for cls in ["sshfs", "sshfs-win"]:
+                    try:
+                        subprocess.run(
+                            [winfsp_bin, "stop", cls, drive_char],
+                            capture_output=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
 
             if verify(1.0):
                 cleanup()
@@ -733,8 +856,18 @@ class SSHFSController:
             time.sleep(1.0)
             if not _drive_letter_in_use(letter_up):
                 return True
+            if (
+                _find_sshfs_pid_for_drive(drive_char) is None
+                and _drive_root_definitely_absent(letter_up)
+            ):
+                return True
 
-        return not _drive_letter_in_use(letter_up)
+        if not _drive_letter_in_use(letter_up):
+            return True
+        return (
+            _find_sshfs_pid_for_drive(drive_char) is None
+            and _drive_root_definitely_absent(letter_up)
+        )
 
     # ------------------------------------------------------------------
     # Label Cleanup
@@ -743,7 +876,11 @@ class SSHFSController:
     def _cleanup_drive_label(self, drive_letter: str, known_unc: str | None = None):
         import winreg
         try:
-            letter = drive_letter.rstrip("\\").rstrip(":")
+            letter = self._drive_char(drive_letter)
+            if letter is None:
+                return
+            with self._process_lock:
+                self._label_generations.pop(letter, None)
 
             # Remove DriveIcons ONLY for this drive letter
             di_path = (
@@ -769,7 +906,7 @@ class SSHFSController:
 
             # Notify shell ONLY for this drive letter
             ctypes.windll.shell32.SHChangeNotify(
-                0x00000080, 0x0005, f"{letter}:\\".encode("utf-16le"), None
+                0x00000080, 0x0005, ctypes.c_wchar_p(f"{letter}:\\"), None
             )
         except Exception:
             pass
