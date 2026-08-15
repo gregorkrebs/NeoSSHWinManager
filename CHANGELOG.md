@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- SSHFS drives no longer disappear because their long-running process lost or blocked on GUI-owned debug pipes. Mounts now run in foreground mode with parent-independent standard handles, retain their process handle, and require a free drive letter that becomes stably available.
+- Disconnect now finds the exact SSHFS process through the bundled psutil dependency instead of the deprecated WMIC command, treats an already absent drive as success, and cancels stale Explorer label updates that could create ghost-drive entries.
+
+---
+
 ## [1.5.4]
 
 ### Added
