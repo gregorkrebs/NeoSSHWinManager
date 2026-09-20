@@ -49,13 +49,13 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pass-helper":
 
 # ── 0.2 Elevated Rechte-Reparatur-Helfer (via UAC-Relaunch, siehe
 # src/permission_repair.py) ─────────────────────────────────────────────────
-# Headless: repariert NUR Eigentümer und Rechte und beendet sich, keine GUI,
-# kein Single-Instance-Check, kein zweiter Tray-Eintrag.
-# Aufruf: --repair-permissions "<pfad>[;<pfad>...]" ["<ziel-sid>"]
-# Die Ziel-SID nennt den Benutzer, dem der Ordner gehören soll. Sie ist nötig,
-# weil bei der UAC-Abfrage die Zugangsdaten eines *anderen* Administrators
-# eingegeben werden können — ohne sie würde die Reparatur den Datenordner an
-# diesen Administrator übergeben statt an den eigentlichen Benutzer.
+# Headless: repairs owner and permissions only, then exits — no GUI, no
+# single-instance check, no second tray entry.
+# Usage: --repair-permissions "<path>[;<path>...]" ["<target-sid>"]
+# The target SID names the user the folder should belong to. It is required
+# because the UAC prompt can be answered with the credentials of a *different*
+# administrator — without it, the repair would hand the data folder to that
+# administrator instead of the actual user.
 if len(sys.argv) > 2 and sys.argv[1] == "--repair-permissions":
     sys.path.insert(0, os.path.dirname(__file__))
     from src.permission_repair import repair_owner
