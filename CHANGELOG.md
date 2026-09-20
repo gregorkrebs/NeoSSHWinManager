@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.5.6-dev]
+
+### Fixed
+
+- **The app locked itself out of its own data folder on startup and then crashed on every launch (GitHub issue #22, affects 1.4.0–1.5.5).** The CWE-732 ACL hardening introduced in 1.4.0 replaced the DACL on `%APPDATA%\SSHWinManager` and `data.db` with a single ACE granting the owner `FILE_GENERIC_READ | FILE_GENERIC_WRITE` — a mask that omits `FILE_TRAVERSE`, `DELETE` and `WRITE_DAC`, and that removed SYSTEM and Administrators entirely. Without `FILE_TRAVERSE` nothing inside the folder can be opened on any installation that does not hand out `SeChangeNotifyPrivilege` ("bypass traverse checking"), which security-hardened Windows 10 policies routinely withhold: startup died with `GetFileSecurity: Access denied` (1.5.2) or `sqlite3.OperationalError: unable to open database file` (1.5.3–1.5.5). Without `WRITE_DAC` the next start could not undo it, and because the app re-applied the same ACL on every launch, a manual `icacls /reset` held only until the next start. Removing Administrators is why launching as administrator did not help either. The owner ACE now grants full access (SYSTEM included — it can take ownership of any file regardless, so excluding it bought no security), directory ACEs are inheritable, and hardening that would cost the app access to its own data is detected and rolled back instead of persisted. Other users on the machine still have no access to the credential database.
+- **The permission repair could not repair permissions.** `repair_owner()` only ever rewrote the *owner* field, never the DACL, so it had no effect on the failure above — hence "regardless of whether you click Yes or No, the app crashes" in the report. It now resets the DACL as well. The startup check also tests whether the folder is actually usable instead of inferring it from the owner field, and repairs what it can in-process first: rewriting a DACL only needs `WRITE_DAC`, which the owner always holds implicitly, so the common case is fixed silently with no UAC prompt and no dialog at all.
+- **An elevated repair could hand the data folder to the wrong account.** If the UAC prompt was answered with a *different* administrator's credentials, the elevated helper took ownership for that administrator, since it read `%USERNAME%` from its own environment. The user's SID is now passed to the helper explicitly (`--repair-permissions "<paths>" "<sid>"`).
+- The current user's SID is read from the process token instead of being looked up from `%USERNAME%`. The environment variable is inherited from whatever started the app and can resolve to a different account (renamed account, a domain account sharing the name, `runas`, a scheduled task) — writing an owner-only DACL for the wrong SID is what makes the lockout permanent.
+- A data folder that still cannot be opened after the repair now explains the problem, names the folder and gives the `takeown`/`icacls` commands to fix it, instead of crashing with a stack trace into `crash_report.txt`.
+
+---
+
 ## [1.5.5] — 2026-08-16
 
 ### Added

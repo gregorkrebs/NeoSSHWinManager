@@ -53,6 +53,8 @@
   "prereq.dialog.exit": "Programma afsluiten",
   "permrepair.title": "Rechten herstellen",
   "permrepair.body": "NeoSSHWinManager moet eenmalig de bestandsrechten in de gegevensmap herstellen (overblijfsel van een oudere installatie/update). Dit vereist kort beheerdersrechten (er volgt een UAC-melding). Nu herstellen?",
+  "permrepair.blocked.title": "Gegevensmap niet toegankelijk",
+  "permrepair.blocked.body": "NeoSSHWinManager kan zijn gegevensmap niet openen:\n\n{folder}\n\nDe Windows-rechten erop weigeren uw account toegang en het automatische herstel is niet gelukt. Om dit handmatig op te lossen, open een opdrachtprompt als administrator en voer uit:\n\n    takeown /F \"{folder}\" /R /D J\n    icacls \"{folder}\" /reset /T /C\n\nDe toepassing wordt nu afgesloten.",
   "dialog.cancel": "Annuleren",
   "dialog.save": "Opslaan",
   "dialog.close": "Sluiten",

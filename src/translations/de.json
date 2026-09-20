@@ -53,6 +53,8 @@
   "prereq.dialog.exit": "Programm beenden",
   "permrepair.title": "Berechtigungen reparieren",
   "permrepair.body": "NeoSSHWinManager muss einmalig die Dateiberechtigungen im Datenordner reparieren (Rückstand aus einer älteren Installation/einem Update). Dafür ist kurz eine Administratorrechte-Freigabe nötig (UAC-Abfrage folgt). Jetzt reparieren?",
+  "permrepair.blocked.title": "Datenordner nicht zugänglich",
+  "permrepair.blocked.body": "NeoSSHWinManager kann seinen Datenordner nicht öffnen:\n\n{folder}\n\nDie Windows-Berechtigungen darauf verweigern Ihrem Konto den Zugriff, und die automatische Reparatur war nicht erfolgreich. Zum manuellen Beheben eine Eingabeaufforderung als Administrator öffnen und ausführen:\n\n    takeown /F \"{folder}\" /R /D J\n    icacls \"{folder}\" /reset /T /C\n\nDie Anwendung wird jetzt beendet.",
   "dialog.cancel": "Abbrechen",
   "dialog.save": "Speichern",
   "dialog.close": "Schließen",

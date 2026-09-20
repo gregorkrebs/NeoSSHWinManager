@@ -49,13 +49,19 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pass-helper":
 
 # ── 0.2 Elevated Rechte-Reparatur-Helfer (via UAC-Relaunch, siehe
 # src/permission_repair.py) ─────────────────────────────────────────────────
-# Headless: läuft NUR die Eigentümer-Übernahme und beendet sich, keine GUI,
+# Headless: repariert NUR Eigentümer und Rechte und beendet sich, keine GUI,
 # kein Single-Instance-Check, kein zweiter Tray-Eintrag.
+# Aufruf: --repair-permissions "<pfad>[;<pfad>...]" ["<ziel-sid>"]
+# Die Ziel-SID nennt den Benutzer, dem der Ordner gehören soll. Sie ist nötig,
+# weil bei der UAC-Abfrage die Zugangsdaten eines *anderen* Administrators
+# eingegeben werden können — ohne sie würde die Reparatur den Datenordner an
+# diesen Administrator übergeben statt an den eigentlichen Benutzer.
 if len(sys.argv) > 2 and sys.argv[1] == "--repair-permissions":
     sys.path.insert(0, os.path.dirname(__file__))
     from src.permission_repair import repair_owner
     _paths = [Path(p) for p in sys.argv[2].split(";") if p]
-    sys.exit(0 if repair_owner(_paths) else 1)
+    _target_sid = sys.argv[3] if len(sys.argv) > 3 else None
+    sys.exit(0 if repair_owner(_paths, _target_sid) else 1)
 
 # ── 0.5 CLI-Modus ist nicht Sache der GUI-EXE ───────────────────────────────
 # Eine --windowed EXE hat keine nutzbare stdin/stdout im Parent-Terminal.
@@ -307,12 +313,25 @@ def main():
     app.setPalette(palette)
 
     # ── 3. Database Initialization ────────────────────────────────
-    # One-time repair check first: fixes ownership left over from an older
-    # install/update (see src/permission_repair.py) before init_db() tries
-    # to harden permissions on it.
+    # Repair check first: makes the data folder usable again if an older
+    # version locked us out of it or an install/update left it owned by
+    # another account (see src/permission_repair.py), before init_db() runs.
     from src.database import data_dir
-    from src.permission_repair import run_startup_check
-    run_startup_check(data_dir())
+    from src.permission_repair import is_accessible, run_startup_check
+    _data_dir = data_dir()
+    run_startup_check(_data_dir)
+
+    # If the folder is still unusable, say so in plain words instead of dying
+    # in init_db() with "unable to open database file" and a stack trace the
+    # user cannot act on (GitHub issue #22).
+    if not is_accessible(_data_dir):
+        from src.ui.dialogs.styled_message_box import StyledMessageBox
+        StyledMessageBox.critical(
+            None,
+            tr("permrepair.blocked.title"),
+            tr("permrepair.blocked.body", folder=str(_data_dir)),
+        )
+        sys.exit(1)
 
     init_db()
 

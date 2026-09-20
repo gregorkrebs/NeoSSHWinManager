@@ -26,64 +26,187 @@ import logging
 _db_logger = logging.getLogger(__name__)
 
 if sys.platform == 'win32':
+    import win32api
     import win32security
     import ntsecuritycon as con
     import pywintypes
 
+    # Full access for the owner. The old code granted only
+    # FILE_GENERIC_READ | FILE_GENERIC_WRITE, which leaves out FILE_TRAVERSE,
+    # DELETE and WRITE_DAC — see _set_secure_permissions() for why that locked
+    # the app out of its own data folder (GitHub issue #22).
+    _FULL = con.FILE_ALL_ACCESS
+    _SYSTEM_SID = 'S-1-5-18'   # NT AUTHORITY\SYSTEM, language-independent
 
-def _set_secure_permissions(path: Path) -> None:
+
+def current_user_sid():
+    """SID of the account this process actually runs as, or None.
+
+    os.environ['USERNAME'] + LookupAccountName() is only a guess: the value is
+    inherited from whatever started us and can resolve to a *different* account
+    than the one we run as (renamed account, a domain account that shares the
+    name, a process launched via runas or a scheduled task). An owner-only DACL
+    built for the wrong SID locks the app out of its own data folder for good,
+    so ask the process token — which cannot be wrong — and keep the env-var
+    lookup as a fallback for the rare case the token query fails.
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
+        )
+        return win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    except Exception as e:
+        _db_logger.debug(f"Token-SID nicht ermittelbar, nutze USERNAME: {e}")
+    username = os.environ.get('USERNAME') or os.environ.get('USER')
+    if not username:
+        return None
+    try:
+        return win32security.LookupAccountName(None, username)[0]
+    except Exception as e:
+        _db_logger.debug(f"LookupAccountName({username}) fehlgeschlagen: {e}")
+        return None
+
+
+def _is_usable(path: Path) -> bool:
+    """Can *we* still use `path` with the permissions currently on it?
+
+    A real open/create, because os.access() on Windows only looks at the
+    read-only attribute and happily reports success on a path whose DACL
+    denies us everything.
+    """
+    try:
+        if path.is_dir():
+            # PID in the name: a second instance starting at the same moment
+            # must not delete our probe out from under us and make us report a
+            # perfectly fine folder as locked.
+            probe = path / f".permcheck-{os.getpid()}.tmp"
+            with open(probe, 'wb'):
+                pass
+            try:
+                os.unlink(probe)
+            except OSError:
+                pass
+        else:
+            with open(path, 'r+b'):
+                pass
+        return True
+    except OSError as e:
+        _db_logger.warning(f"Zugriffstest fehlgeschlagen für {path}: {e}")
+        return False
+
+
+def _set_secure_permissions(path: Path, user_sid=None, verify: bool = True) -> None:
     """
     Set secure file permissions on the database file.
     - Unix/Linux/macOS: 600 (owner read/write only)
-    - Windows: Restricted ACL (owner only)
+    - Windows: DACL granting full access to the current user and SYSTEM only
 
-    Missing username or a nonexistent path are caller/environment bugs and
-    still raise (see tests/test_security.py::TestWindowsACL). Reading and
-    writing the DACL are both best-effort against ERROR_ACCESS_DENIED: they
-    need WRITE_DAC/READ_CONTROL, which the current token only gets implicitly
-    if it actually owns the file. Files created while running as the built-in
-    Administrator account end up owned by the BUILTIN\\Administrators *group*
-    instead of the user, and once UAC Admin Approval Mode is enabled for that
-    account the normal (non-elevated) token no longer carries that group, so
-    DACL access is denied. A prior broken/hardened ACL left on disk (e.g. from
-    an older buggy version) can deny access even to an elevated token. That's
-    an ownership/ACL problem for src/permission_repair.py to fix, not
-    something to crash app startup over — log and keep whatever permissions
-    already exist. Any other error (e.g. the path not existing at all) is a
-    caller/environment bug and still raises.
+    The DACL replaces (does not extend) whatever %APPDATA% inherits down, so
+    other standard users and — deliberately, this is the CWE-732 hardening —
+    local administrators lose access to the credential database.
+
+    Two rules keep that hardening from turning into a self-lockout (GitHub
+    issue #22: the app locked itself out of %APPDATA%\\SSHWinManager on Windows
+    10 and then crashed on every start, with no way back short of icacls):
+
+    1. Grant FILE_ALL_ACCESS, not FILE_GENERIC_READ | FILE_GENERIC_WRITE. The
+       generic pair omits FILE_TRAVERSE (needed to open *anything* below the
+       data folder unless the account happens to hold SeChangeNotifyPrivilege,
+       which hardened installs remove), DELETE (SQLite's -wal/-shm cleanup) and
+       WRITE_DAC (without it the next start cannot repair the ACL it just
+       wrote). SYSTEM is kept because it can take ownership of any file anyway,
+       so excluding it buys no security and only breaks backup/AV/repair.
+    2. Verify afterwards that the path is still usable and roll the previous
+       DACL back if it is not. Whatever the environment does with SIDs and
+       policies, the app must never leave itself a folder it cannot open.
+
+    Reading and writing the DACL stay best-effort against ERROR_ACCESS_DENIED:
+    they need READ_CONTROL/WRITE_DAC, which the current token only gets
+    implicitly if it owns the file. Files created while running as the built-in
+    Administrator account can end up owned by the BUILTIN\\Administrators
+    *group* instead of the user, and once UAC Admin Approval Mode is enabled
+    for that account the normal token no longer carries that group. That is an
+    ownership problem for src/permission_repair.py to fix, not something to
+    crash app startup over — log and keep whatever permissions already exist.
+    Any other error (e.g. the path not existing at all) is a caller bug and
+    still raises.
+
+    `user_sid` overrides who the DACL is written for; src/permission_repair.py
+    passes the SID of the user being repaired, which is not necessarily the
+    account the (elevated) repair itself runs as. `verify` must be turned off
+    in that case: the usability probe can only test our own access, and a
+    repair that hands the folder back to somebody else would always fail it.
     """
-    if sys.platform == 'win32':
-        try:
-            sd = win32security.GetFileSecurity(
-                str(path), win32security.DACL_SECURITY_INFORMATION
-            )
-        except pywintypes.error as e:
-            if e.winerror == 5:  # ERROR_ACCESS_DENIED
-                _db_logger.warning(f"Konnte ACL nicht lesen (Zugriff verweigert) für {path}: {e}")
-                return
-            raise
-        dacl = win32security.ACL()
-        username = os.environ.get('USERNAME') or os.environ.get('USER')
-        if not username:
-            raise RuntimeError(
-                "ACL-Setzung fehlgeschlagen: Kein Benutzername in der Umgebung (USERNAME/USER)."
-            )
-        user_sid = win32security.LookupAccountName(None, username)[0]
-        dacl.AddAccessAllowedAce(
-            win32security.ACL_REVISION,
-            con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE,
-            user_sid
-        )
-        sd.SetSecurityDescriptorDacl(1, dacl, 0)
-        try:
-            win32security.SetFileSecurity(
-                str(path), win32security.DACL_SECURITY_INFORMATION, sd
-            )
-            _db_logger.debug(f"ACL gesetzt (nur Eigentümer): {path}")
-        except Exception as e:
-            _db_logger.warning(f"Konnte sichere Berechtigungen nicht setzen für {path}: {e}")
-    else:
+    if sys.platform != 'win32':
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        return
+
+    path = Path(path)
+    try:
+        sd = win32security.GetFileSecurity(
+            str(path), win32security.DACL_SECURITY_INFORMATION
+        )
+    except pywintypes.error as e:
+        if e.winerror == 5:  # ERROR_ACCESS_DENIED
+            _db_logger.warning(f"Konnte ACL nicht lesen (Zugriff verweigert) für {path}: {e}")
+            return
+        raise
+
+    if user_sid is None:
+        user_sid = current_user_sid()
+    if user_sid is None:
+        raise RuntimeError(
+            "ACL-Setzung fehlgeschlagen: Konnte die SID des aktuellen Benutzers nicht ermitteln."
+        )
+
+    # Subfolders/files created later must inherit the same access, otherwise
+    # every new file falls back to the token default DACL and the folder ends
+    # up with a patchwork of permissions.
+    ace_flags = (
+        con.OBJECT_INHERIT_ACE | con.CONTAINER_INHERIT_ACE if path.is_dir() else 0
+    )
+
+    dacl = win32security.ACL()
+    dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, ace_flags, _FULL, user_sid)
+    try:
+        dacl.AddAccessAllowedAceEx(
+            win32security.ACL_REVISION, ace_flags, _FULL,
+            win32security.ConvertStringSidToSid(_SYSTEM_SID),
+        )
+    except Exception as e:   # pragma: no cover – SYSTEM always resolves
+        _db_logger.debug(f"SYSTEM-SID nicht auflösbar: {e}")
+
+    previous_dacl = sd.GetSecurityDescriptorDacl()
+    sd.SetSecurityDescriptorDacl(1, dacl, 0)
+    try:
+        win32security.SetFileSecurity(
+            str(path), win32security.DACL_SECURITY_INFORMATION, sd
+        )
+    except Exception as e:
+        _db_logger.warning(f"Konnte sichere Berechtigungen nicht setzen für {path}: {e}")
+        return
+
+    if not verify or _is_usable(path):
+        _db_logger.debug(f"ACL gesetzt (nur Eigentümer + SYSTEM): {path}")
+        return
+
+    # Hardening cost us access to our own data — undo it rather than leave the
+    # app unable to start. Losing the hardening is recoverable, a locked folder
+    # in %APPDATA% is not.
+    _db_logger.error(
+        f"Sichere ACL hätte den Zugriff auf {path} gesperrt — vorherige Rechte werden "
+        "wiederhergestellt (Daten bleiben erreichbar, Härtung übersprungen)."
+    )
+    try:
+        # Restore exactly what was read, including the "no DACL present" case.
+        sd.SetSecurityDescriptorDacl(0 if previous_dacl is None else 1, previous_dacl, 0)
+        win32security.SetFileSecurity(
+            str(path), win32security.DACL_SECURITY_INFORMATION, sd
+        )
+    except Exception as e:
+        _db_logger.error(f"Rücknahme der ACL fehlgeschlagen für {path}: {e}")
 
 
 def data_dir() -> Path:

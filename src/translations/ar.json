@@ -53,6 +53,8 @@
   "prereq.dialog.exit": "إنهاء البرنامج",
   "permrepair.title": "إصلاح الأذونات",
   "permrepair.body": "يحتاج NeoSSHWinManager إلى إصلاح أذونات الملفات في مجلد البيانات مرة واحدة (بقايا من تثبيت/تحديث قديم). يتطلب هذا رفع صلاحيات المسؤول لفترة وجيزة (سيظهر طلب UAC). هل تريد الإصلاح الآن؟",
+  "permrepair.blocked.title": "مجلد البيانات غير قابل للوصول",
+  "permrepair.blocked.body": "تعذر على NeoSSHWinManager فتح مجلد البيانات الخاص به:\n\n{folder}\n\nأذونات Windows عليه تمنع حسابك من الوصول، ولم ينجح الإصلاح التلقائي. لإصلاحه يدوياً، افتح موجه الأوامر كمسؤول ونفّذ:\n\n    takeown /F \"{folder}\" /R /D Y\n    icacls \"{folder}\" /reset /T /C\n\nسيتم إغلاق التطبيق الآن.",
   "dialog.cancel": "إلغاء",
   "dialog.save": "حفظ",
   "dialog.close": "إغلاق",

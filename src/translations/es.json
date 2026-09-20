@@ -53,6 +53,8 @@
   "prereq.dialog.exit": "Salir del programa",
   "permrepair.title": "Reparar permisos",
   "permrepair.body": "NeoSSHWinManager necesita reparar una vez los permisos de archivos en su carpeta de datos (restos de una instalación/actualización anterior). Esto requiere una breve elevación de administrador (aparecerá un aviso de UAC). ¿Reparar ahora?",
+  "permrepair.blocked.title": "Carpeta de datos inaccesible",
+  "permrepair.blocked.body": "NeoSSHWinManager no puede abrir su carpeta de datos:\n\n{folder}\n\nLos permisos de Windows deniegan el acceso a su cuenta y la reparación automática no tuvo éxito. Para corregirlo manualmente, abra un símbolo del sistema como administrador y ejecute:\n\n    takeown /F \"{folder}\" /R /D S\n    icacls \"{folder}\" /reset /T /C\n\nLa aplicación se cerrará ahora.",
   "dialog.cancel": "Cancelar",
   "dialog.save": "Guardar",
   "dialog.close": "Cerrar",

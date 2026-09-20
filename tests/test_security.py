@@ -10,7 +10,10 @@ Tests for:
 
 import sys
 import os
+import shutil
 import tempfile
+from pathlib import Path
+
 import pytest
 
 # Add src to path
@@ -278,6 +281,15 @@ class TestDatabaseSecurity:
 class TestWindowsACL:
     """Tests for Windows ACL enforcement on the database file (CWE-732)."""
 
+    # ── Rights the owner ACE must carry ──────────────────────────────────
+    # Regression guard for GitHub issue #22: 1.4.0–1.5.5 granted the owner
+    # FILE_GENERIC_READ | FILE_GENERIC_WRITE, which omits these three. Without
+    # FILE_TRAVERSE the data folder cannot be opened at all on installs that do
+    # not grant SeChangeNotifyPrivilege; without DELETE SQLite cannot clean up
+    # its -wal/-shm sidecars; without WRITE_DAC the next start cannot repair the
+    # ACL it just wrote. The result was a permanent startup crash.
+    REQUIRED_RIGHTS = ("FILE_TRAVERSE", "DELETE", "WRITE_DAC")
+
     def _get_dacl_sid_strings(self, path: str) -> set:
         """Returns set of SID strings with ACCESS_ALLOWED ACEs on path."""
         import win32security
@@ -293,9 +305,25 @@ class TestWindowsACL:
                 sids.add(win32security.ConvertSidToStringSid(ace[2]))
         return sids
 
-    def test_acl_only_owner_can_access(self):
-        """After _set_secure_permissions the DACL must contain exactly the current user."""
+    def _get_ace(self, path: str, sid_str: str):
+        """Returns (flags, mask) of the ACCESS_ALLOWED ACE for sid_str, or None."""
         import win32security
+        sd = win32security.GetFileSecurity(path, win32security.DACL_SECURITY_INFORMATION)
+        dacl = sd.GetSecurityDescriptorDacl()
+        for i in range(dacl.GetAceCount()):
+            (ace_type, flags), mask, sid = dacl.GetAce(i)
+            if (ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE
+                    and win32security.ConvertSidToStringSid(sid) == sid_str):
+                return flags, mask
+        return None
+
+    def _current_sid_str(self) -> str:
+        import win32security
+        from src.database import current_user_sid
+        return win32security.ConvertSidToStringSid(current_user_sid())
+
+    def test_acl_grants_only_current_user_and_system(self):
+        """After _set_secure_permissions only the owner and SYSTEM remain."""
         from src.database import _set_secure_permissions
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
@@ -304,15 +332,9 @@ class TestWindowsACL:
             _set_secure_permissions(tmp_path)
 
             sids = self._get_dacl_sid_strings(tmp_path)
-            assert len(sids) == 1, (
-                f"DACL sollte genau 1 ACE (Eigentümer) enthalten, hat {len(sids)}: {sids}"
+            assert sids == {self._current_sid_str(), "S-1-5-18"}, (
+                f"DACL sollte nur Eigentümer + SYSTEM enthalten, hat: {sids}"
             )
-
-            username = os.environ.get("USERNAME") or os.environ.get("USER")
-            expected_sid = win32security.ConvertSidToStringSid(
-                win32security.LookupAccountName(None, username)[0]
-            )
-            assert expected_sid in sids, f"Eigentümer-SID {expected_sid} nicht in DACL: {sids}"
         finally:
             os.unlink(tmp_path)
 
@@ -331,8 +353,91 @@ class TestWindowsACL:
         finally:
             os.unlink(tmp_path)
 
-    def test_acl_raises_on_missing_username_env(self, monkeypatch):
-        """Missing USERNAME env var must raise RuntimeError, not fail silently."""
+    def test_owner_ace_keeps_traverse_delete_and_write_dac(self):
+        """Issue #22: the owner ACE must not be missing rights the app needs."""
+        import ntsecuritycon as con
+        from src.database import _set_secure_permissions
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
+            tmp_path = f.name
+        try:
+            _set_secure_permissions(tmp_path)
+
+            ace = self._get_ace(tmp_path, self._current_sid_str())
+            assert ace is not None, "Kein ACE für den aktuellen Benutzer"
+            _flags, mask = ace
+            for right in self.REQUIRED_RIGHTS:
+                bit = getattr(con, right)
+                assert mask & bit, (
+                    f"{right} fehlt in der Eigentümer-Maske 0x{mask:08X} — "
+                    "genau das hat in 1.4.0–1.5.5 den Datenordner blockiert."
+                )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_directory_ace_is_inheritable(self):
+        """Issue #22: files created later must inherit the same access."""
+        import ntsecuritycon as con
+        from src.database import _set_secure_permissions
+
+        tmp_dir = tempfile.mkdtemp(prefix="acl_dir_")
+        try:
+            _set_secure_permissions(tmp_dir)
+
+            ace = self._get_ace(tmp_dir, self._current_sid_str())
+            assert ace is not None, "Kein ACE für den aktuellen Benutzer"
+            flags, _mask = ace
+            assert flags & con.OBJECT_INHERIT_ACE, "OBJECT_INHERIT_ACE fehlt am Ordner-ACE"
+            assert flags & con.CONTAINER_INHERIT_ACE, "CONTAINER_INHERIT_ACE fehlt am Ordner-ACE"
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hardened_directory_can_still_open_a_database(self):
+        """Issue #22 end-to-end: hardening must not break SQLite in that folder."""
+        import sqlite3
+        from src.database import _set_secure_permissions
+
+        tmp_dir = tempfile.mkdtemp(prefix="acl_db_")
+        try:
+            db_file = os.path.join(tmp_dir, "data.db")
+            _set_secure_permissions(tmp_dir)
+
+            conn = sqlite3.connect(db_file)
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("CREATE TABLE t (x INTEGER)")
+            conn.commit()
+            conn.close()
+
+            _set_secure_permissions(db_file)
+            conn = sqlite3.connect(db_file)
+            conn.execute("INSERT INTO t VALUES (1)")
+            conn.commit()
+            conn.close()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_acl_rolls_back_when_it_would_lock_us_out(self):
+        """Issue #22: hardening that costs us access must be undone, not kept."""
+        import win32security
+        from src.database import _set_secure_permissions, _is_usable
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
+            tmp_path = f.name
+        try:
+            before = self._get_dacl_sid_strings(tmp_path)
+            # Harden for somebody else — the exact shape of the reported bug.
+            foreign = win32security.ConvertStringSidToSid("S-1-5-19")  # LOCAL SERVICE
+            _set_secure_permissions(tmp_path, user_sid=foreign)
+
+            assert _is_usable(Path(tmp_path)), "Datei nach Rücknahme immer noch gesperrt"
+            assert self._get_dacl_sid_strings(tmp_path) == before, (
+                "Vorherige DACL wurde nicht wiederhergestellt"
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_acl_uses_token_sid_not_username_env(self, monkeypatch):
+        """Issue #22: USERNAME is a guess; the process token is the truth."""
         from src.database import _set_secure_permissions
 
         monkeypatch.delenv("USERNAME", raising=False)
@@ -341,8 +446,22 @@ class TestWindowsACL:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
             tmp_path = f.name
         try:
+            _set_secure_permissions(tmp_path)
+            assert self._current_sid_str() in self._get_dacl_sid_strings(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_acl_raises_when_sid_undeterminable(self, monkeypatch):
+        """A SID we cannot determine at all must raise, not harden blindly."""
+        import src.database as db
+
+        monkeypatch.setattr(db, "current_user_sid", lambda: None)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as f:
+            tmp_path = f.name
+        try:
             with pytest.raises(RuntimeError, match="ACL-Setzung fehlgeschlagen"):
-                _set_secure_permissions(tmp_path)
+                db._set_secure_permissions(tmp_path)
         finally:
             os.unlink(tmp_path)
 
@@ -356,7 +475,6 @@ class TestWindowsACL:
 
     def test_init_db_sets_acl_on_new_database(self):
         """init_db() on a fresh database must leave the file owner-only accessible."""
-        import win32security
         from src.database import get_db_path, init_db
 
         init_db()
@@ -364,12 +482,105 @@ class TestWindowsACL:
 
         sids = self._get_dacl_sid_strings(db_path)
         assert len(sids) >= 1, "DACL nach init_db() ist leer"
-
-        username = os.environ.get("USERNAME") or os.environ.get("USER")
-        expected_sid = win32security.ConvertSidToStringSid(
-            win32security.LookupAccountName(None, username)[0]
+        assert self._current_sid_str() in sids, (
+            f"Eigentümer-SID nach init_db() nicht in DACL: {sids}"
         )
-        assert expected_sid in sids, f"Eigentümer-SID {expected_sid} nach init_db() nicht in DACL: {sids}"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-ACL only")
+class TestPermissionRepair:
+    """GitHub issue #22: a data folder the app locked itself out of must heal."""
+
+    def _lock_out(self, *paths):
+        """Applies the 1.4.0–1.5.5 DACL, but for a SID that is not ours."""
+        import ntsecuritycon as con
+        import win32security
+        foreign = win32security.ConvertStringSidToSid("S-1-5-19")  # LOCAL SERVICE
+        for p in paths:
+            sd = win32security.GetFileSecurity(
+                str(p), win32security.DACL_SECURITY_INFORMATION
+            )
+            dacl = win32security.ACL()
+            dacl.AddAccessAllowedAce(
+                win32security.ACL_REVISION,
+                con.FILE_GENERIC_READ | con.FILE_GENERIC_WRITE,
+                foreign,
+            )
+            sd.SetSecurityDescriptorDacl(1, dacl, 0)
+            win32security.SetFileSecurity(
+                str(p), win32security.DACL_SECURITY_INFORMATION, sd
+            )
+
+    def test_locked_folder_is_detected(self):
+        from src.permission_repair import is_accessible
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="repair_"))
+        try:
+            (tmp_dir / "data.db").write_bytes(b"")
+            assert is_accessible(tmp_dir)
+            self._lock_out(tmp_dir, tmp_dir / "data.db")
+            assert not is_accessible(tmp_dir)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_startup_check_heals_without_prompting(self, monkeypatch):
+        """We own the files, so WRITE_DAC is implicit: no UAC, no dialog."""
+        import sqlite3
+        import src.permission_repair as pr
+
+        prompts = []
+        monkeypatch.setattr(
+            pr, "request_elevated_repair", lambda *a, **k: prompts.append("uac") or True
+        )
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="repair_"))
+        try:
+            (tmp_dir / "data.db").write_bytes(b"")
+            self._lock_out(tmp_dir, tmp_dir / "data.db")
+
+            pr.run_startup_check(tmp_dir)
+
+            assert prompts == [], "Selbstheilbarer Fall darf keine Elevation anfordern"
+            assert pr.is_accessible(tmp_dir)
+            sqlite3.connect(str(tmp_dir / "data.db")).close()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_startup_check_is_silent_on_healthy_folder(self, monkeypatch):
+        import src.permission_repair as pr
+        from src.database import _set_secure_permissions
+
+        touched = []
+        monkeypatch.setattr(
+            pr, "request_elevated_repair", lambda *a, **k: touched.append("uac") or True
+        )
+        monkeypatch.setattr(
+            pr, "repair_owner", lambda *a, **k: touched.append("repair") or True
+        )
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="repair_"))
+        try:
+            (tmp_dir / "data.db").write_bytes(b"")
+            _set_secure_permissions(tmp_dir)
+            _set_secure_permissions(tmp_dir / "data.db")
+
+            pr.run_startup_check(tmp_dir)
+            assert touched == [], "Gesunder Ordner darf keine Reparatur auslösen"
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_unlistable_folder_does_not_raise(self):
+        """A folder we cannot even enumerate must not blow up the startup check."""
+        import src.permission_repair as pr
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="repair_"))
+        try:
+            (tmp_dir / "data.db").write_bytes(b"")
+            self._lock_out(tmp_dir, tmp_dir / "data.db")
+            assert pr._children(tmp_dir) == []
+            pr.run_startup_check(tmp_dir)   # must not raise
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 class TestBruteForceProtection:
