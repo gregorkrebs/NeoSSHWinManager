@@ -22,11 +22,15 @@ if (-not (Test-Path $versionFile)) {
 }
 
 $version = (Get-Content $versionFile -Raw -Encoding UTF8).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+$') {
-    throw "src\version.txt must contain a version like 1.5.4, but contains '$version'."
+# A pre-release suffix (1.5.6-dev, 1.6.0-rc1) is allowed so test builds can be
+# handed out without pretending to be the finished release. Windows' binary
+# version resource holds numbers only, so the tuple uses the numeric part while
+# the human-readable FileVersion/ProductVersion strings keep the full value.
+if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+    throw "src\version.txt must contain a version like 1.5.4 or 1.5.6-dev, but contains '$version'."
 }
 
-$parts = $version.Split('.')
+$parts = ($version -split '-', 2)[0].Split('.')
 $tuple = "({0}, {1}, {2}, 0)" -f $parts[0], $parts[1], $parts[2]
 
 $content = Get-Content $infoFile -Raw -Encoding UTF8

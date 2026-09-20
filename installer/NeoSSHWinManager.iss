@@ -25,8 +25,17 @@
   #error Could not read a version from src\version.txt
 #endif
 
+; A pre-release suffix (1.5.6-dev) lives only in the human-readable strings:
+; the exe's binary version resource is numeric, so compare against that part.
+#define DashPos Pos("-", MyAppVersion)
+#if DashPos > 0
+  #define MyAppBaseVersion Copy(MyAppVersion, 1, DashPos - 1)
+#else
+  #define MyAppBaseVersion MyAppVersion
+#endif
+
 #define ExeVersion GetVersionNumbersString(SourcePath + "..\dist\" + MyAppExeName)
-#if ExeVersion != MyAppVersion + ".0"
+#if ExeVersion != MyAppBaseVersion + ".0"
   #pragma message "dist\" + MyAppExeName + " reports version '" + ExeVersion + "', src\version.txt says '" + MyAppVersion + "'"
   #error The built exe does not match src\version.txt (see message above) - rebuild it with build_dual.ps1
 #endif
