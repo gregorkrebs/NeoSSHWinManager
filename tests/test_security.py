@@ -491,6 +491,31 @@ class TestWindowsACL:
 class TestPermissionRepair:
     """GitHub issue #22: a data folder the app locked itself out of must heal."""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_dialog(self, monkeypatch):
+        """Replaces the repair prompt with a recorder.
+
+        run_startup_check() falls back to a StyledMessageBox when it cannot fix
+        things in-process. Constructing a real QDialog without a QApplication
+        aborts the interpreter, so a regression would take the whole test run
+        down instead of failing one test. The recorder also lets each test
+        assert that no prompt was shown.
+        """
+        import types
+        self.prompts = []
+        stub = types.ModuleType("src.ui.dialogs.styled_message_box")
+
+        class _StyledMessageBox:
+            @staticmethod
+            def question(_parent, title, _text, **_kw):
+                self.prompts.append(title)
+                return False
+
+        stub.StyledMessageBox = _StyledMessageBox
+        monkeypatch.setitem(
+            sys.modules, "src.ui.dialogs.styled_message_box", stub
+        )
+
     def _lock_out(self, *paths):
         """Applies the 1.4.0–1.5.5 DACL, but for a SID that is not ours."""
         import ntsecuritycon as con
@@ -528,9 +553,13 @@ class TestPermissionRepair:
         import sqlite3
         import src.permission_repair as pr
 
-        prompts = []
+        elevations = []
         monkeypatch.setattr(
-            pr, "request_elevated_repair", lambda *a, **k: prompts.append("uac") or True
+            pr, "request_elevated_repair",
+            lambda *a, **k: elevations.append("uac") or True,
+        )
+        monkeypatch.setattr(
+            pr, "repair_owner", lambda *a, **k: elevations.append("owner") or True
         )
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="repair_"))
@@ -540,7 +569,8 @@ class TestPermissionRepair:
 
             pr.run_startup_check(tmp_dir)
 
-            assert prompts == [], "Selbstheilbarer Fall darf keine Elevation anfordern"
+            assert self.prompts == [], "Selbstheilbarer Fall darf nicht nachfragen"
+            assert elevations == [], "Selbstheilbarer Fall darf keine Elevation anfordern"
             assert pr.is_accessible(tmp_dir)
             sqlite3.connect(str(tmp_dir / "data.db")).close()
         finally:
@@ -566,6 +596,7 @@ class TestPermissionRepair:
 
             pr.run_startup_check(tmp_dir)
             assert touched == [], "Gesunder Ordner darf keine Reparatur auslösen"
+            assert self.prompts == [], "Gesunder Ordner darf nicht nachfragen"
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
