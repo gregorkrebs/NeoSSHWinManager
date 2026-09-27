@@ -265,6 +265,71 @@ def test_drop_on_path_bar_moves_after_confirmation_and_undo_redo(app, qt_errors,
     assert not qt_errors, qt_errors
 
 
+def test_drop_on_file_list_and_tree_uploads(app, qt_errors, tmp_path, monkeypatch):
+    """Files dropped from the PC side (e.g. a mounted SSHFS drive) or from
+    Explorer onto the server's file list or folder tree are uploaded."""
+    from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PyQt6.QtGui import QDropEvent
+    from src.filebrowser.ui.models import make_mime
+
+    remote = tmp_path / "remote"
+    (remote / "site" / "css").mkdir(parents=True)
+    drive = tmp_path / "drive"                  # stands in for a mounted drive letter
+    drive.mkdir()
+    for name in ("list.txt", "explorer.txt", "tree.txt"):
+        (drive / name).write_text(name)
+
+    def drop(widget, mime, pos):
+        event = QDropEvent(QPointF(pos), Qt.DropAction.CopyAction, mime,
+                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        widget.dropEvent(event)
+        return event
+
+    def local(name):
+        path = drive / name
+        return make_mime("local", [FileEntry(name=name, path=str(path), is_dir=False,
+                                             size=path.stat().st_size)])
+
+    with SftpTestServer(str(remote)) as server:
+        _serve(monkeypatch, server)
+        manager = SettingsManager(MemoryStore({"show_tree": True}))
+        conn = Connection(name="T", host="127.0.0.1", user="user", password="pass", port=server.port,
+                          remote_path="/site")
+        win = view_mod.FileBrowserView(conn, manager, theme="dark")
+        win.resize(1200, 700)
+        win.show()
+        try:
+            assert _pump(app, 5, lambda: win.remote_pane() and win.remote_pane().entries())
+            pane = win.remote_pane()
+            below_rows = QPointF(pane.view.viewport().width() / 2,
+                                 pane.view.viewport().height() - 4)
+
+            # PC side -> free area of the file list = the current folder
+            event = drop(pane.view, local("list.txt"), below_rows)
+            assert event.isAccepted() and event.dropAction() == Qt.DropAction.CopyAction
+            assert _pump(app, 5, lambda: (remote / "site" / "list.txt").exists())
+
+            # Explorer (plain file URLs) -> the file list
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(str(drive / "explorer.txt"))])
+            assert drop(pane.view, mime, below_rows).isAccepted()
+            assert _pump(app, 5, lambda: (remote / "site" / "explorer.txt").exists())
+
+            # PC side -> a folder in the tree
+            assert _pump(app, 5, lambda: pane.tree._find_loaded("/site/css") is not None)
+            item = pane.tree._find_loaded("/site/css")
+            event = drop(pane.tree, local("tree.txt"),
+                         pane.tree.visualItemRect(item).center())
+            assert event.isAccepted()
+            assert _pump(app, 5, lambda: (remote / "site" / "css" / "tree.txt").exists())
+            assert (remote / "site" / "css" / "tree.txt").read_text() == "tree.txt"
+            assert (drive / "tree.txt").exists()          # a copy: the source stays
+        finally:
+            win.shutdown()
+            _pump(app, 0.3)
+    assert not qt_errors, qt_errors
+
+
 @pytest.mark.parametrize("configured, server_home", [
     ("/home/user1", "/"),               # the path entered for the connection
     ("/", "/home/user1"),               # nothing entered: the login folder

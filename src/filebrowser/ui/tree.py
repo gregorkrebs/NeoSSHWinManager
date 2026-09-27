@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QBrush
+from PyQt6.QtGui import QBrush, QDragLeaveEvent
 from PyQt6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
 
 from src.filebrowser.model import FileEntry, is_hidden
@@ -277,8 +277,9 @@ class FsTree(QTreeWidget):
     def dropEvent(self, event) -> None:  # noqa: N802
         _item, plan = self._plan_at(event)
         self._highlight(None)
-        self.stopAutoScroll()
-        self.setState(QAbstractItemView.State.NoState)
+        # Qt's drag-leave stops the auto-scroll and resets the drag state;
+        # PyQt6 does not expose stopAutoScroll() itself.
+        super().dragLeaveEvent(QDragLeaveEvent())
         if not plan:
             event.ignore()
             return

@@ -13,7 +13,7 @@ import os
 from typing import Optional
 
 from PyQt6.QtCore import QEvent, QItemSelectionModel, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QDragLeaveEvent, QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QSizePolicy,
     QSplitter, QStackedWidget, QToolButton, QTreeView, QVBoxLayout, QWidget,
@@ -326,8 +326,9 @@ class FileView(QTreeView):
     def dropEvent(self, event) -> None:  # noqa: N802
         plan, _row = self._drop_plan(event)
         self._pane.highlight_drop(None)
-        self.stopAutoScroll()
-        self.setState(QAbstractItemView.State.NoState)
+        # Qt's drag-leave stops the auto-scroll and resets the drag state;
+        # PyQt6 does not expose stopAutoScroll() itself.
+        super().dragLeaveEvent(QDragLeaveEvent())
         if not plan:
             event.ignore()
             return
