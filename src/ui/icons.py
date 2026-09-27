@@ -12,8 +12,8 @@ import os
 import sys
 from functools import lru_cache
 
-from PyQt6.QtCore import QByteArray, QSize, Qt
-from PyQt6.QtGui import QIcon, QPixmap, QPainter
+from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt
+from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 
 
@@ -34,6 +34,15 @@ def _svg_bytes(name: str, color: str) -> bytes:
     # currentColor → konkrete Farbe
     svg = svg.replace("currentColor", color)
     return svg.encode("utf-8")
+
+
+def svg_file(name: str, color: str, directory: str) -> str:
+    """Write the icon in `color` to `directory` for a stylesheet url(); returns its path."""
+    path = os.path.join(directory, f"{name}-{color.lstrip('#')}.svg")
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(_svg_bytes(name, color))
+    return path.replace("\\", "/")
 
 
 def icon(name: str, color: str = "#aab4c4", size: int = 18) -> QIcon:
@@ -60,5 +69,32 @@ def pixmap(name: str, color: str = "#aab4c4", size: int = 18) -> QPixmap:
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
     renderer.render(painter)
+    painter.end()
+    return pm
+
+
+def pixmap_with_text(
+    name: str, color: str, size: int, text: str, *, center_y: float = 0.5625
+) -> QPixmap:
+    """SVG als QPixmap mit kurzem Text darin, z. B. "FTP" im Ordner.
+
+    center_y ist die vertikale Textmitte relativ zur Icongröße; der Standard
+    trifft die Mitte des Ordnerkörpers (y 6..21 in der 24er-ViewBox).
+    """
+    pm = pixmap(name, color, size)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+    font = QFont()
+    font.setBold(True)
+    font.setPixelSize(max(6, round(size * 0.28)))
+    painter.setFont(font)
+    painter.setPen(QColor(color))
+    band = size * 0.5
+    painter.drawText(
+        QRectF(0, size * center_y - band / 2, size, band),
+        Qt.AlignmentFlag.AlignCenter,
+        text,
+    )
     painter.end()
     return pm

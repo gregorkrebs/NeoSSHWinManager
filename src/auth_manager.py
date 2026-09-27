@@ -8,6 +8,7 @@
 #   - SSH-Passwörter werden mit dem benutzerspezifischen enc_key ver-/entschlüsselt
 
 import hashlib
+import json
 import uuid
 import sqlite3
 import threading
@@ -1066,6 +1067,36 @@ class UserConnectionManager:
     # Backwards-compatible alias used by main.py
     def update_settings(self, s: AppSettings) -> None:
         self.save_settings(s)
+
+    # File browser settings live in their own columns so that saving the
+    # regular settings form can never overwrite them (and vice versa).
+    def get_sftp_browser_settings(self) -> dict:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT sftp_browser_enc, sftp_browser_iv FROM app_settings WHERE user_id = ?",
+                (self._user.id,),
+            ).fetchone()
+        if not row or not row["sftp_browser_iv"]:
+            return {}
+        text = self._decrypt_pw(row["sftp_browser_enc"] or "", row["sftp_browser_iv"])
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:
+            logger.warning("File browser settings unreadable, using defaults")
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def save_sftp_browser_settings(self, data: dict) -> None:
+        enc, iv = self._encrypt_pw(json.dumps(data, separators=(",", ":")))
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO app_settings (user_id, sftp_browser_enc, sftp_browser_iv)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     sftp_browser_enc=excluded.sftp_browser_enc,
+                     sftp_browser_iv=excluded.sftp_browser_iv""",
+                (self._user.id, enc, iv),
+            )
 
     # ------------------------------------------------------------------
     # Active Mounts Tracking (für Auto-Reconnect)

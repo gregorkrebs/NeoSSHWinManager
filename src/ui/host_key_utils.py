@@ -93,6 +93,80 @@ def get_server_fingerprint(host: str, port: int) -> str | None:
     return None
 
 
+def ensure_host_known(host: str, port: int, known_hosts_path: str) -> bool:
+    """
+    Make sure host:port is present in known_hosts, adding it silently if missing.
+
+    Used before headless SSH subprocess calls (e.g. the system-info panel) so a
+    first-time host does not surface a spurious host-key error to the user. The
+    key is fetched with ssh-keyscan and appended to known_hosts. Returns True if
+    the host is known afterwards.
+    """
+    if is_host_known(host, port, known_hosts_path):
+        return True
+
+    ssh_keyscan = shutil.which("ssh-keyscan") or r"C:\Windows\System32\OpenSSH\ssh-keyscan.exe"
+    if not (shutil.which("ssh-keyscan") or os.path.exists(ssh_keyscan)):
+        return False
+    try:
+        result = subprocess.run(
+            [ssh_keyscan, "-p", str(port), "-H", host],
+            capture_output=True, timeout=8,
+            creationflags=0x08000000,
+        )
+        output = result.stdout.decode("utf-8", errors="ignore")
+        lines = [
+            line for line in output.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if not lines:
+            return False
+        append_known_hosts(known_hosts_path, lines)
+        return True
+    except Exception:
+        return False
+
+
+def append_known_hosts(known_hosts_path: str, lines: list[str]) -> None:
+    """Append entries to known_hosts, starting on a fresh line (LF endings)."""
+    os.makedirs(os.path.dirname(known_hosts_path), exist_ok=True)
+    # Guarantee a newline boundary so we never merge onto a previous entry.
+    needs_prefix_nl = False
+    if os.path.exists(known_hosts_path) and os.path.getsize(known_hosts_path) > 0:
+        try:
+            with open(known_hosts_path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                needs_prefix_nl = f.read(1) not in (b"\n", b"\r")
+        except Exception:
+            needs_prefix_nl = False
+    with open(known_hosts_path, "a", encoding="utf-8", newline="\n") as f:
+        if needs_prefix_nl:
+            f.write("\n")
+        for line in lines:
+            f.write(line.rstrip("\r\n") + "\n")
+
+
+def known_hosts_line(hostname: str, key) -> str:
+    """'hostname keytype base64' for a paramiko key."""
+    import base64
+    return f"{hostname} {key.get_name()} {base64.b64encode(key.asbytes()).decode()}"
+
+
+def key_fingerprint(key) -> str:
+    """Like `ssh-keygen -l`: '256 SHA256:… (ED25519)' for a paramiko key."""
+    import base64
+    import hashlib
+    digest = base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
+    name = key.get_name()
+    label = {"ssh-ed25519": "ED25519", "ssh-rsa": "RSA"}.get(
+        name, "ECDSA" if name.startswith("ecdsa-") else name)
+    try:
+        bits = key.get_bits()
+    except Exception:
+        bits = 0
+    return f"{bits} SHA256:{digest} ({label})" if bits else f"SHA256:{digest} ({label})"
+
+
 class TOFUAcceptPolicy:
     """Paramiko missing-host-key policy that saves accepted keys to known_hosts."""
 
@@ -100,10 +174,4 @@ class TOFUAcceptPolicy:
         self._path = known_hosts_path
 
     def missing_host_key(self, client, hostname: str, key) -> None:
-        import base64
-        key_type = key.get_name()
-        key_b64 = base64.b64encode(key.asbytes()).decode()
-        entry = f"{hostname} {key_type} {key_b64}\n"
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(entry)
+        append_known_hosts(self._path, [known_hosts_line(hostname, key)])

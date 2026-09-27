@@ -5,6 +5,7 @@ import urllib.parse
 import threading
 from src.app_logger import logger
 from src.config import AppSettings
+from src.i18n import current_language
 
 TELEMETRY_URL = "https://stats.neosshwinmanager.org/telemetry.php"
 
@@ -45,9 +46,9 @@ def send_telemetry_async(action: str, settings: AppSettings | None = None,
     Sendet das Telemetrie-Event asynchron an den Server, sofern der Nutzer
     eingewilligt hat.
 
-    Zusätzliche Angaben (source, result, choice, target) landen als
-    Query-Parameter in der URL; der Server nimmt nur Werte aus einer festen
-    Liste an. Da Open-Source-Software keine Geheimnisse wahren kann, wird
+    Jedes Event trägt die laufende Version und die UI-Sprache. Zusätzliche
+    Angaben (source, result, choice, target) landen als Query-Parameter in der
+    URL; der Server nimmt nur Werte aus einer festen Liste an. Da Open-Source-Software keine Geheimnisse wahren kann, wird
     serverseitiges Rate-Limiting verwendet.
 
     `wait` gibt dem Sende-Thread so viele Sekunden Zeit, bevor der Aufrufer
@@ -65,6 +66,8 @@ def send_telemetry_async(action: str, settings: AppSettings | None = None,
     version = _app_version()
     if version:
         query["version"] = version
+    # UI-Sprache (en, de, es, ru, nl, ar): zeigt, welche Übersetzungen genutzt werden.
+    query["language"] = current_language()
     for key, value in params.items():
         if value:
             query[key] = str(value)

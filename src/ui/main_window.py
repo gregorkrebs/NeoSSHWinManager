@@ -41,7 +41,7 @@ from src.ui.worker import MountWorker, UnmountWorker, TerminalConnectWorker
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
-from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
 from src.i18n import tr, current_language, available_languages, set_language, is_rtl
 from src.channel import display_name
@@ -79,6 +79,11 @@ _PANEL_USERS    = "users"
 _PANEL_PROFILE  = "profile"
 _PANEL_TERMINAL = "terminal"
 _PANEL_CLI_HISTORY = "cli_history"
+_PANEL_FILES    = "files"         # the file browser page
+
+# Sidebar icon of the file browser: the host panel's folder with "FTP" in it.
+_SB_FILES_ICON = "folder-ftp"
+_SB_FILES_ICON_SIZE = 22
 
 try:
     with open(os.path.join(os.path.dirname(__file__), "..", "version.txt"), "r", encoding="utf-8") as f:
@@ -220,6 +225,24 @@ class _AuthMethodDialog(FramelessDialog):
         return "password" if self._rb_pw.isChecked() else "key"
 
 
+class _BrowserHosts:
+    """The file browser's view of the saved connections ("Connect" menu)."""
+
+    def __init__(self, window: "MainWindow") -> None:
+        self._window = window
+
+    def connections(self) -> list:
+        return self._window._mgr.get_connections()        # no templates, list order
+
+    def prepare(self, conn_id: str):
+        """The connection with credentials (may ask for a password), or None."""
+        window = self._window
+        conn = window._mgr.get_by_id(conn_id)
+        if conn is None:
+            return None
+        return window._prepare_auth(conn, parent=window)
+
+
 class MainWindow(FramelessMainWindow):
 
     def __init__(self):
@@ -240,7 +263,8 @@ class MainWindow(FramelessMainWindow):
         self._terminal_connect_workers: dict[str, TerminalConnectWorker] = {}
         self._terminal_pending_conn: dict[str, object] = {}
         self._terminal_connecting: set[str] = set()  # conn_ids with a connect in flight
-        self._sftp_browsers: dict[str, object] = {}
+        self._file_browser = None               # the file browser page (all hosts), built on first use
+        self._fb_settings = None                # its settings (see _file_browser_settings())
         self._panel_mode: str = _PANEL_NONE
         self._panel_conn_id: str | None = None   # which connection the panel belongs to
         self._ef_initial_snapshot: dict | None = None
@@ -587,9 +611,18 @@ class MainWindow(FramelessMainWindow):
         # Stack page 1: full-screen panel (settings, users)
         self._fullscreen_widget = self._build_fullscreen_panel()
 
+        # Stack page 2: the file browser (created on first use, then kept so
+        # connections and transfers survive switching pages)
+        self._files_page = QWidget()
+        files_l = QVBoxLayout(self._files_page)
+        files_l.setContentsMargins(0, 0, 0, 0)
+        files_l.setSpacing(0)
+
         self._main_stack = QStackedWidget()
         self._main_stack.addWidget(self._body_splitter)   # index 0
         self._main_stack.addWidget(self._fullscreen_widget)  # index 1
+        self._main_stack.addWidget(self._files_page)      # index 2
+        self._main_stack.currentChanged.connect(self._on_main_page_changed)
 
         body_h.addWidget(self._main_stack, stretch=1)
 
@@ -616,11 +649,21 @@ class MainWindow(FramelessMainWindow):
             color = "#00b4d8"
         else:
             color = "#aab4c4" if theme == "dark" else "#2f4051"
-        btn.setIcon(svg_icon(icon_name, color, 18))
-        btn.setIconSize(QSize(18, 18))
+        self._set_sidebar_icon(btn, icon_name, color)
         if slot:
             btn.clicked.connect(slot)
         return btn
+
+    @staticmethod
+    def _set_sidebar_icon(btn: QPushButton, icon_name: str, color: str) -> None:
+        if icon_name == _SB_FILES_ICON:
+            # Drawn a bit larger than the others so the "FTP" stays legible.
+            size = _SB_FILES_ICON_SIZE
+            btn.setIcon(QIcon(svg_pixmap_text("folder", color, size, "FTP")))
+        else:
+            size = 18
+            btn.setIcon(svg_icon(icon_name, color, size))
+        btn.setIconSize(QSize(size, size))
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
@@ -644,6 +687,11 @@ class MainWindow(FramelessMainWindow):
         self._sb_profile_btn = self._sidebar_btn("key", self._on_profile)
         v.addWidget(self._sb_profile_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        # File browser (SFTP/FTP) for all hosts
+        self._sb_files_btn = self._sidebar_btn(_SB_FILES_ICON, self._on_file_browser)
+        self._sb_files_btn.setToolTip(tr("sidebar.file_browser"))
+        v.addWidget(self._sb_files_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
         v.addStretch()
 
         self._debug_btn = self._sidebar_btn("bug", self._on_debug, btn_type="warning")
@@ -662,13 +710,14 @@ class MainWindow(FramelessMainWindow):
         return sidebar
 
     def _set_sidebar_active(self, name: str):
-        """Set active state on tracked sidebar buttons. name: 'home'|'settings'|'users'|'profile'"""
+        """Set active state on tracked sidebar buttons. name: 'home'|'settings'|'users'|'profile'|'files'"""
         candidates = [
-            ("home",     "cloud",    self._sb_home_btn),
-            ("settings", "settings", self._sb_settings_btn),
-            ("users",    "users",    self._sb_users_btn),
-            ("profile",  "key",      self._sb_profile_btn),
-            ("about",    "info",     self._about_btn),
+            ("home",     "cloud",        self._sb_home_btn),
+            ("settings", "settings",     self._sb_settings_btn),
+            ("users",    "users",        self._sb_users_btn),
+            ("profile",  "key",          self._sb_profile_btn),
+            ("files",    _SB_FILES_ICON, self._sb_files_btn),
+            ("about",    "info",         self._about_btn),
         ]
         for key, icon_name, btn in candidates:
             if btn is None:
@@ -679,8 +728,7 @@ class MainWindow(FramelessMainWindow):
             btn.style().polish(btn)
             theme = (self._mgr.get_settings().theme or "dark")
             icon_color = "#00b4d8" if is_active else ("#aab4c4" if theme == "dark" else "#2f4051")
-            btn.setIcon(svg_icon(icon_name, icon_color, 18))
-            btn.setIconSize(QSize(18, 18))
+            self._set_sidebar_icon(btn, icon_name, icon_color)
 
     def _build_connections_panel(self) -> QWidget:
         panel = QWidget()
@@ -1510,57 +1558,7 @@ class MainWindow(FramelessMainWindow):
             hl.addWidget(_row(label2, value2), stretch=stretch2)
             return wrapper
 
-        # Status badge row
-        status_row = QHBoxLayout()
-        status_row.setSpacing(12)
-        status_container = QFrame()
-        status_container.setObjectName("rpStatusContainer")
-        if is_mounted:
-            status_container.setStyleSheet("""
-                QFrame#rpStatusContainer {
-                    background-color: rgba(0, 212, 100, 0.15);
-                    border: 1px solid rgba(0, 212, 100, 0.3);
-                    border-radius: 8px;
-                }
-            """)
-        else:
-            status_container.setStyleSheet("""
-                QFrame#rpStatusContainer {
-                    background-color: rgba(106, 122, 138, 0.15);
-                    border: 1px solid rgba(106, 122, 138, 0.3);
-                    border-radius: 8px;
-                }
-            """)
-        status_layout = QHBoxLayout(status_container)
-        status_layout.setContentsMargins(12, 6, 16, 6)
-        status_layout.setSpacing(6)
-        dot_container = QWidget()
-        dot_container.setFixedSize(6, 6)
-        dot_container.setStyleSheet(f"""
-            background-color: {'#00d464' if is_mounted else '#8a9aa8'};
-            border-radius: 3px;
-        """)
-        status_layout.addWidget(dot_container)
-        status_text = QLabel(tr("panel.status.connected") if is_mounted else tr("panel.status.disconnected"))
-        status_text.setStyleSheet(f"color: {'#00d464' if is_mounted else '#8a9aa8'}; font-weight: 600; font-size: 13px;")
-        status_layout.addWidget(status_text)
-        if is_mounted:
-            status_container.setCursor(Qt.CursorShape.PointingHandCursor)
-            status_container.setToolTip(tr("card.tooltip.sftp_browser"))
-            status_container.mousePressEvent = lambda ev, cid=conn.id: self._on_open_mounted_path(cid)
-        status_row.addWidget(status_container)
-        status_row.addStretch()
-        if is_mounted:
-            _folder_color = "#00d464" if _theme == "dark" else "#007a3d"
-            folder_lbl = QLabel()
-            folder_lbl.setPixmap(svg_pixmap("folder", _folder_color, 30))
-            folder_lbl.setFixedSize(QSize(42, 30))
-            folder_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            folder_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-            folder_lbl.setToolTip(tr("card.tooltip.sftp_browser"))
-            folder_lbl.mousePressEvent = lambda ev, cid=conn.id: self._on_open_mounted_path(cid)
-            status_row.addWidget(folder_lbl)
-        v.addLayout(status_row)
+        v.addLayout(self._build_status_row(conn, is_mounted, _theme))
         v.addSpacing(8)
 
         # General
@@ -1613,6 +1611,99 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._rp_layout.addWidget(body)
+
+    def _build_status_row(self, conn: Connection, is_mounted: bool, theme: str) -> QHBoxLayout:
+        """Status pill + folder buttons, shared by the info panel and the edit form.
+
+        - Status pill: green when mounted; a click opens the drive in Explorer,
+          same as the drive letter in the list.
+        - Explorer folder (SFTP only): grey while unmounted, a click mounts;
+          green when mounted, a click opens the drive in Explorer.
+        - FTP folder (always shown): opens the built-in file browser, which
+          works with or without a mount.
+        """
+        green = "#00d464" if theme == "dark" else "#007a3d"
+        grey = "#8a9aa8"
+        accent = "#00b4d8" if theme == "dark" else "#0077b6"
+
+        def _on_left_click(widget, callback):
+            def _handler(ev):
+                if ev.button() == Qt.MouseButton.LeftButton:
+                    callback()
+            widget.mousePressEvent = _handler
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(12)
+
+        status_container = QFrame()
+        status_container.setObjectName("rpStatusContainer")
+        rgb = "0, 212, 100" if is_mounted else "106, 122, 138"
+        status_container.setStyleSheet(f"""
+            QFrame#rpStatusContainer {{
+                background-color: rgba({rgb}, 0.15);
+                border: 1px solid rgba({rgb}, 0.3);
+                border-radius: 8px;
+            }}
+        """)
+        status_layout = QHBoxLayout(status_container)
+        status_layout.setContentsMargins(12, 6, 16, 6)
+        status_layout.setSpacing(6)
+        state_color = "#00d464" if is_mounted else grey
+        dot = QWidget()
+        dot.setFixedSize(6, 6)
+        dot.setStyleSheet(f"background-color: {state_color}; border-radius: 3px;")
+        status_layout.addWidget(dot)
+        status_text = QLabel(tr("panel.status.connected") if is_mounted else tr("panel.status.disconnected"))
+        status_text.setStyleSheet(f"color: {state_color}; font-weight: 600; font-size: 13px;")
+        status_layout.addWidget(status_text)
+        if is_mounted:
+            status_container.setCursor(Qt.CursorShape.PointingHandCursor)
+            status_container.setToolTip(tr("card.tooltip.open_path"))
+            _on_left_click(status_container, lambda cid=conn.id: self._on_open_explorer(cid))
+        status_row.addWidget(status_container)
+        status_row.addStretch()
+
+        folders = QHBoxLayout()
+        folders.setSpacing(4)
+        if not conn.is_ftp:
+            explorer_lbl = QLabel()
+            explorer_lbl.setPixmap(svg_pixmap("folder", green if is_mounted else grey, 30))
+            explorer_lbl.setFixedSize(QSize(42, 30))
+            explorer_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            explorer_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            explorer_lbl.setToolTip(
+                tr("card.tooltip.open_path") if is_mounted else tr("card.tooltip.mount_off")
+            )
+            _on_left_click(explorer_lbl, lambda cid=conn.id: self._on_status_folder_clicked(cid))
+            folders.addWidget(explorer_lbl)
+
+        browser_lbl = QLabel()
+        browser_lbl.setPixmap(svg_pixmap_text("folder", accent, 30, "FTP"))
+        browser_lbl.setFixedSize(QSize(42, 30))
+        browser_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        browser_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        browser_lbl.setToolTip(
+            tr("card.tooltip.ftp_browser", proto=conn.protocol_label) if conn.is_ftp
+            else tr("card.tooltip.sftp_browser")
+        )
+        _on_left_click(
+            browser_lbl, lambda cid=conn.id: self._open_sftp_browser(cid, mounted_only=False)
+        )
+        folders.addWidget(browser_lbl)
+        status_row.addLayout(folders)
+        return status_row
+
+    def _on_status_folder_clicked(self, conn_id: str):
+        """Explorer folder in the status row: mount, or open the mounted drive."""
+        card = self._cards.get(conn_id)
+        if card and card.is_mounted:
+            self._on_open_explorer(conn_id)
+            return
+        # A successful mount switches an open edit form to the info panel, so
+        # ask first when that would drop unsaved changes.
+        if self._panel_mode in (_PANEL_EDIT, _PANEL_ADD) and not self._guard_leave_form():
+            return
+        self._on_mount(conn_id)
 
     def _build_sysinfo_fullpanel(self, conn: Connection):
         """Fill the right panel content area with SystemInfoPanel (mounted state)."""
@@ -2323,49 +2414,7 @@ class MainWindow(FramelessMainWindow):
         if is_edit:
             _theme = self._mgr.get_settings().theme or "dark"
             is_mounted = (conn.id in self._cards and self._cards[conn.id].is_mounted)
-            status_row = QHBoxLayout()
-            status_row.setSpacing(12)
-            status_container = QFrame()
-            status_container.setObjectName("rpStatusContainer")
-            if is_mounted:
-                status_container.setStyleSheet("""
-                    QFrame#rpStatusContainer {
-                        background-color: rgba(0, 212, 100, 0.15);
-                        border: 1px solid rgba(0, 212, 100, 0.3);
-                        border-radius: 8px;
-                    }
-                """)
-            else:
-                status_container.setStyleSheet("""
-                    QFrame#rpStatusContainer {
-                        background-color: rgba(106, 122, 138, 0.15);
-                        border: 1px solid rgba(106, 122, 138, 0.3);
-                        border-radius: 8px;
-                    }
-                """)
-            status_layout = QHBoxLayout(status_container)
-            status_layout.setContentsMargins(12, 6, 16, 6)
-            status_layout.setSpacing(6)
-            dot = QWidget()
-            dot.setFixedSize(6, 6)
-            dot.setStyleSheet(f"background-color: {'#00d464' if is_mounted else '#8a9aa8'}; border-radius: 3px;")
-            status_layout.addWidget(dot)
-            status_text = QLabel(tr("panel.status.connected") if is_mounted else tr("panel.status.disconnected"))
-            status_text.setStyleSheet(f"color: {'#00d464' if is_mounted else '#8a9aa8'}; font-weight: 600; font-size: 13px;")
-            status_layout.addWidget(status_text)
-            status_row.addWidget(status_container)
-            status_row.addStretch()
-            if is_mounted:
-                _folder_color = "#00d464" if _theme == "dark" else "#007a3d"
-                folder_lbl = QLabel()
-                folder_lbl.setPixmap(svg_pixmap("folder", _folder_color, 30))
-                folder_lbl.setFixedSize(QSize(42, 30))
-                folder_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                folder_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-                folder_lbl.setToolTip(tr("card.tooltip.sftp_browser"))
-                folder_lbl.mousePressEvent = lambda ev, cid=conn.id: self._on_open_mounted_path(cid)
-                status_row.addWidget(folder_lbl)
-            v.addLayout(status_row)
+            v.addLayout(self._build_status_row(conn, is_mounted, _theme))
             v.addSpacing(8)
 
             # DEBUG mode: editing a mounted host is allowed but risky (changing
@@ -3303,6 +3352,15 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(dev_card)
         v.addSpacing(14)
 
+        from src.pro_manager import SHOW_PRO_UI
+        if SHOW_PRO_UI:
+            self._build_pro_settings(v, _section_hdr, _group_card)
+
+        v.addStretch()
+        self._fs_layout.addWidget(body)
+
+    def _build_pro_settings(self, v, _section_hdr, _group_card):
+        """The Pro licence section of the settings (hidden while SHOW_PRO_UI is off)."""
         # ── PRO LICENSE ───────────────────────────────────────────────────
         v.addWidget(_section_hdr(tr("settings.section.pro")))
         v.addSpacing(4)
@@ -3352,9 +3410,6 @@ class MainWindow(FramelessMainWindow):
             _pro_inner.addWidget(_donate_lbl)
         pro_vl.addWidget(_pro_status_row)
         v.addWidget(pro_card)
-
-        v.addStretch()
-        self._fs_layout.addWidget(body)
 
     def _sf_check_updates(self):
         """Manual update check from settings screen."""
@@ -3582,7 +3637,7 @@ class MainWindow(FramelessMainWindow):
         is_mounted = bool(card and card.is_mounted)
         if is_mounted:
             # Match ConnectionCard.update_mount_state()
-            btn.setIcon(svg_icon("minus", "#00d464", 16))
+            btn.setIcon(svg_icon("minus", "#ef4444", 16))
             btn.setToolTip(tr("card.tooltip.mount_on"))
             btn.setEnabled(True)
         else:
@@ -4305,14 +4360,16 @@ class MainWindow(FramelessMainWindow):
         self._refresh_list()
         self._set_status(tr("status.connection_deleted", name=conn.name))
 
-    def _prepare_auth(self, conn):
+    def _prepare_auth(self, conn, parent=None):
+        """parent: the window the questions belong to (the file browser asks too)."""
         import copy
         conn = copy.copy(conn)
+        parent = parent or self
 
         if conn.auth_method == "ask":
             has_key = bool(conn.key_path)
             dlg = _AuthMethodDialog(
-                self,
+                parent,
                 conn.name,
                 has_key=has_key,
                 prefer_key=has_key and not conn.password,
@@ -4323,7 +4380,7 @@ class MainWindow(FramelessMainWindow):
 
         if conn.auth_method == "password" and not conn.password:
             pw, ok = QInputDialog.getText(
-                self, tr("auth.enter_password.title"),
+                parent, tr("auth.enter_password.title"),
                 tr("auth.enter_password.prompt", name=conn.name),
                 QLineEdit.EchoMode.Password,
             )
@@ -4554,7 +4611,7 @@ class MainWindow(FramelessMainWindow):
 
     def _open_sftp_browser(self, conn_id: str, mounted_only: bool = True):
         """
-        Open the file browser (SFTP, FTP or FTPS depending on the connection).
+        Open a host in the file browser page (SFTP, FTP or FTPS depending on the connection).
 
         In mounted_only mode an SFTP connection must be mounted; FTP hosts are
         never mounted, so the requirement does not apply to them.
@@ -4568,28 +4625,21 @@ class MainWindow(FramelessMainWindow):
         if mounted_only and not conn.is_ftp and not card.is_mounted:
             return
 
-        # Raise existing browser window if already open for this connection
-        existing = self._sftp_browsers.get(conn_id)
-        if existing is not None:
-            try:
-                existing.raise_()
-                existing.activateWindow()
-                return
-            except RuntimeError:
-                # C++ object was deleted; fall through and open a new one
-                pass
-
-        conn = self._prepare_auth(conn)
-        if conn is None:
+        # One browser for all hosts: every host is a tab in it. A host that
+        # is open already only gets its tab brought to the front.
+        browser = self._file_browser
+        if browser is not None and browser.has_session(conn_id):
+            if self._show_file_browser_page():
+                browser.focus_host(conn_id)
             return
 
-        from src.ui.sftp_browser import SftpBrowserWindow
-        theme = self._mgr.get_settings().theme or "dark"
-        browser = SftpBrowserWindow(conn, theme=theme, parent=self)
-        browser.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        browser.destroyed.connect(lambda: self._sftp_browsers.pop(conn_id, None))
-        self._sftp_browsers[conn_id] = browser
-        browser.show()
+        if not self._guard_leave_form():
+            return
+        conn = self._prepare_auth(conn, parent=self)
+        if conn is None:
+            return
+        self._show_file_browser_page(guard=False)
+        self._file_browser.open_host(conn)
         if conn.is_ftp:
             self._set_status(tr(
                 "status.ftp_browser_opened", name=conn.name, proto=conn.protocol_label
@@ -4600,6 +4650,100 @@ class MainWindow(FramelessMainWindow):
     def _on_open_mounted_path(self, conn_id: str):
         """Open the file browser for the mounted (SFTP) or FTP connection."""
         self._open_sftp_browser(conn_id, mounted_only=True)
+
+    def _file_browser_settings(self):
+        """The file browser's settings for this user."""
+        if self._fb_settings is None:
+            from src.filebrowser.settings import AuthManagerStore, SettingsManager
+            self._fb_settings = SettingsManager(AuthManagerStore(self._mgr))
+        return self._fb_settings
+
+    def _ensure_file_browser(self):
+        """The file browser, created on first use and kept until the app quits."""
+        if self._file_browser is None:
+            from src.filebrowser.ui.view import FileBrowserView
+            theme = self._mgr.get_settings().theme or "dark"
+            browser = FileBrowserView(None, self._file_browser_settings(), theme=theme,
+                                      terminal_opener=self._open_terminal_at,
+                                      hosts=_BrowserHosts(self), parent=self._files_page)
+            self._files_page.layout().addWidget(browser)
+            self._file_browser = browser
+        return self._file_browser
+
+    def _on_file_browser(self):
+        """Sidebar: the file browser page (empty until a host is connected)."""
+        self._show_file_browser_page()
+
+    def _show_file_browser_page(self, guard: bool = True) -> bool:
+        """Switch to the file browser page; False if an unsaved form kept the user."""
+        if guard and self._panel_mode != _PANEL_FILES and not self._guard_leave_form():
+            return False
+        if self.isMinimized() or not self.isVisible():
+            self.showNormal()                   # e.g. opened from the tray
+        self.raise_()
+        self.activateWindow()
+        browser = self._ensure_file_browser()
+        if self._panel_mode != _PANEL_FILES:
+            if self._panel_conn_id and self._panel_conn_id in self._cards:
+                self._cards[self._panel_conn_id].set_info_active(False)
+            self._clear_fs_content()
+            self._set_fullscreen_header("", "", False)
+            self._panel_mode = _PANEL_FILES
+            self._panel_conn_id = None
+        self._main_stack.setCurrentWidget(self._files_page)
+        self._set_sidebar_active("files")
+        browser.focus_current()
+        return True
+
+    def _leave_file_browser_page(self) -> None:
+        """Back to the connections page without touching its right panel."""
+        self._main_stack.setCurrentIndex(0)
+        self._panel_mode = _PANEL_NONE
+        self._panel_conn_id = None
+        self._set_sidebar_active("home")
+
+    def _on_main_page_changed(self, _index: int) -> None:
+        # The browser brings its own F2, Del, Esc, ...: the main window's
+        # shortcuts would make them ambiguous (Qt then triggers neither).
+        on_files = self._main_stack.currentWidget() is self._files_page
+        for shortcut in self._shortcuts:
+            shortcut.setEnabled(not on_files)
+
+    def _confirm_quit_with_transfers(self) -> bool:
+        """Ask before quitting while file browser transfers are still running."""
+        browser = self._file_browser
+        busy = browser.active_transfer_count() if browser is not None else 0
+        if not busy:
+            return True
+        return StyledMessageBox.question(
+            self, tr("fb.quit.title"), tr("fb.quit.text", count=busy),
+            yes_text=tr("fb.quit.yes"), no_text=tr("dialog.cancel"))
+
+    def _close_file_browser(self) -> None:
+        """Disconnect the browser's hosts (the application quits)."""
+        if self._file_browser is not None:
+            self._file_browser.shutdown()
+            self._file_browser = None
+
+    def _open_terminal_at(self, conn_id: str, initial_input: str) -> None:
+        """Integrated terminal for conn_id, started in a folder (file browser)."""
+        if self.isMinimized() or not self.isVisible():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        # The terminal lives in the connections page's right panel.
+        if self._panel_mode == _PANEL_FILES:
+            self._leave_file_browser_page()
+        elif self._main_stack.currentIndex() != 0:
+            self._nav_home()
+            if self._main_stack.currentIndex() != 0:   # an unsaved form kept the user
+                return
+        if not self._terminal_conn_tabs.get(conn_id):
+            self._open_terminal_panel(conn_id, initial_input=initial_input)
+            return
+        self._open_terminal_panel(conn_id)
+        if self._panel_mode == _PANEL_TERMINAL and self._panel_conn_id == conn_id:
+            self._add_terminal_session(conn_id, initial_input)
 
     def _open_ftp_in_explorer(self, conn_id: str):
         """
@@ -4752,8 +4896,12 @@ class MainWindow(FramelessMainWindow):
             self._set_sidebar_active("users")
         elif self._panel_mode == _PANEL_PROFILE:
             self._set_sidebar_active("profile")
+        elif self._panel_mode == _PANEL_FILES:
+            self._set_sidebar_active("files")
         else:
             self._set_sidebar_active("home")
+        if self._file_browser is not None:
+            self._file_browser.set_theme(theme)
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":
@@ -4834,9 +4982,12 @@ class MainWindow(FramelessMainWindow):
     # Window close
     # ------------------------------------------------------------------
 
-    def quit_app(self, unmount: bool = True):
+    def quit_app(self, unmount: bool = True, confirm: bool = True):
         """Proper shutdown: optionally unmount drives, stop bridge, then quit."""
+        if confirm and not self._confirm_quit_with_transfers():
+            return
         self._explicit_quit = True
+        self._close_file_browser()
         if unmount:
             self._shutdown_disconnect_all()
         if self._bridge_server:
@@ -4860,8 +5011,11 @@ class MainWindow(FramelessMainWindow):
                 self._tray.MessageIcon.Information, 2000,
             )
         else:
+            if not self._confirm_quit_with_transfers():
+                event.ignore()
+                return
             event.accept()
-            self.quit_app()
+            self.quit_app(confirm=False)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -5134,7 +5288,7 @@ class MainWindow(FramelessMainWindow):
         result.wait(timeout=30)
         return accepted[0]
 
-    def _open_terminal_panel(self, conn_id: str):
+    def _open_terminal_panel(self, conn_id: str, initial_input: str | None = None):
         """Switch the right panel to _PANEL_TERMINAL for conn_id, opening the first session."""
         if self._panel_mode in (_PANEL_EDIT, _PANEL_ADD):
             if not self._guard_leave_form():
@@ -5180,20 +5334,17 @@ class MainWindow(FramelessMainWindow):
             if active_key:
                 self._switch_terminal_tab(conn_id, active_key)
         else:
-            # First session for this conn — check Pro limit
-            total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
-            if total >= 3:
-                from src.pro_manager import is_pro_active as _is_pro_active
-                if not _is_pro_active():
-                    self._show_pro_session_limit_dialog()
-                    self._close_right_panel()
-                    return
-            self._create_terminal_session(conn_id)
+            # First session for this conn — check the free session limit
+            if self._terminal_limit_reached():
+                self._show_pro_session_limit_dialog()
+                self._close_right_panel()
+                return
+            self._create_terminal_session(conn_id, initial_input=initial_input)
 
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
-    def _create_terminal_session(self, conn_id: str) -> bool:
+    def _create_terminal_session(self, conn_id: str, initial_input: str | None = None) -> bool:
         """
         Start a new SSH session for conn_id in the background and add its tab
         once connected. The actual SSH handshake (bridge_server.create_session_token)
@@ -5221,15 +5372,16 @@ class MainWindow(FramelessMainWindow):
         self._terminal_session_counter[conn_id] = idx
         session_key = f"{conn_id}#{idx}"
 
-        self._start_terminal_connect(session_key, conn_auth)
+        self._start_terminal_connect(session_key, conn_auth, initial_input)
         return True
 
-    def _start_terminal_connect(self, session_key: str, conn_auth) -> None:
+    def _start_terminal_connect(self, session_key: str, conn_auth,
+                                initial_input: str | None = None) -> None:
         conn_id = session_key.rsplit("#", 1)[0]
         self._terminal_connecting.add(conn_id)
         self._set_status(tr("terminal.connecting"))
         self._terminal_pending_conn[session_key] = conn_auth
-        worker = TerminalConnectWorker(self._bridge_server, session_key, conn_auth)
+        worker = TerminalConnectWorker(self._bridge_server, session_key, conn_auth, initial_input)
         worker.finished.connect(self._on_terminal_connected)
         self._terminal_connect_workers[session_key] = worker
         worker.start()
@@ -5336,13 +5488,23 @@ class MainWindow(FramelessMainWindow):
         """Header button: open an additional SSH session for the current conn."""
         if self._panel_mode != _PANEL_TERMINAL or not self._panel_conn_id:
             return
+        self._add_terminal_session(self._panel_conn_id)
+
+    def _add_terminal_session(self, conn_id: str, initial_input: str | None = None) -> None:
+        """Another session for conn_id, within the free session limit."""
+        if self._terminal_limit_reached():
+            self._show_pro_session_limit_dialog()
+            return
+        self._create_terminal_session(conn_id, initial_input=initial_input)
+
+    def _terminal_limit_reached(self) -> bool:
+        """True when the free session limit is on, reached, and Pro is not active."""
+        from src import pro_manager
+        limit = pro_manager.FREE_TERMINAL_SESSION_LIMIT
+        if limit is None:
+            return False
         total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
-        if total >= 3:
-            from src.pro_manager import is_pro_active as _is_pro_active
-            if not _is_pro_active():
-                self._show_pro_session_limit_dialog()
-                return
-        self._create_terminal_session(self._panel_conn_id)
+        return total >= limit and not pro_manager.is_pro_active()
 
     def _show_pro_session_limit_dialog(self):
         StyledMessageBox.information(

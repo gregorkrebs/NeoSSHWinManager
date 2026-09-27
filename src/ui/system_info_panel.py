@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from src.ui.icons import icon as svg_icon
 
+import base64
 import subprocess
 import os
 import sys
@@ -17,6 +18,8 @@ import shutil
 from src.config import Connection
 from src.app_logger import logger
 from src.i18n import tr
+from src.remote_os import detect_remote_os
+from src.ui.host_key_utils import ensure_host_known
 
 class AuthLevelError(Exception):
     """Raised when the connection's auth method is not permitted at the current security level."""
@@ -96,6 +99,17 @@ def _is_host_known(host: str, port: int, known_hosts_path: str) -> bool:
     return False
 
 
+def _fmt_kb(kb: int) -> str:
+    """Human-readable size from KiB, e.g. 16318464 -> '15.6G'."""
+    units = ("K", "M", "G", "T", "P")
+    size = float(kb)
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{size:.1f}{units[idx]}" if idx else f"{int(size)}K"
+
+
 def _ssh_host_key_check_option() -> str:
     """
     Use OpenSSH's TOFU mode so a first-time host can be added to known_hosts.
@@ -109,11 +123,13 @@ class SSHSystemInfoThread(QThread):
     info_ready = pyqtSignal(dict)
     error = pyqtSignal(str, str)  # (error_msg, error_type) where error_type can be "key_missing" or "generic"
 
-    def __init__(self, conn: Connection, settings=None):
+    def __init__(self, conn: Connection, settings=None, os_hint: str | None = None):
         super().__init__()
         self._conn = conn
         self._settings = settings
         self._stopped = False
+        # "linux" | "windows" | None. Lets a refresh skip OS auto-detection.
+        self._os_hint = os_hint
 
     def run(self):
         try:
@@ -158,6 +174,9 @@ class SSHSystemInfoThread(QThread):
             return info
 
         known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+        # Save the host key up front so the actual data call never surfaces a
+        # spurious first-time host-key error to the user.
+        ensure_host_known(self._conn.host, self._conn.port, known_hosts_path)
 
         # Build command based on client type
         if client_type == 'plink':
@@ -169,6 +188,175 @@ class SSHSystemInfoThread(QThread):
         if os.name == "nt":
             run_opts["creationflags"] = subprocess.CREATE_NO_WINDOW
 
+        def _run(remote_cmd: str):
+            # Fresh env per call: the SSH_ASKPASS token is single-use, so a
+            # second ssh invocation with a consumed token fails with
+            # "Permission denied".
+            return subprocess.run(
+                cmd_base + [target, remote_cmd],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=25, env=self._get_ssh_env(), **run_opts,
+            )
+
+        # Pick the command set: the result of an earlier refresh, else the
+        # server's SSH banner (no login needed), else Linux first with a
+        # Windows fallback.
+        if self._os_hint in ("linux", "windows"):
+            order = [self._os_hint]
+        elif detect_remote_os(self._conn.host, self._conn.port) == "windows":
+            order = ["windows"]
+        else:
+            order = ["linux", "windows"]
+
+        last_result = None
+        try:
+            for os_kind in order:
+                remote_cmd = (
+                    self._build_windows_command() if os_kind == "windows"
+                    else self._build_linux_command()
+                )
+                last_result = _run(remote_cmd)
+                if self._has_ok(last_result.stdout):
+                    info["connected"] = True
+                    info["_detected_os"] = os_kind
+                    info.update(self._parse_sentinels(last_result.stdout))
+                    self._postprocess(info)
+                    if "disk_total" not in info or "memory_total" not in info:
+                        logger.warning(
+                            "sysinfo (%s): incomplete data from %s, raw output: %r",
+                            os_kind, self._conn.host, last_result.stdout[:2000],
+                        )
+                    return info
+                # ssh.exe exits with 255 when the connection or login failed.
+                # The other command set cannot help then, and trying it would
+                # only cost another failed login on the server.
+                if client_type == 'ssh' and last_result.returncode == 255:
+                    break
+        except subprocess.TimeoutExpired:
+            info["error"] = "SSH connection timed out (25s)"
+            return info
+        except Exception as e:
+            info["error"] = f"SSH error: {e}"
+            return info
+
+        # Neither branch produced the OK sentinel — surface the real error.
+        if last_result is not None:
+            info["error"] = last_result.stderr or last_result.stdout or "SSH connection failed"
+        else:
+            info["error"] = "SSH connection failed"
+        return info
+
+    @staticmethod
+    def _has_ok(raw: str) -> bool:
+        """True only when a bare '##SSH_OK##' line is present.
+
+        The exact-line match matters: a Windows cmd.exe echoing the Linux probe
+        prints the sentinel *with quotes* ('##SSH_OK##'), which must not count
+        as success.
+        """
+        return any(line.strip() == "##SSH_OK##" for line in raw.splitlines())
+
+    # Sections whose value is a list of records, one per line.
+    _MULTILINE_KEYS = frozenset({"drives"})
+
+    @classmethod
+    def _parse_sentinels(cls, raw: str) -> dict:
+        """Parse ##_key_## delimited sections into a dict."""
+        out: dict = {}
+        current_key = None
+        current_lines: list[str] = []
+
+        def _flush():
+            sep = "\n" if current_key in cls._MULTILINE_KEYS else " "
+            val = sep.join(l.strip() for l in current_lines if l.strip())
+            if val:
+                out[current_key] = val
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("##_") and stripped.endswith("_##"):
+                if current_key:
+                    _flush()
+                current_key = stripped[3:-3]
+                current_lines = []
+            elif current_key:
+                current_lines.append(line)
+        if current_key and current_lines:
+            _flush()
+        return out
+
+    @staticmethod
+    def _ints(value, count: int) -> list[int] | None:
+        """Parse exactly `count` whitespace-separated numbers, or None."""
+        if not value:
+            return None
+        try:
+            nums = [int(float(p)) for p in str(value).split()]
+        except ValueError:
+            return None
+        return nums if len(nums) == count else None
+
+    @classmethod
+    def _postprocess(cls, info: dict) -> None:
+        """Turn the raw KiB figures both command sets emit into display values.
+
+        Doing the arithmetic here instead of splitting `free -h` / `df -h` text
+        keeps the result independent of the server's locale and df's column
+        layout (long device names, spaces in filesystem names).
+        """
+        mem = cls._ints(info.get("mem_kb"), 2)          # total, available
+        if mem:
+            total, avail = mem
+            used = max(total - avail, 0)
+            info["memory_total"] = _fmt_kb(total)
+            info["memory_used"] = _fmt_kb(used)
+            if total > 0:
+                info["memory_percent"] = f"{used * 100 / total:.1f}"
+        disk = cls._ints(info.get("disk_kb"), 3)        # total, used, available
+        if disk:
+            total, used, avail = disk
+            info["disk_total"] = _fmt_kb(total)
+            info["disk_used"] = _fmt_kb(used)
+            info["disk_avail"] = _fmt_kb(avail)
+            # Same basis as df's Use%: reserved blocks count as neither.
+            if used + avail > 0:
+                info["disk_use_percent"] = f"{used * 100 / (used + avail):.1f}"
+
+        # drives: "ext|fs|total|used|avail|device|name" records. The name
+        # (mount point / volume label) comes last and may contain "|".
+        is_windows = info.get("_detected_os") == "windows"
+        drives = []
+        for line in str(info.get("drives") or "").splitlines():
+            parts = line.split("|", 6)
+            if len(parts) != 7:
+                continue
+            ext, fs, d_total, d_used, d_avail, device, name = (p.strip() for p in parts)
+            nums = cls._ints(f"{d_total} {d_used} {d_avail}", 3)
+            if not nums or nums[0] <= 0:
+                continue
+            d_total, d_used, d_avail = nums
+            if is_windows:
+                title, detail = f"{device} {name}".strip(), fs
+            else:
+                title = name or device
+                detail = f"{device} · {fs}" if fs else device
+            drives.append({
+                "title": title,
+                "device": device,
+                "detail": detail,
+                "external": ext == "1",
+                "total": _fmt_kb(d_total),
+                "used": _fmt_kb(d_used),
+                "percent": d_used * 100 / (d_used + d_avail) if d_used + d_avail > 0 else 0.0,
+            })
+        if is_windows:
+            drives.sort(key=lambda d: d["device"].upper())
+        else:
+            drives.sort(key=lambda d: (d["title"] != "/", d["title"].lower()))
+        info["drives_list"] = drives
+
+    def _build_linux_command(self) -> str:
+        """Compound POSIX-sh command; one handshake, sentinel-delimited output."""
         commands = {
             "os": "cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"' || uname -s",
             "hostname": "hostname -f 2>/dev/null || hostname",
@@ -179,80 +367,93 @@ class SSHSystemInfoThread(QThread):
             "cpu_cores": "nproc",
             "cpu_percent": "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | sed 's/%us,//' 2>/dev/null || grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$3+$4+$5)} END {printf \"%.1f\", usage}'",
             "load": "cat /proc/loadavg | awk '{print $1}'",
-            "memory": "free -h | grep Mem",
-            "memory_percent": "free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100.0}'",
-            "disk": "df -h / | tail -1",
-            "disk_use_percent": "df / | tail -1 | awk '{print $5}' | sed 's/%//g'",
+            # Raw KiB numbers; formatting happens in _postprocess().
+            # mem_kb: total available (MemFree+Buffers+Cached on kernels < 3.14)
+            "mem_kb": "awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^MemFree:/{f=$2} /^Buffers:/{b=$2} /^Cached:/{c=$2} END{if(a==\"\")a=f+b+c; print t, a}' /proc/meminfo",
+            # disk_kb: total used available. -P = one line per filesystem, no
+            # wrapping; fields counted from the right survive spaces in names.
+            "disk_kb": "df -Pk / | awk 'NR==2{print $(NF-4), $(NF-3), $(NF-2)}'",
+            # drives: one "ext|fstype|total|used|avail|device|mountpoint" line
+            # per mounted local block device (KiB). Only /dev/* sources, so
+            # tmpfs, network and fuse/sshfs mounts drop out; loop devices
+            # (snaps) too. -l keeps a hung NFS mount from blocking df. ext=1
+            # when the device sits on a USB bus in sysfs.
+            "drives": (
+                "{ df -PkTl 2>/dev/null || df -PkT; }"
+                " | awk 'NR>1 && $1 ~ \"^/dev/\" && $1 !~ \"^/dev/loop\" && !seen[$1]++"
+                " { m=$7; for(i=8;i<=NF;i++) m=m\" \"$i; print $1\"|\"$2\"|\"$3\"|\"$4\"|\"$5\"|\"m }'"
+                " | while IFS='|' read -r dev fs total used avail mnt; do"
+                " ext=0; case \"$(readlink -f /sys/class/block/$(basename \"$(readlink -f \"$dev\")\") 2>/dev/null)\" in"
+                " (*/usb*) ext=1;; esac;"
+                " printf '%s|%s|%s|%s|%s|%s|%s\\n' \"$ext\" \"$fs\" \"$total\" \"$used\" \"$avail\" \"$dev\" \"$mnt\"; done"
+            ),
             "processes": "ps aux | wc -l",
             "users": "who | wc -l",
             "ip": "hostname -I 2>/dev/null | awk '{print $1}' || ip addr show | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1",
             "temperature": "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf \"%.1f°C\", $1/1000}'",
         }
-
-        # Build a single compound command — one SSH handshake for all data.
-        # Each section is bracketed by ##key## sentinel lines for parsing.
-        cmd_parts = ["echo '##SSH_OK##'"]
+        # printf (not echo) for the OK sentinel: printf is a POSIX shell builtin
+        # that does not exist in cmd.exe or PowerShell, so a Windows default
+        # shell can never accidentally emit a bare '##SSH_OK##' line here.
+        # LC_ALL=C: untranslated, dot-decimal output from top/who/df.
+        cmd_parts = ["export LC_ALL=C", "printf '##SSH_OK##\\n'"]
         for key, shell_cmd in commands.items():
             cmd_parts.append(f"echo '##_{key}_##'")
             cmd_parts.append(f"( {shell_cmd} ) 2>/dev/null || true")
-        compound_cmd = "; ".join(cmd_parts)
+        return "; ".join(cmd_parts)
 
-        try:
-            result = subprocess.run(
-                cmd_base + [target, compound_cmd],
-                capture_output=True, text=True, timeout=25,
-                env=self._get_ssh_env(), **run_opts
-            )
-        except subprocess.TimeoutExpired:
-            info["error"] = "SSH connection timed out (25s)"
-            return info
-        except Exception as e:
-            info["error"] = f"SSH error: {e}"
-            return info
+    def _build_windows_command(self) -> str:
+        """
+        PowerShell equivalent, delivered as -EncodedCommand (UTF-16LE Base64).
 
-        raw = result.stdout
-        if "##SSH_OK##" not in raw:
-            info["error"] = result.stderr or raw or "SSH connection failed"
-            return info
-
-        info["connected"] = True
-
-        # Parse sentinel-delimited output into info dict
-        current_key = None
-        current_lines: list[str] = []
-        for line in raw.splitlines():
-            if line.startswith("##_") and line.endswith("_##"):
-                if current_key:
-                    val = " ".join(current_lines).strip()
-                    if val:
-                        info[current_key] = val
-                current_key = line[3:-3]
-                current_lines = []
-            elif current_key:
-                current_lines.append(line)
-        if current_key and current_lines:
-            val = " ".join(current_lines).strip()
-            if val:
-                info[current_key] = val
-
-        # Parse memory
-        if "memory" in info:
-            mem_parts = info["memory"].split()
-            if len(mem_parts) >= 3:
-                info["memory_total"] = mem_parts[1]
-                info["memory_used"] = mem_parts[2]
-
-        # Parse disk
-        if "disk" in info:
-            disk_parts = info["disk"].split()
-            if len(disk_parts) >= 4:
-                info["disk_total"] = disk_parts[1]
-                info["disk_used"] = disk_parts[2]
-                info["disk_avail"] = disk_parts[3]
-                if len(disk_parts) >= 5:
-                    info["disk_use_percent"] = disk_parts[4].replace("%", "")
-
-        return info
+        Encoding sidesteps all cmd.exe/PowerShell quoting issues over SSH and
+        works regardless of the server's default shell (cmd or PowerShell).
+        Emits the same ##_key_## sentinel format and the same raw-KiB mem_kb /
+        disk_kb figures as the Linux set, so _postprocess() handles both. All
+        numbers are integers or invariant-culture strings, because a German
+        server would otherwise print decimal commas.
+        """
+        stmts = [
+            "$ErrorActionPreference='SilentlyContinue'",
+            # No progress records: over a redirected stream they arrive as
+            # CLIXML noise on stderr.
+            "$ProgressPreference='SilentlyContinue'",
+            "$inv=[Globalization.CultureInfo]::InvariantCulture",
+            "$os=Get-CimInstance Win32_OperatingSystem",
+            "$cpu=@(Get-CimInstance Win32_Processor)",
+            "$up=(Get-Date)-$os.LastBootUpTime",
+            "$sys=Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='$env:SystemDrive'\"",
+            "$load=[double](($cpu | Measure-Object -Property LoadPercentage -Average).Average)",
+            "Write-Output '##SSH_OK##'",
+            "Write-Output '##_os_##'; Write-Output $os.Caption",
+            "Write-Output '##_hostname_##'; Write-Output $env:COMPUTERNAME",
+            "Write-Output '##_uptime_##'; Write-Output ('{0}d {1}h {2}m' -f $up.Days,$up.Hours,$up.Minutes)",
+            "Write-Output '##_uptime_seconds_##'; Write-Output ([int64]$up.TotalSeconds)",
+            "Write-Output '##_cpu_model_##'; Write-Output $cpu[0].Name",
+            "Write-Output '##_cpu_cores_##'; Write-Output ([int](($cpu | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum))",
+            "Write-Output '##_cpu_percent_##'; Write-Output ($load.ToString('0.0',$inv))",
+            # Both values are already KiB in Win32_OperatingSystem.
+            "Write-Output '##_mem_kb_##'; Write-Output ('{0} {1}' -f [int64]$os.TotalVisibleMemorySize,[int64]$os.FreePhysicalMemory)",
+            "Write-Output '##_disk_kb_##'; Write-Output ('{0} {1} {2}' -f [int64]($sys.Size/1KB),[int64](($sys.Size-$sys.FreeSpace)/1KB),[int64]($sys.FreeSpace/1KB))",
+            # drives: lettered volumes that sit on a real disk partition
+            # (internal, external, USB sticks). Mapped UNC drives, sshfs/WinFsp
+            # and subst drives have no partition and drop out. Same
+            # "ext|fs|total|used|avail|device|label" lines as on Linux.
+            "$l2p=@{}; Get-CimInstance Win32_LogicalDiskToPartition | ForEach-Object { $l2p[$_.Dependent.DeviceID]=$_.Antecedent.DeviceID }",
+            "$p2d=@{}; Get-CimInstance Win32_DiskDriveToDiskPartition | ForEach-Object { $p2d[$_.Dependent.DeviceID]=$_.Antecedent.DeviceID }",
+            "$dd=@{}; Get-CimInstance Win32_DiskDrive | ForEach-Object { $dd[$_.DeviceID]=$_ }",
+            "Write-Output '##_drives_##'",
+            "Get-CimInstance Win32_LogicalDisk | Where-Object { ($_.DriveType -eq 2 -or $_.DriveType -eq 3) -and $l2p.ContainsKey($_.DeviceID) -and $_.Size -gt 0 } | ForEach-Object {"
+            " $d=$dd[$p2d[$l2p[$_.DeviceID]]];"
+            " $ext=[int](($_.DriveType -eq 2) -or ($d.InterfaceType -eq 'USB') -or ([string]$d.MediaType -match 'External|Removable'));"
+            " '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $ext,$_.FileSystem,[int64]($_.Size/1KB),[int64](($_.Size-$_.FreeSpace)/1KB),[int64]($_.FreeSpace/1KB),$_.DeviceID,$_.VolumeName }",
+            "Write-Output '##_processes_##'; Write-Output ((Get-Process).Count)",
+            "Write-Output '##_users_##'; Write-Output (@(Get-CimInstance Win32_Process -Filter \"Name='explorer.exe'\" | Select-Object -ExpandProperty SessionId -Unique).Count)",
+            "Write-Output '##_ip_##'; Write-Output ((Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -ne '127.0.0.1'} | Select-Object -First 1).IPAddress)",
+        ]
+        script = "\n".join(stmts)
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        return f"powershell -NoProfile -NonInteractive -EncodedCommand {encoded}"
 
     def _find_plink(self) -> str | None:
         """Find plink.exe for PuTTY-based system info."""
@@ -417,6 +618,8 @@ class SystemInfoPanel(QFrame):
         self._info_thread: SSHSystemInfoThread | None = None
         self._loading_anim_timer: QTimer | None = None
         self._loading_anim_phase: int = 0
+        # Cached remote OS ("linux"/"windows") so refreshes skip auto-detection.
+        self._remote_os: str | None = None
 
         self.setObjectName("systemInfoPanel")
         self._build_ui()
@@ -478,23 +681,19 @@ class SystemInfoPanel(QFrame):
         hero_l.addWidget(self._hero_path)
         root.addWidget(hero)
 
+        # Error card only. Loading is shown solely by the overlay popup, so no
+        # "loading…" text sits behind it on (re)loads.
         self._state_card = QFrame()
         self._state_card.setObjectName("sysinfoStateCard")
         state_l = QVBoxLayout(self._state_card)
         state_l.setContentsMargins(16, 14, 16, 14)
         state_l.setSpacing(6)
-        self._loading_lbl = QLabel(tr("sysinfo.loading"))
-        self._loading_lbl.setObjectName("sysinfoStateText")
-        self._loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_lbl.setWordWrap(True)
-        state_l.addWidget(self._loading_lbl)
-
         self._error_lbl = QLabel()
         self._error_lbl.setObjectName("sysinfoErrorText")
         self._error_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._error_lbl.setWordWrap(True)
-        self._error_lbl.hide()
         state_l.addWidget(self._error_lbl)
+        self._state_card.hide()
         root.addWidget(self._state_card)
 
         self._content = QWidget()
@@ -533,6 +732,19 @@ class SystemInfoPanel(QFrame):
         resources_l.addWidget(self._temp_widget)
         resources_l.addStretch()
         content_v.addWidget(resources_card)
+
+        # Attached drives (Linux: mounted local block devices; Windows: lettered
+        # volumes on a disk partition). Rows are rebuilt on every refresh.
+        drives_card, drives_l, _ = self._make_section_card(tr("sysinfo.drives"))
+        self._drives_box = QWidget()
+        self._drives_box_l = QVBoxLayout(self._drives_box)
+        self._drives_box_l.setContentsMargins(0, 0, 0, 0)
+        self._drives_box_l.setSpacing(12)
+        placeholder = QLabel("—")
+        placeholder.setObjectName("sysinfoDriveMeta")
+        self._drives_box_l.addWidget(placeholder)
+        drives_l.addWidget(self._drives_box)
+        content_v.addWidget(drives_card)
 
         details_card, details_l, self._uptime_section = self._make_section_card(tr("sysinfo.uptime"))
 
@@ -674,9 +886,56 @@ class SystemInfoPanel(QFrame):
         h.addWidget(lbl)
         h.addStretch()
         h.addWidget(val)
-        # store val ref on widget for easy update
+        # store refs on widget for easy update
+        w._label_lbl = lbl
         w._value_lbl = val
         return w
+
+    def _update_drives(self, drives: list[dict]) -> None:
+        """Rebuild the drive rows: name + used/total, device line, usage bar."""
+        while self._drives_box_l.count():
+            item = self._drives_box_l.takeAt(0)
+            old = item.widget()
+            if old:
+                # Detach now: deleteLater alone leaves the old row painted over
+                # the new one until the next event-loop pass.
+                old.setParent(None)
+                old.deleteLater()
+
+        if not drives:
+            empty = QLabel(tr("sysinfo.drives.none"))
+            empty.setObjectName("sysinfoDriveMeta")
+            self._drives_box_l.addWidget(empty)
+            return
+
+        for drive in drives:
+            row = QWidget()
+            v = QVBoxLayout(row)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(3)
+
+            pct = float(drive.get("percent", 0.0))
+            stat = self._make_stat_row(
+                drive["title"], f"{drive['used']} / {drive['total']}  ({pct:.0f}%)"
+            )
+            stat._label_lbl.setToolTip(drive["title"])
+            v.addWidget(stat)
+
+            meta_text = drive.get("detail", "")
+            if drive.get("external"):
+                meta_text = f"{meta_text} · {tr('sysinfo.drive.external')}" if meta_text \
+                    else tr("sysinfo.drive.external")
+            if meta_text:
+                meta = QLabel(meta_text)
+                meta.setObjectName("sysinfoDriveMeta")
+                v.addWidget(meta)
+
+            bar = self._make_progress_bar()
+            bar.setValue(int(min(max(pct, 0.0), 100.0)))
+            self._set_bar_color(bar, pct)
+            v.addWidget(bar)
+
+            self._drives_box_l.addWidget(row)
 
     def _make_progress_bar(self) -> QProgressBar:
         bar = QProgressBar()
@@ -700,10 +959,10 @@ class SystemInfoPanel(QFrame):
 
     def _fetch_info(self):
         self._hero_card.show()
-        self._loading_lbl.show()
-        self._state_card.show()
+        # The overlay popup is the only loading indicator; drop a previous
+        # error card so nothing but the popup shows while reloading.
+        self._state_card.hide()
         self._content.show()
-        self._error_lbl.hide()
         self._refresh_btn.setEnabled(False)
         self._set_loading_overlay_visible(True)
 
@@ -711,13 +970,14 @@ class SystemInfoPanel(QFrame):
             self._info_thread.stop()
             self._info_thread.wait()
 
-        self._info_thread = SSHSystemInfoThread(self._conn, settings=self._settings)
+        self._info_thread = SSHSystemInfoThread(
+            self._conn, settings=self._settings, os_hint=self._remote_os
+        )
         self._info_thread.info_ready.connect(self._on_info_ready)
         self._info_thread.error.connect(self._on_error)
         self._info_thread.start()
 
     def _on_info_ready(self, info: dict):
-        self._loading_lbl.hide()
         self._state_card.hide()
         self._refresh_btn.setEnabled(True)
         self._set_loading_overlay_visible(False)
@@ -725,6 +985,11 @@ class SystemInfoPanel(QFrame):
         if info.get("error") and not info.get("connected"):
             self._on_error(info["error"])
             return
+
+        # Remember the detected OS so the next refresh queries it directly.
+        detected = info.get("_detected_os")
+        if detected:
+            self._remote_os = detected
 
         self._content.show()
         self._state_pill.setText(tr("panel.status.connected"))
@@ -790,22 +1055,26 @@ class SystemInfoPanel(QFrame):
         users = info.get("users", "—")
         self._users_row._value_lbl.setText(users)
 
-        # Processes
+        # Processes — Linux' "ps aux | wc -l" includes a header line; Windows'
+        # (Get-Process).Count is already exact.
         procs = info.get("processes", "—")
-        try:
-            procs = str(int(procs) - 1)  # subtract header line from ps aux
-        except Exception:
-            pass
+        if info.get("_detected_os") == "linux":
+            try:
+                procs = str(int(procs) - 1)
+            except Exception:
+                pass
         self._proc_row._value_lbl.setText(procs)
 
         # IP
         ip = info.get("ip", "—")
         self._ip_row._value_lbl.setText(ip)
 
+        # Drives
+        self._update_drives(info.get("drives_list") or [])
+
     def _on_error(self, msg: str, error_type: str = "generic"):
         self._set_loading_overlay_visible(False)
         if error_type == "auth_missing":
-            self._loading_lbl.hide()
             self._state_card.hide()
             self._show_overlay_error(
                 "🔑",
@@ -815,7 +1084,6 @@ class SystemInfoPanel(QFrame):
             self._refresh_btn.setEnabled(True)
             return
         if error_type == "key_missing":
-            self._loading_lbl.hide()
             self._state_card.hide()
             self._show_overlay_error(
                 "🤷",
@@ -824,7 +1092,6 @@ class SystemInfoPanel(QFrame):
             )
             self._refresh_btn.setEnabled(True)
             return
-        self._loading_lbl.hide()
         self._content.hide()
         self._state_card.show()
         self._state_pill.setText(tr("dialog.error"))

@@ -181,7 +181,8 @@ class ConnectionCard(QFrame):
             return
 
         if mounted:
-            self._mount_btn.setIcon(svg_icon("minus", "#00d464", 16))
+            # Red dash: the click disconnects.
+            self._mount_btn.setIcon(svg_icon("minus", "#ef4444", 16))
             self._mount_btn.setText("")
             self._mount_btn.setToolTip(tr("card.tooltip.mount_on"))
         else:

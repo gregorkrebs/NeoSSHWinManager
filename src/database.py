@@ -447,6 +447,12 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN terminal_client TEXT DEFAULT 'xterm'")
             if "sshfs_disable_cache" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sshfs_disable_cache INTEGER DEFAULT 0")
+            # File browser settings: one encrypted JSON document (bookmarks
+            # hold remote paths, which are encrypted like connection metadata).
+            if "sftp_browser_enc" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_enc TEXT DEFAULT ''")
+            if "sftp_browser_iv" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_iv TEXT DEFAULT ''")
         except Exception:
             pass
 

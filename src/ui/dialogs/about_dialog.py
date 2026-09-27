@@ -14,7 +14,7 @@ from src.channel import display_name, display_version
 from src.ui.dialog_utils import match_parent_height
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.widgets.no_wheel import NoWheelScrollArea
-from src.i18n import tr
+from src.i18n import current_language, tr
 
 try:
     with open(os.path.join(os.path.dirname(__file__), "..", "..", "version.txt"), "r", encoding="utf-8") as f:
@@ -23,11 +23,19 @@ except Exception:
     APP_VERSION = "?"
 
 _URL_PROJECT_WEBSITE = "https://www.neosshwinmanager.org/"
-_URL_PROJECT_DOCS    = "https://gregorkrebs.github.io/neosshwinmanager/"
 _URL_PROJECT_GITHUB  = "https://github.com/gregorkrebs/neosshwinmanager"
-_URL_AUTHOR_WEBSITE  = "https://www.gregorkrebs.de/neosshwinmanager"
+_URL_AUTHOR_WEBSITE  = "https://www.gregorkrebs.dev"
 _URL_AUTHOR_GITHUB   = "https://github.com/gregorkrebs"
-_URL_CONTRIB_GITHUB  = "https://github.com/Den4ik53"
+
+# The documentation exists in German and English; every other UI language
+# gets the English pages.
+_URL_DOCS_DE = "https://www.neosshwinmanager.org/de/docs/erste-schritte"
+_URL_DOCS_EN = "https://www.neosshwinmanager.org/en/docs/getting-started"
+
+
+def docs_url() -> str:
+    """Getting-started page in the UI language (a language switch needs a restart)."""
+    return _URL_DOCS_DE if current_language() == "de" else _URL_DOCS_EN
 
 
 def _open(url: str):
@@ -183,7 +191,7 @@ class AboutDialog(FramelessDialog):
         proj_btns.setSpacing(8)
 
         wb = _link_btn(tr("about.website.btn"), _URL_PROJECT_WEBSITE, "🌐", "aboutWebBtn")
-        db = _link_btn(tr("about.docs.btn"),    _URL_PROJECT_DOCS,    "📄", "aboutDocsBtn")
+        db = _link_btn(tr("about.docs.btn"),    docs_url(),           "📄", "aboutDocsBtn")
         gb = _link_btn(tr("about.github.btn"),  _URL_PROJECT_GITHUB,  "⌨", "aboutGithubBtn")
 
         for btn in (wb, db, gb):
@@ -210,19 +218,9 @@ class AboutDialog(FramelessDialog):
         auth_btns.setSpacing(8)
         awb = _link_btn(tr("about.author.website.btn"), _URL_AUTHOR_WEBSITE, "🌐", "aboutWebBtn")
         agb = _link_btn(tr("about.author.github.btn"),  _URL_AUTHOR_GITHUB,  "⌨", "aboutGithubBtn")
-        adb = _link_btn(tr("about.author.neossh.btn"),  _URL_AUTHOR_WEBSITE, "📄", "aboutDocsBtn")
-        for btn in (awb, agb, adb):
+        for btn in (awb, agb):
             auth_btns.addWidget(btn, stretch=1)
         auth_l.addLayout(auth_btns)
-
-        auth_l.addWidget(_divider())
-
-        contrib_lbl = _section_label(tr("about.other.devs").upper())
-        auth_l.addWidget(contrib_lbl)
-
-        contrib_btn = _link_btn("Den4ik53", _URL_CONTRIB_GITHUB, "⌨", "aboutGithubBtn")
-        contrib_btn.setFixedWidth(160)
-        auth_l.addWidget(contrib_btn)
 
         layout.addWidget(auth_card)
 
