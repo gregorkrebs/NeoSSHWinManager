@@ -181,6 +181,74 @@ var
   AppPrefsPage: TWizardPage;
   LangCombo: TNewComboBox;
   ThemeCombo: TNewComboBox;
+  InstalledExe: String;
+
+// ── In-app updates (src/updater.py) ────────────────────────────────────────
+// The app starts this setup with /SILENT /WAITPID=<pid>[,<pid>...]
+// /RELAUNCH=<its exe> and quits. Setup waits until those processes are gone
+// (their exe is locked until then), installs, and starts the app again, also
+// when the installation failed or was cancelled.
+
+const
+  SYNCHRONIZE = $00100000;
+
+function OpenProcess(dwDesiredAccess: DWORD; bInheritHandle: BOOL; dwProcessId: DWORD): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(hHandle: THandle; dwMilliseconds: DWORD): DWORD;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+procedure WaitForProcess(Pid: Integer);
+var
+  Handle: THandle;
+begin
+  Handle := OpenProcess(SYNCHRONIZE, False, Pid);
+  if Handle = 0 then
+    exit;                                  // already gone
+  Log(Format('Waiting for process %d to exit', [Pid]));
+  WaitForSingleObject(Handle, 60000);
+  CloseHandle(Handle);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Pids: String;
+  Comma: Integer;
+begin
+  Pids := ExpandConstant('{param:WAITPID|}');
+  while Pids <> '' do
+  begin
+    Comma := Pos(',', Pids);
+    if Comma = 0 then
+    begin
+      WaitForProcess(StrToIntDef(Pids, 0));
+      Pids := '';
+    end
+    else
+    begin
+      WaitForProcess(StrToIntDef(Copy(Pids, 1, Comma - 1), 0));
+      Delete(Pids, 1, Comma);
+    end;
+  end;
+  Result := True;
+end;
+
+procedure DeinitializeSetup();
+var
+  Exe: String;
+  ErrorCode: Integer;
+begin
+  Exe := ExpandConstant('{param:RELAUNCH|}');
+  if Exe = '' then
+    exit;
+  // After a successful install the app lives in {app}; otherwise start the
+  // copy that handed over, so the user is never left without the app.
+  if (InstalledExe <> '') and FileExists(InstalledExe) then
+    Exe := InstalledExe;
+  Log('Starting ' + Exe);
+  ShellExecAsOriginalUser('', Exe, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+end;
 
 procedure InitializeWizard;
 var
@@ -242,6 +310,11 @@ var
   PrefsDir, PrefsFile, ThemeCode, StartWithWindowsJson, JsonContent: String;
 begin
   if CurStep = ssPostInstall then
+    InstalledExe := ExpandConstant('{app}\{#MyAppExeName}');
+
+  // A silent run (in-app update) never showed the preferences page: keep the
+  // choices of the first installation instead of writing the defaults.
+  if (CurStep = ssPostInstall) and not WizardSilent then
   begin
     PrefsDir := ExpandConstant('{userappdata}\SSHWinManager');
     ForceDirectories(PrefsDir);

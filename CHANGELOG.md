@@ -8,10 +8,13 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [1.6.1] — 2026-09-27
+## [1.6.1] — 2026-09-28
 
 ### What changes for you
 
+- **Updates install themselves again.** Since version 1.5.4, an update that was downloaded and set to install at the next start was never installed: the installer did not start. From 1.6.1 on, the app hands over to the installer, which installs the update in the background and then starts the app again.
+  - If you are still on 1.6.0 or older, install 1.6.1 once by hand: click "Download in browser" in the update window, or download the setup from the [releases page](https://github.com/gregorkrebs/NeoSSHWinManager/releases/latest) and run it. Your connections and settings are kept.
+- **The update window is easy to read.** Headings, lists and bold text are shown formatted instead of as raw markup, and you see the changes of every version since the one you have installed.
 - **Drag & drop in the file browser works again.** In 1.6.0, dropping files onto the file list or the folder tree showed an error message and nothing was transferred, whether the files came from the other side of the browser, from Windows Explorer or from a mounted drive. Uploads, downloads and moves by drag & drop now work as intended. Dropping onto the path bar was not affected.
 
 <details>
@@ -19,6 +22,14 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 #### Fixed
 
+- **In-app updates never installed (1.5.4 to 1.6.0).** `launch_pending_installer()` handed over to a hidden `cmd.exe` script that waited for the app to exit and then ran the installer. Started from the windowed app, which has no console, the script inherited invalid standard handles and died at the first `find` of its wait loop. The installer never ran, and the script never started the app again. A frozen stand-in app reproduced this; with valid standard handles, the same script ran through.
+  - The script is gone. The app now starts the installer itself with `/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /WAITPID=… /RELAUNCH=… /LOG=…`, with valid (`DEVNULL`) standard handles, and quits.
+  - The installer's `[Code]` section waits in `InitializeSetup` until the app's processes have exited: the app itself and, in the onefile build, its bootloader, which keeps the exe locked a little longer. It waits up to 60 seconds for each. `DeinitializeSetup` starts the app again, also when the installation failed or was cancelled.
+  - The installer writes its log to `%APPDATA%\SSHWinManager\updates\install.log`. A `run_update.cmd` left over by an older version is removed.
+- A silent installation (an in-app update) no longer overwrites `install_prefs.json` with the default language and theme. The preferences page is not shown in a silent run, so there is nothing to save.
+- **The update dialog showed release notes as plain text**, so Markdown and the `<details>` block of the technical notes appeared as raw markup. The dialog now renders Markdown (`Qt.TextFormat.MarkdownText`) with clickable links, leaves out the technical details, and uses the better readable `dialogLead` style. In the light theme, the notes no longer sit on a dark background.
+- **Release notes cover every version between the installed and the new one.** They are taken from `CHANGELOG.md` at the release tag, with the release text as a fallback.
+- New tests in `tests/test_updater.py` cover the installer command line, the one-time handover at startup and the release notes.
 - `FileView.dropEvent` (`src/filebrowser/ui/pane.py`) and `FsTree.dropEvent` (`src/filebrowser/ui/tree.py`) called `QAbstractItemView.stopAutoScroll()`, which PyQt6 does not expose. Every drop onto a file list or folder tree raised `AttributeError` before the transfer or move was queued. Both now reset the view through the base class's `dragLeaveEvent()`, which stops the auto-scroll timer and returns the view to `NoState`.
 - A new UI test drops files from the PC side and as Explorer URLs onto the server's file list and folder tree and checks that they arrive.
 
