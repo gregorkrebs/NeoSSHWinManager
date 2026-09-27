@@ -8,6 +8,24 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.6.1] — 2026-09-27
+
+### What changes for you
+
+- **Drag & drop in the file browser works again.** In 1.6.0, dropping files onto the file list or the folder tree showed an error message and nothing was transferred, whether the files came from the other side of the browser, from Windows Explorer or from a mounted drive. Uploads, downloads and moves by drag & drop now work as intended. Dropping onto the path bar was not affected.
+
+<details>
+<summary>Technical details</summary>
+
+#### Fixed
+
+- `FileView.dropEvent` (`src/filebrowser/ui/pane.py`) and `FsTree.dropEvent` (`src/filebrowser/ui/tree.py`) called `QAbstractItemView.stopAutoScroll()`, which PyQt6 does not expose. Every drop onto a file list or folder tree raised `AttributeError` before the transfer or move was queued. Both now reset the view through the base class's `dragLeaveEvent()`, which stops the auto-scroll timer and returns the view to `NoState`.
+- A new UI test drops files from the PC side and as Explorer URLs onto the server's file list and folder tree and checks that they arrive.
+
+</details>
+
+---
+
 ## [1.6.0] — 2026-09-27
 
 The biggest update so far: Windows servers now work throughout the app, and the file browser has been rebuilt from scratch and moved into the main window.
