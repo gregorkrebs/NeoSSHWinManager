@@ -8,6 +8,7 @@ from src.ui.dialog_utils import match_parent_height
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import tr
+from src.updater import clean_release_notes
 
 class UpdateDialog(FramelessDialog):
     """
@@ -72,14 +73,21 @@ class UpdateDialog(FramelessDialog):
         scroll = NoWheelScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # The app palette stays dark after a switch to the light theme; let the
+        # dialog's own background show through instead.
+        scroll.viewport().setAutoFillBackground(False)
         inner = QWidget()
         inner_l = QVBoxLayout(inner)
         inner_l.setContentsMargins(22, 20, 22, 20)
 
-        changelog_lbl = QLabel(self.changelog)
-        changelog_lbl.setObjectName("fieldLabel")
+        # Release notes are Markdown; records saved by older versions may still
+        # carry the raw release body, so clean them here as well.
+        changelog_lbl = QLabel(clean_release_notes(self.changelog))
+        changelog_lbl.setObjectName("dialogLead")
+        changelog_lbl.setTextFormat(Qt.TextFormat.MarkdownText)
         changelog_lbl.setWordWrap(True)
-        changelog_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        changelog_lbl.setOpenExternalLinks(True)
+        changelog_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         inner_l.addWidget(changelog_lbl)
         inner_l.addStretch()
 

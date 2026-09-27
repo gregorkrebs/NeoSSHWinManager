@@ -10,15 +10,24 @@ Update strategy (since 1.5.4):
 
     Instead the installer is stored in %APPDATA%\\SSHWinManager\\updates together
     with a small marker file (pending_update.json). If the user arms the update,
-    the *next* program start hands over to a helper script that waits for this
-    process to exit, runs the installer, and starts the app again afterwards —
-    no matter whether the installer completed or was cancelled.
+    the *next* program start hands over to the installer and quits.
+
+Handover (since 1.6.1):
+    The app starts the installer itself, silently, and exits. The installer
+    waits for the app's processes to end (/WAITPID), installs, and starts the
+    app again afterwards (/RELAUNCH) — also when the installation failed. Its
+    log goes to updates\\install.log.
+
+    Up to 1.6.0 a hidden cmd script did the waiting. It inherited the invalid
+    standard handles of this windowed app and died at its first `find`, so the
+    installer never ran.
 """
 
 import hashlib
 import hmac
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -33,13 +42,14 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from src.app_logger import logger
 
 GITHUB_API_URL = "https://api.github.com/repos/gregorkrebs/neosshwinmanager/releases/latest"
-
-# Characters that would break out of a quoted path inside the generated .cmd
-# helper (or let it run something else entirely).
-_UNSAFE_PATH_CHARS = '"%&|<>^\r\n'
+# The changelog as released: all versions between the running and the new one.
+CHANGELOG_URL = "https://raw.githubusercontent.com/gregorkrebs/NeoSSHWinManager/{tag}/CHANGELOG.md"
 
 _MARKER_NAME = "pending_update.json"
 _ATTEMPT_NAME = "update_attempt.json"
+_LOG_NAME = "install.log"
+# Helper script of 1.5.4–1.6.0; removed when found.
+_LEGACY_SCRIPT_NAME = "run_update.cmd"
 
 
 # ── Pending-update bookkeeping ──────────────────────────────────────────────
@@ -197,16 +207,45 @@ def take_update_attempt() -> dict | None:
 
 # ── Handover to the installer ───────────────────────────────────────────────
 
-def _is_safe_script_path(path: str) -> bool:
-    """Path can be embedded in a quoted .cmd argument without escaping tricks."""
-    return bool(path) and not any(c in path for c in _UNSAFE_PATH_CHARS)
+def _app_pids() -> list[int]:
+    """
+    The processes the installer has to wait for: this one and, in a onefile
+    build, the bootloader that started it. The bootloader keeps the exe locked
+    until it has removed its temp folder, a few seconds after this process.
+    """
+    pids = [os.getpid()]
+    try:
+        import psutil
+        parent = psutil.Process(os.getppid())
+        if os.path.normcase(parent.exe()) == os.path.normcase(sys.executable):
+            pids.append(parent.pid)
+    except Exception:
+        pass
+    return pids
+
+
+def installer_command(installer: str, app_exe: str, pids: list[int], log_path: str) -> list[str]:
+    """
+    Command line for the handover. /WAITPID and /RELAUNCH are handled by the
+    installer's [Code] section (installer/NeoSSHWinManager.iss).
+    """
+    return [
+        installer,
+        "/SILENT",                  # progress window only, no wizard pages
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",       # safety net if files are still in use
+        "/WAITPID=" + ",".join(str(p) for p in pids),
+        "/RELAUNCH=" + app_exe,
+        "/LOG=" + log_path,
+    ]
 
 
 def launch_pending_installer(record: dict, from_version: str = "") -> bool:
     """
-    Start a detached helper script that waits for this process to exit, runs
-    the installer, and relaunches the app afterwards (also when the installer
-    was cancelled). The caller must quit right after this returns True.
+    Start the installer silently. It waits for this app to exit, installs, and
+    starts the app again afterwards (also when the installation failed). The
+    caller must quit right after this returns True.
 
     `from_version` is only used for the statistics marker — pass the running
     version so the next start can tell whether the update took effect.
@@ -220,65 +259,29 @@ def launch_pending_installer(record: dict, from_version: str = "") -> bool:
         logger.info("Not running as a frozen exe — skipping installer handover.")
         return False
 
-    app_exe = sys.executable
-    exe_name = os.path.basename(app_exe)
-    script_path = str(updates_dir() / "run_update.cmd")
-
-    for p in (installer, app_exe, script_path):
-        if not _is_safe_script_path(p):
-            logger.error(f"Updater: refusing to build helper script for unsafe path: {p}")
-            return False
-
-    # Wait for the app to be gone before touching its files: with a PyInstaller
-    # onefile build the bootloader parent outlives the Python child briefly and
-    # keeps the exe locked, so we wait on the image name, not on a PID.
-    # After the installer returns we start the app again — on success the
-    # installer's own "launch app" step may already have done so, which is
-    # harmless: the single-instance mutex turns the second start into a no-op.
-    script = f"""@echo off
-setlocal disabledelayedexpansion
-set /a _tries=0
-
-:waitloop
-tasklist /fi "imagename eq {exe_name}" /nh 2>nul | find /i "{exe_name}" >nul
-if errorlevel 1 goto runsetup
-set /a _tries+=1
-if %_tries% GEQ 60 goto runsetup
-timeout /t 1 /nobreak >nul
-goto waitloop
-
-:runsetup
-start "" /wait "{installer}"
-rem Exit code 0 means the installer finished; only then is it safe to discard.
-if not errorlevel 1 del /f /q "{installer}" >nul 2>&1
-start "" "{app_exe}"
-del /f /q "%~f0" >nul 2>&1
-"""
-
     try:
-        updates_dir().mkdir(parents=True, exist_ok=True)
-        with open(script_path, "w", encoding="ascii") as f:
-            f.write(script)
-    except Exception as e:
-        logger.error(f"Failed to write update helper script: {e}")
-        return False
+        os.remove(updates_dir() / _LEGACY_SCRIPT_NAME)
+    except OSError:
+        pass
 
+    cmd = installer_command(installer, sys.executable, _app_pids(), str(updates_dir() / _LOG_NAME))
+    # This is a windowed app without standard handles; a child that inherits
+    # them can fail on its first read or write, so hand it valid ones.
+    kwargs = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL, close_fds=True)
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP
     try:
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0  # SW_HIDE
-        subprocess.Popen(
-            ["cmd.exe", "/c", script_path],
-            startupinfo=startupinfo,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
+        try:
+            # Outlive this app even if it runs inside a job that is closed on exit.
+            subprocess.Popen(cmd, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kwargs)
+        except OSError:
+            subprocess.Popen(cmd, creationflags=flags, **kwargs)
     except Exception as e:
-        logger.error(f"Failed to start update helper script: {e}")
+        logger.error(f"Failed to start the update installer: {e}")
         return False
 
     record_update_attempt(from_version, str(record.get("version", "")))
-    logger.info(f"Update handover scheduled: {installer}")
+    logger.info(f"Update handover: {' '.join(cmd)}")
     return True
 
 
@@ -308,6 +311,61 @@ def maybe_install_pending_update(current_version: str) -> bool:
     set_install_on_next_start(False)
 
     return launch_pending_installer(record, from_version=current_version)
+
+
+# ── Release notes ───────────────────────────────────────────────────────────
+
+_SECTION_RE = re.compile(r"^## \[(?P<version>[^\]]+)\](?P<rest>.*)$", re.M)
+
+
+def clean_release_notes(text: str) -> str:
+    """
+    Markdown for the update dialog: without the collapsible technical details
+    (<details>…</details>) and without horizontal rules.
+    """
+    text = re.sub(r"<details>.*?</details>", "", text or "", flags=re.S | re.I)
+    lines = [line for line in text.splitlines() if line.strip() != "---"]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def notes_between(changelog: str, current: str, latest: str) -> str:
+    """
+    The CHANGELOG.md sections of every version newer than `current` up to and
+    including `latest`, newest first, cleaned for the update dialog.
+    """
+    try:
+        low, high = version.parse(current), version.parse(latest)
+    except version.InvalidVersion:
+        return ""
+    sections = list(_SECTION_RE.finditer(changelog))
+    parts = []
+    for i, m in enumerate(sections):
+        try:
+            v = version.parse(m.group("version"))
+        except version.InvalidVersion:
+            continue                                   # e.g. "Unreleased"
+        if low < v <= high:
+            end = sections[i + 1].start() if i + 1 < len(sections) else len(changelog)
+            body = changelog[m.end():end]
+            parts.append(f"## Version {m.group('version')}{m.group('rest')}\n{body}")
+    return clean_release_notes("\n\n".join(parts))
+
+
+def fetch_release_notes(tag: str, current: str, latest: str, release_body: str) -> str:
+    """
+    Notes for everything between the running and the new version, taken from
+    the released CHANGELOG.md; the release body if that cannot be read.
+    """
+    try:
+        req = urllib.request.Request(CHANGELOG_URL.format(tag=tag),
+                                     headers={"User-Agent": "NeoSSHWinManager-Updater"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            notes = notes_between(response.read().decode("utf-8", errors="replace"), current, latest)
+        if notes:
+            return notes
+    except Exception as e:
+        logger.info(f"Changelog not available, using the release notes: {e}")
+    return clean_release_notes(release_body) or "No changelog available."
 
 
 # ── Update check / download ─────────────────────────────────────────────────
@@ -349,7 +407,8 @@ class UpdaterManager(QObject):
 
                 # Compare versions using packaging.version for proper semantic versioning
                 if version.parse(latest_version_tag) > version.parse(self.current_version):
-                    changelog = data.get("body", "No changelog available.")
+                    changelog = fetch_release_notes(data.get("tag_name", ""), self.current_version,
+                                                    latest_version_tag, data.get("body") or "")
                     download_url = ""
                     asset_name = ""
                     checksum_url = ""
