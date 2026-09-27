@@ -1,4 +1,6 @@
-<h1 align="center">NEO SSH-Win Manager</h1>
+<h1 align="center">
+  <img src="assets/social-preview.png" alt="NEO SSH-Win Manager — mount SSH servers as Windows drive letters, auto-login SSH terminal (built-in, PuTTY or OpenSSH), dual-pane SFTP/FTP/FTPS file browser, multi-user with encrypted credentials" width="100%"/>
+</h1>
 
 <p align="center">
   A modern Windows desktop app for mounting remote SSH filesystems as Windows drive letters with a centralized solution for SSH access<br/>
@@ -18,8 +20,8 @@
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/app-preview-dark.png" alt="NEO SSH-Win Manager — dark mode" width="49%"/>
-  <img src="assets/screenshots/app-preview-light.png" alt="NEO SSH-Win Manager — light mode" width="49%"/>
+  <img src="assets/screenshots/app-preview-dark.png" alt="NEO SSH-Win Manager — connections and in-app terminal, dark mode" width="49%"/>
+  <img src="assets/screenshots/app-preview-light.png" alt="NEO SSH-Win Manager — file browser, light mode" width="49%"/>
 </p>
 
 <p align="center">
@@ -54,40 +56,46 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 <table>
   <tr>
     <td align="center">
-      <img src="assets/screenshots/app-preview-dark.png" alt="Dark mode — connection list" width="380"/><br/>
-      <sub><b>Dark mode</b></sub>
+      <img src="assets/screenshots/app-preview-dark.png" alt="Dark mode — connection list with the in-app terminal" width="380"/><br/>
+      <sub><b>Connections and in-app terminal (dark mode)</b></sub>
     </td>
     <td align="center">
-      <img src="assets/screenshots/app-preview-light.png" alt="Light mode — connection list" width="380"/><br/>
-      <sub><b>Light mode</b></sub>
+      <img src="assets/screenshots/file-browser-dark.png" alt="Dark mode — file browser with this PC and the server side by side" width="380"/><br/>
+      <sub><b>File browser (dark mode)</b></sub>
     </td>
   </tr>
   <tr>
+    <td align="center">
+      <img src="assets/screenshots/app-preview-light.png" alt="Light mode — file browser with this PC and the server side by side" width="380"/><br/>
+      <sub><b>File browser (light mode)</b></sub>
+    </td>
     <td align="center">
       <img src="assets/screenshots/add-edit-dialog.png" alt="Add / Edit connection dialog" width="380"/><br/>
       <sub><b>Add / edit a connection</b></sub>
     </td>
+  </tr>
+  <tr>
     <td align="center">
       <img src="assets/screenshots/system-info.png" alt="Live system info panel" width="380"/><br/>
       <sub><b>Live system info panel</b></sub>
     </td>
-  </tr>
-  <tr>
     <td align="center">
       <img src="assets/screenshots/tray.png" alt="System tray quick toggles" width="380"/><br/>
       <sub><b>System tray with quick mount toggles</b></sub>
     </td>
+  </tr>
+  <tr>
     <td align="center">
       <img src="assets/screenshots/login.png" alt="Per-user login" width="380"/><br/>
       <sub><b>Per-user login</b></sub>
     </td>
-  </tr>
-  <tr>
     <td align="center">
       <img src="assets/screenshots/user_management.png" alt="User management" width="380"/><br/>
       <sub><b>User management</b></sub>
     </td>
-    <td align="center">
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
       <img src="assets/screenshots/settings.png" alt="Settings dialog" width="380"/><br/>
       <sub><b>Settings dialog</b></sub>
     </td>
