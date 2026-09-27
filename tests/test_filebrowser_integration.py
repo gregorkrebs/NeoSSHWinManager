@@ -315,8 +315,15 @@ def test_windows_commands_run_in_powershell(tmp_path):
     work = tmp_path / "w"
     _write(work / "it's here" / "a.txt", 100, 1)
 
+    # On a server, sshd starts the command in a fresh session. The test runs
+    # it from whatever shell started pytest instead: under PowerShell 7 (as in
+    # the GitHub release build) PSModulePath points at PowerShell 7's own
+    # modules, which Windows PowerShell 5.1 cannot load, so Get-FileHash and
+    # friends would be "not recognized". Start it the way a server session does.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+
     def ps(cmd):
-        return subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        return subprocess.run(cmd, capture_output=True, text=True, shell=True, env=env)
 
     r = ps(commands.pack_command(True, _sftp_style(work), ["it's here"], "out.zip", "zip"))
     assert r.returncode == 0, r.stderr
