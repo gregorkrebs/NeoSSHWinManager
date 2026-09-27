@@ -35,12 +35,13 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 ## Features
 
 - **One-click mounting** of remote SSH filesystems as Windows drive letters via SSHFS-Win / WinFsp.
-- **Built-in SSH terminal** access per connection — uses Windows OpenSSH or PuTTY.
-- **Built-in file browser for SFTP, FTPS and FTP** — FTP over TLS in explicit (AUTH TLS, port 21) and implicit (port 990) mode, plain FTP for legacy servers, with upload/download, rename, delete and in-place editing. Plain-FTP hosts can also be handed to the on-board Windows Explorer FTP client.
+- **SSH terminal** per connection — the integrated in-app terminal (several sessions per connection, in tabs), Windows OpenSSH or PuTTY.
+- **File browser for SFTP, FTPS and FTP, built into the main window** — every host in its own tab, this PC and the server side by side with drag & drop, a transfer queue that resumes interrupted transfers, undo/redo, conflict handling with file comparison, editing in your own programs, folder sync and server-side archives. FTP over TLS works in explicit (AUTH TLS, port 21) and implicit (port 990) mode, plain FTP for legacy servers; plain-FTP hosts can also be handed to the on-board Windows Explorer FTP client.
+- **Linux and Windows servers** — servers running OpenSSH for Windows work in the file browser, as mounted drives (including subfolders such as `C:\Projects`) and in the system info panel.
 - **Password authentication** with stored credentials — passwordless login without using SSH keys.
 - **Public key authentication.**
 - **SSH certificate authentication.**
-- **Live remote system info panel** (OS, CPU, RAM, disk, uptime, load, temperature).
+- **Live remote system info panel** (OS, CPU, RAM, drives, uptime, load, temperature) for Linux and Windows servers.
 - **Multi-user accounts** with encrypted credential storage (SQLite + cryptography).
 - **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left).
 - **System tray** with quick mount toggles, minimize to tray.
@@ -206,6 +207,8 @@ neosshwinmanager/
 │   ├── sshfs_controller.py       # Mount / unmount via net use
 │   ├── drive_utils.py            # Drive letter helpers
 │   ├── i18n.py                   # Translation loader
+│   ├── filebrowser/              # File browser (SFTP/FTP/FTPS), a page of the main window
+│   ├── remote_os.py              # Detects Windows OpenSSH servers from the SSH banner
 │   ├── translations/
 │   │   ├── en.json               # English (default)
 │   │   ├── de.json               # German
@@ -252,7 +255,7 @@ python -m pytest tests/ -v
 
 The idea for this tool was inspired by the original **SSHWinManager**, which was written in JavaScript / Electron by a different author.
 
-**NEO SSH-Win Manager is a complete, from-scratch rewrite in Python (PyQt6)**, developed jointly by [**Den4ik53**](https://github.com/Den4ik53) and [**Gregor Krebs**](https://github.com/gregorkrebs). No code from the original project is reused. The goals, scope and architecture have changed substantially:
+**NEO SSH-Win Manager is a complete, from-scratch rewrite in Python (PyQt6)**, developed by [**Gregor Krebs**](https://github.com/gregorkrebs). No code from the original project is reused. The goals, scope and architecture have changed substantially:
 
 - Native Python / PyQt6 stack instead of Electron.
 - Multi-user support with per-user encrypted SSH credential storage.

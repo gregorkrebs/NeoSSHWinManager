@@ -31,6 +31,12 @@ VALIDATION_ENDPOINT = "https://www.neosshwinmanager.org/neo_pro_validate.php"
 # secret. Changing it invalidates all previously issued tokens.
 CLIENT_VERIFY_SECRET = "NeoSSHWM-ClientVerify-2026"
 
+# Pro is switched off for now: the settings show no licence section and the
+# integrated terminal has no session limit. Activation and the licence check
+# below stay intact so both can be switched on again here.
+SHOW_PRO_UI = False
+FREE_TERMINAL_SESSION_LIMIT: Optional[int] = None    # None = unlimited (was 3)
+
 
 # ---------------------------------------------------------------------------
 # Machine fingerprint

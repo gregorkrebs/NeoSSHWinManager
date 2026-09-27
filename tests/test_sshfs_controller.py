@@ -42,6 +42,13 @@ class _CapturedThread:
         pass
 
 
+@pytest.fixture(autouse=True)
+def _no_banner_probe(monkeypatch):
+    # _mount_direct reads the SSH banner of the host for "/" mounts; keep the
+    # tests off the network. Tests that need a Windows server override this.
+    monkeypatch.setattr(sshfs_controller, "detect_remote_os", lambda _host, _port: None)
+
+
 def test_find_sshfs_pid_matches_mount_argument_exactly(monkeypatch):
     processes = [
         _FakeProcessInfo(
@@ -366,3 +373,59 @@ def test_stale_label_job_does_not_touch_missing_drive(monkeypatch):
     _CapturedThread.created[0].target()
 
     run.assert_not_called()
+
+
+def _mounted_remote_spec(monkeypatch, tmp_path, remote_path, server_os=None):
+    """Run _mount_direct and return the user@host:path argument given to sshfs."""
+    key_path = tmp_path / "id_ed25519"
+    key_path.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n", encoding="utf-8")
+    conn = Connection(
+        name="Server",
+        host="example.test",
+        user="alice",
+        remote_path=remote_path,
+        auth_method="key",
+        key_path=str(key_path),
+        drive_letter="X:",
+    )
+    popen = Mock(return_value=_RunningProcess())
+    drive_states = iter([False, False, True, True, True])
+    monkeypatch.setattr(sshfs_controller, "detect_remote_os", lambda _host, _port: server_os)
+    monkeypatch.setattr(sshfs_controller, "_find_sshfs_exe", lambda: r"C:\sshfs.exe")
+    monkeypatch.setattr(
+        sshfs_controller, "_drive_letter_in_use", lambda _letter: next(drive_states)
+    )
+    monkeypatch.setattr(sshfs_controller.subprocess, "Popen", popen)
+    monkeypatch.setattr(sshfs_controller.threading, "Thread", _CapturedThread)
+    monkeypatch.setattr(sshfs_controller.time, "sleep", lambda _seconds: None)
+
+    result = SSHFSController()._mount_direct(conn)
+
+    assert result.success is True
+    return popen.call_args.args[0][1]
+
+
+@pytest.mark.parametrize(
+    ("remote_path", "expected"),
+    [
+        (r"C:\Users\alice", "alice@example.test:/C:/Users/alice"),
+        (r"E:\Daten", "alice@example.test:/E:/Daten"),
+        ("/C:/Users/alice", "alice@example.test:/C:/Users/alice"),
+    ],
+)
+def test_mount_converts_windows_paths_to_sftp_form(
+    monkeypatch, tmp_path, remote_path, expected
+):
+    assert _mounted_remote_spec(monkeypatch, tmp_path, remote_path) == expected
+
+
+def test_mount_of_windows_root_uses_home(monkeypatch, tmp_path):
+    # "/" on Windows OpenSSH only lists drive letters, which Explorer cannot
+    # show properly, so the home directory (empty remote path) is mounted.
+    spec = _mounted_remote_spec(monkeypatch, tmp_path, "/", server_os="windows")
+    assert spec == "alice@example.test:"
+
+
+def test_mount_of_linux_root_stays_root(monkeypatch, tmp_path):
+    spec = _mounted_remote_spec(monkeypatch, tmp_path, "/", server_os=None)
+    assert spec == "alice@example.test:/"

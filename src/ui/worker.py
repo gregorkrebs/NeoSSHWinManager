@@ -58,15 +58,42 @@ class TerminalConnectWorker(QThread):
     """
     finished = pyqtSignal(str, object)  # session_key, token (str) or None
 
-    def __init__(self, bridge_server, session_key: str, conn):
+    def __init__(self, bridge_server, session_key: str, conn, initial_input: str | None = None):
         super().__init__()
         self.bridge_server = bridge_server
         self.session_key = session_key
         self.conn = conn
+        self.initial_input = initial_input
 
     def run(self):
         try:
             token = self.bridge_server.create_session_token(self.session_key, self.conn)
+            if token and self.initial_input:
+                self._send_initial_input()
         except Exception:
             token = None
         self.finished.emit(self.session_key, token)
+
+    def _send_initial_input(self) -> None:
+        """
+        Type initial_input (e.g. a cd into the file browser's folder) into the
+        new shell. The channel is already non-blocking, so send in a short
+        retry loop; the shell reads it once its prompt is up. Never raises: a
+        terminal without the cd is still a working terminal.
+        """
+        import socket
+        import time
+        session = getattr(self.bridge_server, "_sessions", {}).get(self.session_key)
+        channel = getattr(session, "channel", None)
+        if channel is None:
+            return
+        data = self.initial_input.encode("utf-8")
+        deadline = time.monotonic() + 3.0
+        while data and time.monotonic() < deadline:
+            try:
+                sent = channel.send(data)
+                data = data[sent:]
+            except socket.timeout:
+                time.sleep(0.05)
+            except Exception:
+                return

@@ -85,7 +85,13 @@ class FtpClient:
         self._ftp: Optional[ftplib.FTP] = None
         self._conn: Optional[Connection] = None
         self._connected: bool = False
+        self._home: str = "/"
         self._lock = threading.RLock()
+
+    @property
+    def home_path(self) -> str:
+        """The folder the server put us in after login (PWD), or '/'."""
+        return self._home
 
     # ── Connection lifecycle ────────────────────────────────────────────────
 
@@ -107,6 +113,11 @@ class FtpClient:
             self._conn = conn
             self._ftp = self._open_session(conn)
             self._connected = True
+            try:
+                home = self._ftp.pwd() or "/"
+            except Exception:
+                home = "/"
+            self._home = home if home.startswith("/") else "/"
 
     def _open_session(self, conn: Connection) -> ftplib.FTP:
         """Build, connect and log in a fresh ftplib session for conn."""
@@ -406,6 +417,77 @@ class FtpClient:
                     ftp.storbinary(
                         f"STOR {path}", fh, blocksize=_BLOCKSIZE, callback=_sent
                     )
+            except Exception as e:
+                raise FtpClientError(str(e)) from e
+
+    # ── Low-level access for the file browser ───────────────────────────────
+
+    def command(self, cmd: str) -> str:
+        """Send a raw command (SITE CHMOD, MFMT, …) and return the reply."""
+        with self._lock:
+            ftp = self._require_connected()
+            try:
+                return ftp.sendcmd(cmd)
+            except Exception as e:
+                raise FtpClientError(str(e)) from e
+
+    def mlst(self, remote_path: str) -> Optional[dict]:
+        """
+        Facts of one path via MLST (RFC 3659): {'type', 'size', 'modify', …}.
+
+        Returns None when the path does not exist and raises
+        FtpClientError("MLST unsupported") when the server lacks MLST.
+        """
+        with self._lock:
+            ftp = self._require_connected()
+            path = _normalize(remote_path)
+            try:
+                resp = ftp.sendcmd(f"MLST {path}")
+            except ftplib.error_perm as e:
+                if str(e).startswith(("500", "501", "502", "504")):
+                    raise FtpClientError("MLST unsupported") from e
+                return None                     # 550: no such file
+            except Exception as e:
+                raise FtpClientError(str(e)) from e
+        for line in resp.splitlines()[1:]:
+            line = line.strip()
+            if not line or line[:3].isdigit():
+                continue
+            facts_str, _, _name = line.partition(" ")
+            facts = {}
+            for fact in facts_str.split(";"):
+                key, sep, value = fact.partition("=")
+                if sep:
+                    facts[key.strip().lower()] = value.strip()
+            return facts
+        return None
+
+    def retrieve(self, remote_path: str, callback: Callable[[bytes], None], rest: int = 0) -> None:
+        """RETR with an optional restart offset; callback gets every block."""
+        with self._lock:
+            ftp = self._require_connected()
+            try:
+                ftp.retrbinary(
+                    f"RETR {_normalize(remote_path)}", callback,
+                    blocksize=_BLOCKSIZE, rest=rest or None,
+                )
+            except FtpClientError:
+                raise
+            except Exception as e:
+                raise FtpClientError(str(e)) from e
+
+    def store(self, remote_path: str, fp, callback: Callable[[bytes], None], append: bool = False) -> None:
+        """STOR (or APPE to resume) from a file-like object."""
+        verb = "APPE" if append else "STOR"
+        with self._lock:
+            ftp = self._require_connected()
+            try:
+                ftp.storbinary(
+                    f"{verb} {_normalize(remote_path)}", fp,
+                    blocksize=_BLOCKSIZE, callback=callback,
+                )
+            except FtpClientError:
+                raise
             except Exception as e:
                 raise FtpClientError(str(e)) from e
 

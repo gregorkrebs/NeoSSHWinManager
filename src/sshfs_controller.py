@@ -18,6 +18,8 @@ import psutil
 from ctypes import wintypes
 from dataclasses import dataclass
 from src.config import Connection
+from src.remote_os import detect_remote_os
+from src.remote_path import looks_like_windows_path, normalize_remote_input
 from src.utils.secure_memory import SecureBytes
 
 SSHFS_EXE_PATHS = [
@@ -299,11 +301,25 @@ class SSHFSController:
         logger.info(f"Drive letter: {letter}:")
         logger.info(f"SSHFS exe: {sshfs_exe}")
 
+        # Windows OpenSSH exposes drives as /C:/… — convert a Windows-style
+        # remote path (C:\Users\foo, W:\data, /C:/Users) into the forward-slash
+        # form sshfs/SFTP needs, so subpaths (not just "/") can be mounted.
+        remote_path = (conn.remote_path or '/').strip() or '/'
+        if looks_like_windows_path(remote_path):
+            remote_path = normalize_remote_input(remote_path, True)
+        elif remote_path == '/' and detect_remote_os(conn.host, conn.port) == "windows":
+            # At "/" Windows OpenSSH lists the drive letters ("C:", "E:"), and
+            # ":" is illegal in Windows file names, so Explorer would show them
+            # as "C" etc. Mount the user's home instead: an empty remote path
+            # is relative to the SFTP server's default directory.
+            remote_path = ''
+        logger.info(f"Effective remote path: {remote_path or '(home)'}")
+
         # SECURITY FIX: Validate remote_path to prevent path traversal on server
-        if not _is_safe_remote_path(conn.remote_path or '/'):
+        if not _is_safe_remote_path(remote_path):
             return MountResult(False, f"Ungültiger remote_path: {conn.remote_path}")
 
-        remote = f"{conn.user}@{conn.host}:{conn.remote_path or '/'}"
+        remote = f"{conn.user}@{conn.host}:{remote_path}"
         sshfs_bin_dir = os.path.dirname(sshfs_exe)
 
         # volname setzt den Label direkt in WinFsp – kein Registry-Trick nötig

@@ -394,6 +394,11 @@ QPushButton#dialogMaximizeBtn:checked {
     font-weight: 700;
 }
 
+#sysinfoDriveMeta {
+    color: #8fa4b8;
+    font-size: 10px;
+}
+
 QProgressBar#sysinfoProgress {
     background-color: #0d1720;
     border-radius: 3px;
@@ -1931,6 +1936,11 @@ QPushButton#dialogMaximizeBtn:checked {
     color: #182536;
     font-size: 12px;
     font-weight: 700;
+}
+
+#sysinfoDriveMeta {
+    color: #617386;
+    font-size: 10px;
 }
 
 QProgressBar#sysinfoProgress {
