@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.database import get_connection
 from src.crypto import (
@@ -1016,6 +1016,8 @@ class UserConnectionManager:
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
             sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
             accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
+            allow_shared_drive_letters=bool(row["allow_shared_drive_letters"]) if "allow_shared_drive_letters" in row.keys() else False,
+            auto_pick_free_drive_letter=bool(row["auto_pick_free_drive_letter"]) if "auto_pick_free_drive_letter" in row.keys() else False,
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -1028,8 +1030,9 @@ class UserConnectionManager:
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
                     sshfs_disable_cache, accent_color,
+                    allow_shared_drive_letters, auto_pick_free_drive_letter,
                     updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1051,6 +1054,8 @@ class UserConnectionManager:
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
                      sshfs_disable_cache=excluded.sshfs_disable_cache,
                      accent_color=excluded.accent_color,
+                     allow_shared_drive_letters=excluded.allow_shared_drive_letters,
+                     auto_pick_free_drive_letter=excluded.auto_pick_free_drive_letter,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
@@ -1064,7 +1069,9 @@ class UserConnectionManager:
                  int(bool(getattr(s, "telemetry_enabled", False))),
                  int(bool(getattr(s, "telemetry_prompt_shown", False))),
                  int(bool(getattr(s, "sshfs_disable_cache", False))),
-                 getattr(s, "accent_color", "") or "")
+                 getattr(s, "accent_color", "") or "",
+                 int(bool(getattr(s, "allow_shared_drive_letters", False))),
+                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))))
             )
 
     # Backwards-compatible alias used by main.py
@@ -1105,15 +1112,17 @@ class UserConnectionManager:
     # Active Mounts Tracking (für Auto-Reconnect)
     # ------------------------------------------------------------------
 
-    def add_active_mount(self, conn_id: str) -> None:
-        """Markiert eine Verbindung als aktiv gemountet."""
+    def add_active_mount(self, conn_id: str, drive_letter: str = "") -> None:
+        """Markiert eine Verbindung als aktiv gemountet – auf *drive_letter*,
+        dem tatsächlich genutzten Buchstaben (kann vom eingestellten abweichen)."""
         with get_connection() as conn:
             conn.execute(
-                """INSERT INTO active_mounts (user_id, conn_id)
-                   VALUES (?, ?)
+                """INSERT INTO active_mounts (user_id, conn_id, drive_letter)
+                   VALUES (?, ?, ?)
                    ON CONFLICT(user_id, conn_id) DO UPDATE SET
+                   drive_letter = excluded.drive_letter,
                    mounted_at = datetime('now')""",
-                (self._user.id, conn_id)
+                (self._user.id, conn_id, drive_letter or "")
             )
 
     def remove_active_mount(self, conn_id: str) -> None:
@@ -1124,14 +1133,15 @@ class UserConnectionManager:
                 (self._user.id, conn_id)
             )
 
-    def get_active_mounts(self) -> List[str]:
-        """Gibt Liste der aktiven Connection IDs zurück."""
+    def get_active_mounts(self) -> Dict[str, str]:
+        """Aktive Mounts: {conn_id: tatsächlich genutzter Buchstabe} ('' bei
+        Einträgen aus Versionen, die den Buchstaben noch nicht speicherten)."""
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT conn_id FROM active_mounts WHERE user_id = ?",
+                "SELECT conn_id, drive_letter FROM active_mounts WHERE user_id = ?",
                 (self._user.id,)
             ).fetchall()
-        return [r["conn_id"] for r in rows]
+        return {r["conn_id"]: (r["drive_letter"] or "") for r in rows}
 
     def clear_all_active_mounts(self) -> None:
         """Löscht alle aktiven Mounts (beim Logout)."""

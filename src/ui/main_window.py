@@ -264,7 +264,8 @@ class MainWindow(FramelessMainWindow):
         _s = self._mgr.get_settings()
         set_current_accent(getattr(_s, "accent_color", ""))
         # (theme, accent) the widgets were last painted in, see _apply_settings_object()
-        self._applied_look = (_s.theme or "dark", current_accent())
+        self._applied_look = (_s.theme or "dark", current_accent(),
+                              bool(getattr(_s, "allow_shared_drive_letters", False)))
         self._controller = SSHFSController()
         self._cards: dict[str, ConnectionCard] = {}
         self._selected_id: str | None = None
@@ -593,7 +594,14 @@ class MainWindow(FramelessMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._active_mounts: set[str] = set()
+        # Hosts the app mounted: {conn_id: letter actually used} (persisted for
+        # auto-reconnect; '' for records from older versions).
+        self._active_mounts: dict[str, str] = {}
+        # Last resolved mount state: {conn_id: letter} (see _compute_mounted).
+        self._mounted_letters: dict[str, str] = {}
+        # Letter a running mount worker mounts on, per conn_id.
+        self._mount_targets: dict[str, str] = {}
+        self._letter_retry: set[str] = set()   # one automatic retry per mount
         self._load_active_mounts()
         self._containers: dict[str, object] = {}
 
@@ -1236,20 +1244,23 @@ class MainWindow(FramelessMainWindow):
         self._selected_id = None
 
         connections = self._mgr.get_connections()  # Nur normale Verbindungen (keine Templates)
-        mounted_map = self._controller.get_mounted_drives()
+        mounted = self._compute_mounted(connections)
+        # Shared letters switched off: flag hosts that still share a letter.
+        from src.drive_utils import duplicate_letters, norm_letter
+        dupes = (set() if self._mgr.get_settings().allow_shared_drive_letters
+                 else duplicate_letters(connections))
 
         for conn in connections:
             # FTP/FTPS hosts are never mounted — SSHFS speaks SSH only.
-            mounted = (not conn.is_ftp) and conn.drive_letter.upper().rstrip("\\") in {
-                k.upper().rstrip("\\") for k in mounted_map.keys()
-            }
-            container = self._create_connection_container(conn, mounted)
+            container = self._create_connection_container(conn, conn.id in mounted)
             self._list_layout.insertWidget(self._list_layout.count() - 1, container)
             self._containers[conn.id] = container
             self._cards[conn.id] = container._card
+            container._card.set_mounted_letter(mounted.get(conn.id))
+            container._card.set_letter_warning(norm_letter(conn.drive_letter) in dupes)
 
         self._update_status()
-        self._tray.update_connections_menu(connections, set(mounted_map.keys()))
+        self._tray.update_connections_menu(connections, mounted)
         self._refresh_groups_combo()  # Gruppen-Filter aktualisieren
         self._apply_group_filter()
         # Restore terminal-active indicators on rebuilt cards
@@ -1308,8 +1319,10 @@ class MainWindow(FramelessMainWindow):
             "_ef_ftp_implicit_hint", "_ef_ftp_passive", "_ef_ftp_verify",
             "_ef_ftp_verify_hint", "_ef_ftp_plain_warning", "_ef_key_field",
             "_ef_drive_field", "_ef_cli_section", "_ef_putty_widget",
+            "_ef_key_browse_btn", "_ef_lock_banner",
         ):
             setattr(self, attr, None)
+        self._ef_mount_locked = False
         self._ef_initial_snapshot = None
 
     def _ensure_panel_sized(self):
@@ -1439,22 +1452,16 @@ class MainWindow(FramelessMainWindow):
 
         card = self._cards.get(conn_id)
         is_mounted = card and card.is_mounted
-        # In DEBUG mode editing is always allowed, even while mounted.
-        edit_locked = is_mounted and not self._mgr.get_settings().debug_mode
 
         self._set_right_panel_header(tr("panel.header.details"), conn.name.upper())
-        # Edit button: enabled=accent color, disabled=muted (theme-aware)
+        # Edit button: always available; while mounted the form locks the
+        # connection fields itself.
         theme = self._mgr.get_settings().theme or "dark"
-        if edit_locked:
-            edit_icon_color = "#aab4c4" if theme == "light" else "#2a3a4a"
-        else:
-            edit_icon_color = current_accent() if theme == "light" else "#aab4c4"
+        edit_icon_color = current_accent() if theme == "light" else "#aab4c4"
         self._rp_edit_btn.setIcon(svg_icon("edit", edit_icon_color, 15))
         self._rp_edit_btn.setVisible(True)
-        self._rp_edit_btn.setEnabled(not edit_locked)
-        self._rp_edit_btn.setToolTip(
-            tr("card.tooltip.edit_locked") if edit_locked else tr("card.tooltip.edit")
-        )
+        self._rp_edit_btn.setEnabled(True)
+        self._rp_edit_btn.setToolTip(tr("card.tooltip.edit"))
         # Header actions (overview): Sysinfo → Edit → Terminal → Mount → Close.
         # Terminal, sysinfo and mount all need SSH, so they are hidden for FTP.
         is_ftp = bool(conn.is_ftp)
@@ -1605,7 +1612,7 @@ class MainWindow(FramelessMainWindow):
             v.addWidget(_row(tr("addedit.ftp.passive"), _yes if conn.ftp_passive else _no))
         else:
             v.addWidget(_row_pair(tr("addedit.label.path"), conn.remote_path,
-                                  tr("addedit.label.drive"), conn.drive_letter, 3, 1))
+                                  tr("addedit.label.drive"), self._effective_letter(conn), 3, 1))
 
         # CLI
         if conn.cli_access_enabled:
@@ -1784,14 +1791,8 @@ class MainWindow(FramelessMainWindow):
         if not conn:
             return
 
+        # Mounted hosts can be edited too: the form locks the connection fields.
         card = self._cards.get(conn_id)
-        if card and card.is_mounted and not self._mgr.get_settings().debug_mode:
-            self._show_inline_message(
-                tr("edit.locked.title"),
-                tr("edit.locked.msg"),
-                is_error=True
-            )
-            return
 
         if self._panel_conn_id and self._panel_conn_id in self._cards:
             self._cards[self._panel_conn_id].set_info_active(False)
@@ -2387,7 +2388,9 @@ class MainWindow(FramelessMainWindow):
 
     def _build_edit_form(self, conn):
         """Build add/edit form inside right panel content area."""
-        from src.drive_utils import get_available_drives
+        from src.drive_utils import (
+            assignable_letters, get_available_drives, get_used_drives, norm_letter,
+        )
 
         is_edit = conn is not None
 
@@ -2426,8 +2429,20 @@ class MainWindow(FramelessMainWindow):
             v.addLayout(self._build_status_row(conn, is_mounted, _theme))
             v.addSpacing(8)
 
-            # DEBUG mode: editing a mounted host is allowed but risky (changing
-            # path/drive letter while mounted can leave things inconsistent).
+            # Mounted: connection fields are locked (see _ef_set_mount_lock);
+            # the banner says why. Shown/hidden by _ef_set_mount_lock.
+            self._ef_lock_banner = QLabel(tr("edit.mounted_banner"))
+            self._ef_lock_banner.setWordWrap(True)
+            self._ef_lock_banner.setStyleSheet(
+                f"background-color: {accent_tone('rgba(0, 119, 182, 0.12)')};"
+                f"border: 1px solid {accent_tone('rgba(0, 119, 182, 0.35)')};"
+                "border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600;"
+            )
+            self._ef_lock_banner.setVisible(False)
+            v.addWidget(self._ef_lock_banner)
+
+            # DEBUG mode: nothing is locked, but editing a mounted host is risky
+            # (changing path/drive letter while mounted can leave things inconsistent).
             if is_mounted and self._mgr.get_settings().debug_mode:
                 warn = QLabel(tr("edit.debug_warning"))
                 warn.setWordWrap(True)
@@ -2514,11 +2529,11 @@ class MainWindow(FramelessMainWindow):
         self._ef_key = QLineEdit(conn.key_path if is_edit else "")
         self._ef_key.setPlaceholderText("C:/Users/user/.ssh/id_rsa")
         key_hl.addWidget(self._ef_key, stretch=1)
-        browse_btn = QPushButton("…")
-        browse_btn.setFixedWidth(28)
-        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        browse_btn.clicked.connect(self._ef_browse_key)
-        key_hl.addWidget(browse_btn)
+        self._ef_key_browse_btn = QPushButton("…")
+        self._ef_key_browse_btn.setFixedWidth(28)
+        self._ef_key_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ef_key_browse_btn.clicked.connect(self._ef_browse_key)
+        key_hl.addWidget(self._ef_key_browse_btn)
         self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container)
         v.addWidget(self._ef_key_field)
 
@@ -2574,17 +2589,25 @@ class MainWindow(FramelessMainWindow):
         self._ef_drive = NoWheelComboBox()
         used = [c.drive_letter for c in self._mgr.get_all()
                 if not c.is_ftp and (not is_edit or c.id != conn.id)]
-        available = get_available_drives(exclude=used)
-        if is_edit and conn.drive_letter:
-            curr = conn.drive_letter.upper().rstrip("\\") + ":"
-            if curr not in available:
-                available.insert(0, curr)
-        for letter in sorted(set(available)):
+        if self._mgr.get_settings().allow_shared_drive_letters:
+            # Letters may be shared: every letter, whoever else uses it. A
+            # taken letter is resolved when mounting.
+            letters = assignable_letters()
+        else:
+            letters = get_available_drives(exclude=used)
+        own = norm_letter(conn.drive_letter) if is_edit else None
+        if own and own not in letters:
+            letters.append(own)     # the host's own letter is always offered
+        for letter in sorted(set(letters)):
             self._ef_drive.addItem(letter, letter)
-        if is_edit:
-            idx = self._ef_drive.findData(conn.drive_letter)
-            if idx >= 0:
-                self._ef_drive.setCurrentIndex(idx)
+        if own:
+            self._ef_drive.setCurrentIndex(self._ef_drive.findData(own))
+        else:
+            # New host: the first letter that is free and not used by a host.
+            busy = set(get_used_drives()) | {norm_letter(u) for u in used}
+            free = [l for l in sorted(set(letters)) if l not in busy]
+            if free:
+                self._ef_drive.setCurrentIndex(self._ef_drive.findData(free[0]))
         # Same layout as _ef_field_pair, but the drive half stays addressable so
         # it can be hidden for FTP connections (they are never mounted).
         path_row = QWidget()
@@ -2676,9 +2699,13 @@ class MainWindow(FramelessMainWindow):
         # Template Option (nur im Add-Modus oder bei Bearbeitung sichtbar)
         v.addSpacing(4)
         v.addWidget(self._section_label(tr("addedit.section.template_options")))
-        self._ef_template_cb = QCheckBox(tr("addedit.template.save_as_template"))
+        # Editing a host: the box saves a template COPY; the host stays as it is.
+        _copy = is_edit and not conn.is_template
+        self._ef_template_cb = QCheckBox(tr("addedit.template.save_copy") if _copy
+                                         else tr("addedit.template.save_as_template"))
         self._ef_template_cb.setChecked(conn.is_template if is_edit else False)
-        self._ef_template_cb.setToolTip(tr("addedit.template.save_as_template.hint"))
+        self._ef_template_cb.setToolTip(tr("addedit.template.save_copy.hint") if _copy
+                                        else tr("addedit.template.save_as_template.hint"))
         v.addWidget(self._ef_template_cb)
 
         v.addStretch()
@@ -2690,10 +2717,57 @@ class MainWindow(FramelessMainWindow):
         # the initial visibility for the loaded/default protocol.
         self._ef_protocol.currentIndexChanged.connect(self._ef_on_protocol_changed)
         self._ef_apply_protocol_visibility()
+        if is_edit:
+            self._ef_set_mount_lock(self._ef_should_lock(conn.id))
         self._ef_initial_snapshot = self._snapshot_form()
         self._validate_edit_form()
         self._setup_edit_tab_order()
         QTimer.singleShot(0, self._ef_name.setFocus)
+
+    # ── Editing a mounted host ───────────────────────────────────────────
+    # The running mount depends on these; everything else (name, CLI access,
+    # PuTTY key, groups, template copy) stays editable.
+    _EF_MOUNT_LOCKED_WIDGETS = (
+        "_ef_protocol", "_ef_host", "_ef_port", "_ef_user", "_ef_auth", "_ef_pw",
+        "_ef_key", "_ef_key_browse_btn", "_ef_ftp_implicit", "_ef_ftp_verify",
+        "_ef_ftp_passive", "_ef_path", "_ef_drive",
+    )
+    _EF_MOUNT_LOCKED_FIELDS = (
+        "protocol", "host", "port", "user", "auth_method", "password", "key_path",
+        "ftp_implicit_tls", "ftp_verify_cert", "ftp_passive", "remote_path", "drive_letter",
+    )
+
+    def _ef_should_lock(self, conn_id: str) -> bool:
+        card = self._cards.get(conn_id)
+        return bool(card and card.is_mounted and not self._mgr.get_settings().debug_mode)
+
+    def _ef_set_mount_lock(self, locked: bool):
+        """Grey out the connection fields while the host is mounted; hovering
+        one (or its field frame) says why."""
+        self._ef_mount_locked = locked
+        tip = tr("edit.locked_field") if locked else ""
+        for name in self._EF_MOUNT_LOCKED_WIDGETS:
+            w = getattr(self, name, None)
+            if w is None:
+                continue
+            try:
+                w.setEnabled(not locked)
+                w.setToolTip(tip)
+                frame = w.parentWidget()
+                for _ in range(3):
+                    if frame is None or frame.objectName() == "rpInfoField":
+                        break
+                    frame = frame.parentWidget()
+                if frame is not None and frame.objectName() == "rpInfoField":
+                    frame.setToolTip(tip)
+            except RuntimeError:
+                continue    # widget already deleted
+        banner = getattr(self, "_ef_lock_banner", None)
+        if banner is not None:
+            try:
+                banner.setVisible(locked)
+            except RuntimeError:
+                pass
 
     # ── Protocol-dependent form behaviour ────────────────────────────────
 
@@ -3225,6 +3299,19 @@ class MainWindow(FramelessMainWindow):
         self._sf_auto_remount.setChecked(getattr(s, "auto_remount_on_lost", True))
         self._sf_sshfs_disable_cache = QCheckBox(tr("settings.sshfs_disable_cache"))
         self._sf_sshfs_disable_cache.setChecked(getattr(s, "sshfs_disable_cache", False))
+        self._sf_shared_letters = QCheckBox(tr("settings.shared_letters"))
+        self._sf_shared_letters.setChecked(getattr(s, "allow_shared_drive_letters", False))
+        self._sf_auto_pick_letter = QCheckBox(tr("settings.auto_pick_letter"))
+        self._sf_auto_pick_letter.setChecked(
+            self._sf_shared_letters.isChecked() and getattr(s, "auto_pick_free_drive_letter", False))
+        # Auto-pick only makes sense while letters may be shared.
+        self._sf_auto_pick_letter.setEnabled(self._sf_shared_letters.isChecked())
+
+        def _on_shared_letters_toggled(on: bool):
+            self._sf_auto_pick_letter.setEnabled(on)
+            if not on:
+                self._sf_auto_pick_letter.setChecked(False)
+        self._sf_shared_letters.toggled.connect(_on_shared_letters_toggled)
 
         mnt_card, mnt_vl = _group_card()
         mnt_vl.addWidget(_row_combo(tr("settings.check_interval"), self._sf_interval))
@@ -3234,6 +3321,10 @@ class MainWindow(FramelessMainWindow):
         mnt_vl.addWidget(_row_check(self._sf_auto_remount))
         mnt_vl.addWidget(_inner_sep())
         mnt_vl.addWidget(_row_check(self._sf_sshfs_disable_cache, tr("settings.sshfs_disable_cache.hint")))
+        mnt_vl.addWidget(_inner_sep())
+        mnt_vl.addWidget(_row_check(self._sf_shared_letters, tr("settings.shared_letters.hint")))
+        mnt_vl.addWidget(_inner_sep())
+        mnt_vl.addWidget(_row_check(self._sf_auto_pick_letter, tr("settings.auto_pick_letter.hint")))
         v.addWidget(mnt_card)
         v.addSpacing(14)
 
@@ -3795,6 +3886,8 @@ class MainWindow(FramelessMainWindow):
             "auto_reconnect": self._safe_bool_checked("_sf_auto_reconnect", False),
             "auto_remount": self._safe_bool_checked("_sf_auto_remount", True),
             "disable_cache": self._safe_bool_checked("_sf_sshfs_disable_cache", False),
+            "shared_letters": self._safe_bool_checked("_sf_shared_letters", False),
+            "auto_pick_letter": self._safe_bool_checked("_sf_auto_pick_letter", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
             "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
             "lang": self._safe_current_data("_sf_lang", "en"),
@@ -4011,44 +4104,95 @@ class MainWindow(FramelessMainWindow):
         if not getattr(self, "_ef_conn", None):
             self._show_inline_message(tr("dialog.error"), "Formular ist nicht verfügbar. Bitte erneut öffnen.", is_error=True)
             return
+        import dataclasses
+        import uuid
+        conn = self._ef_conn
         name = self._safe_lineedit_text("_ef_name")
         host = self._safe_lineedit_text("_ef_host")
         user = self._safe_lineedit_text("_ef_user")
         is_template = self._safe_bool_checked("_ef_template_cb", False)
+        # Editing a host: the template box saves a COPY as template; the host
+        # itself stays (and stays mounted). Editing a template keeps it one.
+        make_copy = is_template and not conn.is_template
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
-        elif not is_template and self._name_is_duplicate(name, exclude_id=self._ef_conn.id): errors.append(tr("addedit.name.duplicate"))
+        elif (not is_template or make_copy) and self._name_is_duplicate(name, exclude_id=conn.id): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
+        fields = self._ef_collect_protocol_fields()
+        locked = bool(getattr(self, "_ef_mount_locked", False))
+        if not locked and not is_template:
+            letter_error = self._drive_letter_conflict(fields.get("drive_letter"), exclude_id=conn.id)
+            if letter_error:
+                errors.append(letter_error)
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
 
+        tpl_name = None
         if is_template:
-            tpl_name = self._ask_template_name(name, exclude_id=self._ef_conn.id)
+            tpl_name = self._ask_template_name(name, exclude_id=conn.id)
             if tpl_name is None:
                 return
-            name = tpl_name
+            if not make_copy:
+                name = tpl_name
 
-        conn = self._ef_conn
+        # PuTTY disabled globally: its field is not in the form, keep the path.
+        if getattr(self, "_ef_putty_key", None) is None and fields["protocol"] == conn.protocol:
+            fields["putty_key_path"] = conn.putty_key_path
 
-        updated = Connection(
-            id=conn.id,
+        # Start from the stored host so fields the form does not show
+        # (template_id, …) survive the save.
+        updated = dataclasses.replace(
+            conn,
             name=name, host=host, user=user,
             remote_path=self._safe_lineedit_text("_ef_path") or "/",
             port=self._safe_spin_value("_ef_port", 22),
             auth_method=self._safe_current_data("_ef_auth", "password"),
             password=self._safe_lineedit_text("_ef_pw"),
             groups=self._safe_lineedit_text("_ef_groups"),
-            is_template=is_template,
-            **self._ef_collect_protocol_fields(),
+            is_template=is_template and not make_copy,
+            **fields,
         )
+        if locked:
+            # Mounted: the running mount depends on these, keep the stored values.
+            updated = dataclasses.replace(
+                updated, **{f: getattr(conn, f) for f in self._EF_MOUNT_LOCKED_FIELDS})
         self._mgr.update(updated)
+
+        if make_copy:
+            # Templates are stored without credentials; a CLI key must stay unique.
+            self._mgr.add(dataclasses.replace(
+                updated, id=str(uuid.uuid4()), name=tpl_name, is_template=True,
+                template_id=None, password="", key_path="", putty_key_path="",
+                cli_access_enabled=False, cli_access_key=None,
+            ))
+
+        if updated.name != conn.name and self._cards.get(conn.id) and self._cards[conn.id].is_mounted:
+            # Renamed while mounted: Explorer shows the name as drive label.
+            try:
+                self._controller._set_drive_label(
+                    dataclasses.replace(updated, drive_letter=self._effective_letter(updated)), delay=0)
+            except Exception as e:
+                logger.warning(f"Laufwerksbezeichnung nicht aktualisiert: {e}")
+
         self._refresh_list()
-        self._set_status(tr("status.saved"))
+        self._set_status(tr("status.template_copy_saved", name=tpl_name) if make_copy
+                         else tr("status.saved"))
         # Reopen info panel for the updated connection
         self._open_info_panel(conn.id)
+
+    def _drive_letter_conflict(self, letter, exclude_id=None) -> str | None:
+        """Shared letters off: an error text if another host already has *letter*."""
+        from src.drive_utils import norm_letter
+        letter = norm_letter(letter)
+        if not letter or self._mgr.get_settings().allow_shared_drive_letters:
+            return None
+        other = next((c for c in self._mgr.get_connections()
+                      if c.id != exclude_id and not c.is_ftp
+                      and norm_letter(c.drive_letter) == letter), None)
+        return tr("addedit.drive.taken", drive=letter, name=other.name) if other else None
 
     def _save_add_form(self):
         name = self._safe_lineedit_text("_ef_name")
@@ -4061,6 +4205,10 @@ class MainWindow(FramelessMainWindow):
         elif not is_tpl and self._name_is_duplicate(name): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
+        if not is_tpl:
+            letter_error = self._drive_letter_conflict(self._safe_current_data("_ef_drive", ""))
+            if letter_error and self._ef_current_protocol() == PROTOCOL_SFTP:
+                errors.append(letter_error)
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
@@ -4138,6 +4286,9 @@ class MainWindow(FramelessMainWindow):
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
             accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
+            allow_shared_drive_letters=self._sf_shared_letters.isChecked(),
+            auto_pick_free_drive_letter=(self._sf_shared_letters.isChecked()
+                                         and self._sf_auto_pick_letter.isChecked()),
         )
         self._mgr.save_settings(new_settings)
         self._apply_settings_object(new_settings)
@@ -4340,17 +4491,14 @@ class MainWindow(FramelessMainWindow):
     # ------------------------------------------------------------------
 
     def _poll_mount_states(self):
-        mounted_map = self._controller.get_mounted_drives()
-        mounted_set = {k.upper().rstrip("\\") for k in mounted_map.keys()}
+        mounted = self._compute_mounted([c.connection for c in self._cards.values()])
 
         for conn_id, card in self._cards.items():
             conn = card.connection
             if conn.is_ftp:
                 continue        # never mounted, nothing to poll
-            letter_key = conn.drive_letter.upper().rstrip("\\")
-            if not letter_key.endswith(":"):
-                letter_key += ":"
-            is_mounted_now = letter_key in mounted_set
+            is_mounted_now = conn_id in mounted
+            card.set_mounted_letter(mounted.get(conn_id))
             if is_mounted_now != card.is_mounted:
                 card.update_mount_state(is_mounted_now)
                 # Refresh open panel for this connection on mount state change
@@ -4388,7 +4536,8 @@ class MainWindow(FramelessMainWindow):
                 yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel")
             ):
                 return
-            self._controller.unmount(conn.drive_letter)
+            self._controller.unmount(self._effective_letter(conn))
+            self._save_active_mount(conn_id, False)
         else:
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
@@ -4451,6 +4600,11 @@ class MainWindow(FramelessMainWindow):
 
     @pyqtSlot(str)
     def _on_mount(self, conn_id: str):
+        self._mount(conn_id, interactive=True)
+
+    def _mount(self, conn_id: str, interactive: bool = True):
+        """Mount a host. interactive=False (auto-reconnect at start) never asks:
+        if the letter is taken and no free one may be picked, the host is skipped."""
         if conn_id in self._workers:
             return
         conn = self._mgr.get_by_id(conn_id)
@@ -4458,13 +4612,27 @@ class MainWindow(FramelessMainWindow):
             return
         if self._reject_ftp_action(conn, "ftp.mount_unsupported"):
             return
-        conn = self._prepare_auth(conn)
+        # Settle the drive letter first: never ask for a password and then
+        # report that the letter is taken.
+        letter = self._resolve_mount_letter(conn, interactive)
+        if letter is None:
+            card = self._cards.get(conn_id)
+            if card:
+                card.hide_loading()
+            return
+        conn = self._prepare_auth(self._mgr.get_by_id(conn_id) or conn)
         if conn is None:
             card = self._cards.get(conn_id)
             if card:
                 card.hide_loading()
             return
-        self._set_status(tr("status.connecting", name=conn.name, drive=conn.drive_letter))
+        self._start_mount_worker(conn_id, conn, letter)
+
+    def _start_mount_worker(self, conn_id: str, conn, letter: str):
+        """Run the mount on *letter* (conn is a copy prepared by _prepare_auth)."""
+        conn.drive_letter = letter
+        self._mount_targets[conn_id] = letter
+        self._set_status(tr("status.connecting", name=conn.name, drive=letter))
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.connect"))
@@ -4474,24 +4642,129 @@ class MainWindow(FramelessMainWindow):
         self._workers[conn_id] = worker
         worker.start()
 
+    # ── drive letters ──────────────────────────────────────────────────────
+
+    def _drives_in_use(self) -> set[str]:
+        from src.drive_utils import norm_letter
+        return {l for l in (norm_letter(k) for k in self._controller.get_mounted_drives()) if l}
+
+    def _compute_mounted(self, connections=None) -> dict[str, str]:
+        """Which host is mounted on which letter; also remembered for
+        _effective_letter(). See drive_utils.resolve_mounted."""
+        from src.drive_utils import norm_letter, resolve_mounted
+        if connections is None:
+            connections = self._mgr.get_connections()
+        in_use = self._drives_in_use()
+        # Hosts the app has no mount record for only count as mounted if their
+        # letter really holds an SSHFS mount (not a USB stick on that letter).
+        unrecorded = {norm_letter(c.drive_letter) for c in connections
+                      if c.id not in self._active_mounts and not c.is_ftp}
+        candidates = unrecorded & in_use
+        ours = self._controller.sshfs_letters(candidates) if candidates else set()
+        self._mounted_letters = resolve_mounted(
+            connections, self._active_mounts, in_use, ours)
+        return self._mounted_letters
+
+    def _effective_letter(self, conn) -> str:
+        """The letter the host is mounted on, else its configured letter."""
+        from src.drive_utils import norm_letter
+        return (self._mounted_letters.get(conn.id)
+                or norm_letter(self._active_mounts.get(conn.id))
+                or conn.drive_letter)
+
+    def _resolve_mount_letter(self, conn, interactive: bool = True) -> str | None:
+        """The letter to mount *conn* on, or None to cancel.
+
+        Never a letter that is in use. If the configured one is taken:
+        - shared letters + auto-pick: a random free letter, for this mount only;
+        - otherwise (interactive): offer a free letter; accepting stores it on
+          the host. Not interactive: skip the host.
+        """
+        from src.drive_utils import norm_letter, suggest_free_letter
+        settings = self._mgr.get_settings()
+        shared = bool(getattr(settings, "allow_shared_drive_letters", False))
+        auto_pick = shared and bool(getattr(settings, "auto_pick_free_drive_letter", False))
+        wanted = norm_letter(conn.drive_letter)
+        in_use = self._drives_in_use()
+        if wanted and wanted not in in_use:
+            return wanted
+
+        others = [c for c in self._mgr.get_connections()
+                  if c.id != conn.id and not c.is_ftp]
+        mounted = self._compute_mounted()
+        if conn.id in mounted:
+            return None                     # already mounted
+        # Letters other hosts are configured for: avoided where possible, and
+        # always when letters may not be shared.
+        taken_by_hosts = {norm_letter(c.drive_letter) for c in others}
+        busy = wanted or conn.drive_letter
+
+        if auto_pick:
+            pick = (suggest_free_letter(in_use, taken_by_hosts, randomize=True)
+                    or suggest_free_letter(in_use, randomize=True))
+            if pick:
+                logger.info(f"Mount {conn.name}: {busy} belegt, nutze {pick} (nur für diesen Mount)")
+                self._set_status(tr("status.mount_other_letter", name=conn.name,
+                                    drive=busy, other=pick))
+                return pick
+        else:
+            pick = suggest_free_letter(in_use, taken_by_hosts)
+            if pick is None and shared:
+                pick = suggest_free_letter(in_use)
+
+        if pick is None:
+            if interactive:
+                StyledMessageBox.warning(self, tr("mount.letter_busy.title"),
+                                         tr("mount.letter_busy.none", drive=busy))
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+        if not interactive:
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+
+        owner = next((c for c in others if mounted.get(c.id) == wanted), None)
+        by = (tr("mount.letter_busy.by_host", name=owner.name) if owner
+              else tr("mount.letter_busy.by_drive"))
+        if not StyledMessageBox.question(
+            self, tr("mount.letter_busy.title"),
+            tr("mount.letter_busy.body", drive=busy, by=by, other=pick),
+            yes_text=tr("mount.letter_busy.switch", other=pick),
+            no_text=tr("dialog.cancel"),
+        ):
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+        stored = self._mgr.get_by_id(conn.id)
+        if stored is None:
+            return None
+        stored.drive_letter = pick
+        self._mgr.update(stored)
+        self._refresh_list()
+        return pick
+
     def _on_mount_finished(self, conn_id: str, result):
         if conn_id in self._workers:
             self._workers[conn_id].deleteLater()
             del self._workers[conn_id]
         conn = self._mgr.get_by_id(conn_id)
+        letter = self._mount_targets.pop(conn_id, None) or (conn.drive_letter if conn else "")
         card = self._cards.get(conn_id)
         if card:
             card.hide_loading()
         if result.success:
+            self._letter_retry.discard(conn_id)
+            self._save_active_mount(conn_id, True, letter)
+            self._mounted_letters[conn_id] = letter
             if card:
                 card.update_mount_state(True)
-            self._save_active_mount(conn_id, True)
+                card.set_mounted_letter(letter)
             if conn:
-                self._set_status(tr("status.connected", name=conn.name, drive=conn.drive_letter))
+                self._set_status(tr("status.connected", name=conn.name, drive=letter))
             if self._panel_conn_id == conn_id:
                 # Keep header mount state and panel content in sync.
-                # EDIT mode: close edit panel and show info (can't edit a mounted connection).
-                if self._panel_mode in (_PANEL_INFO, _PANEL_EDIT):
+                if self._panel_mode == _PANEL_EDIT:
+                    # Keep any unsaved edits; just lock the connection fields.
+                    self._ef_set_mount_lock(self._ef_should_lock(conn_id))
+                elif self._panel_mode == _PANEL_INFO:
                     self._open_info_panel(conn_id)
                 elif self._panel_mode == _PANEL_SYSINFO:
                     self._open_sysinfo_panel(conn_id)
@@ -4499,12 +4772,19 @@ class MainWindow(FramelessMainWindow):
                     self._sync_rp_mount_button(conn_id)
         else:
             name = conn.name if conn else "?"
+            # The letter was taken between the check and the mount: start over,
+            # which offers another letter (once, so this can never loop).
+            if getattr(result, "code", "") == "drive_in_use" and conn_id not in self._letter_retry:
+                self._letter_retry.add(conn_id)
+                QTimer.singleShot(0, lambda: self._on_mount(conn_id))
+                return
+            self._letter_retry.discard(conn_id)
             # SSH Key Fallback: Wenn Key fehlschlägt aber Passwort hinterlegt ist
             if conn and conn.auth_method == "key" and conn.password:
                 if self._show_key_fallback_dialog(conn):
                     # Temporär auf Passwort-Auth wechseln und retry
                     conn.auth_method = "password"
-                    QTimer.singleShot(500, lambda: self._retry_mount_with_password(conn_id, conn))
+                    QTimer.singleShot(500, lambda: self._retry_mount_with_password(conn_id, conn, letter))
                     return
             if self._show_mount_failure_dialog(conn, result.message):
                 QTimer.singleShot(500, lambda: self._on_mount(conn_id))
@@ -4522,19 +4802,11 @@ class MainWindow(FramelessMainWindow):
             yes_text=tr("dialog.key_fallback.yes"), no_text=tr("dialog.key_fallback.no")
         )
 
-    def _retry_mount_with_password(self, conn_id: str, conn):
-        """Retry mount with password authentication."""
+    def _retry_mount_with_password(self, conn_id: str, conn, letter: str):
+        """Retry mount with password authentication (on the same letter)."""
         if conn_id in self._workers:
             return
-        self._set_status(tr("status.connecting", name=conn.name, drive=conn.drive_letter))
-        card = self._cards.get(conn_id)
-        if card:
-            card.show_loading(tr("card.loading.connect"))
-        _disable_cache = bool(getattr(self._mgr.get_settings(), "sshfs_disable_cache", False))
-        worker = MountWorker(conn, self._controller, disable_cache=_disable_cache)
-        worker.finished.connect(self._on_mount_finished)
-        self._workers[conn_id] = worker
-        worker.start()
+        self._start_mount_worker(conn_id, conn, letter)
 
     @pyqtSlot(str)
     def _on_unmount(self, conn_id: str):
@@ -4543,11 +4815,12 @@ class MainWindow(FramelessMainWindow):
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return
-        self._set_status(tr("status.disconnecting", drive=conn.drive_letter))
+        letter = self._effective_letter(conn)
+        self._set_status(tr("status.disconnecting", drive=letter))
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.disconnect"))
-        worker = UnmountWorker(conn_id, conn.drive_letter, self._controller)
+        worker = UnmountWorker(conn_id, letter, self._controller)
         worker.finished.connect(self._on_unmount_finished)
         self._workers[conn_id] = worker
         worker.start()
@@ -4567,8 +4840,10 @@ class MainWindow(FramelessMainWindow):
             if card:
                 card.hide_loading()
             if result.success:
+                self._mounted_letters.pop(conn_id, None)
                 if card:
                     card.update_mount_state(False)
+                    card.set_mounted_letter(None)
                 self._save_active_mount(conn_id, False)
                 self._set_status(tr("status.disconnected", name=conn.name if conn else "?"))
                 try:
@@ -4577,6 +4852,8 @@ class MainWindow(FramelessMainWindow):
                             self._open_info_panel(conn_id)
                         elif self._panel_mode == _PANEL_SYSINFO:
                             self._open_sysinfo_panel(conn_id)
+                        elif self._panel_mode == _PANEL_EDIT:
+                            self._ef_set_mount_lock(False)
                         else:
                             self._sync_rp_mount_button(conn_id)
                 except Exception as e:
@@ -4905,10 +5182,11 @@ class MainWindow(FramelessMainWindow):
         card = self._cards.get(conn_id)
         if not card or not card.is_mounted:
             return
-        path = f"{conn.drive_letter.rstrip(':').rstrip(chr(92))}:\\"
+        letter = self._effective_letter(conn)
+        path = f"{letter.rstrip(':').rstrip(chr(92))}:\\"
         try:
             os.startfile(path)
-            self._set_status(tr("status.explorer_opened", name=conn.name, drive=conn.drive_letter))
+            self._set_status(tr("status.explorer_opened", name=conn.name, drive=letter))
         except OSError as e:
             self._err_popup(tr("explorer.failed.title"), f"{path}\n\n{e}")
 
@@ -4933,8 +5211,9 @@ class MainWindow(FramelessMainWindow):
         self._update_header_btn_icons(theme)
         self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
         # Connection cards paint their icons in the theme/accent they were
-        # built with; rebuild them when either changed.
-        look = (theme, current_accent())
+        # built with, and show duplicate-letter warnings only while letters
+        # may not be shared; rebuild them when any of that changed.
+        look = (theme, current_accent(), bool(getattr(s, "allow_shared_drive_letters", False)))
         if look != self._applied_look:
             self._applied_look = look
             self._refresh_list()
@@ -5140,32 +5419,39 @@ class MainWindow(FramelessMainWindow):
 
     def _load_active_mounts(self):
         try:
-            self._active_mounts = set(self._mgr.get_active_mounts())
+            self._active_mounts = dict(self._mgr.get_active_mounts())
         except Exception as e:
             logger.warning(f"Konnte aktive Mounts nicht laden: {e}")
-            self._active_mounts = set()
+            self._active_mounts = {}
 
-    def _save_active_mount(self, conn_id: str, mounted: bool):
+    def _save_active_mount(self, conn_id: str, mounted: bool, letter: str = ""):
         try:
             if mounted:
-                self._mgr.add_active_mount(conn_id)
-                self._active_mounts.add(conn_id)
+                from src.drive_utils import norm_letter
+                letter = norm_letter(letter) or ""
+                # A letter holds one mount: other records on it are stale
+                # (that mount is gone) and would claim the drive for the wrong host.
+                for other, other_letter in list(self._active_mounts.items()):
+                    if other != conn_id and letter and norm_letter(other_letter) == letter:
+                        self._mgr.remove_active_mount(other)
+                        self._active_mounts.pop(other, None)
+                self._mgr.add_active_mount(conn_id, letter)
+                self._active_mounts[conn_id] = letter
             else:
                 self._mgr.remove_active_mount(conn_id)
-                self._active_mounts.discard(conn_id)
+                self._active_mounts.pop(conn_id, None)
         except Exception as e:
             logger.warning(f"Konnte Mount-Status nicht speichern: {e}")
 
     def _auto_reconnect_mounts(self):
         if not self._mgr.get_settings().auto_reconnect_mounts:
             return
-        active_ids = self._mgr.get_active_mounts()
-        if not active_ids:
+        if not self._active_mounts:
             return
-        for conn_id in active_ids:
-            conn = self._mgr.get_by_id(conn_id)
-            if conn and not self._controller.is_mounted(conn.drive_letter):
-                QTimer.singleShot(1000, lambda cid=conn_id: self._on_mount(cid))
+        mounted = self._compute_mounted()
+        for conn_id in list(self._active_mounts):
+            if conn_id not in mounted and self._mgr.get_by_id(conn_id):
+                QTimer.singleShot(1000, lambda cid=conn_id: self._mount(cid, interactive=False))
 
     def _on_mount_all(self):
         """Mount all connections (or filtered by selected group)."""
@@ -5285,11 +5571,12 @@ class MainWindow(FramelessMainWindow):
         # Fallback: normaler Unmount, aber nur eigene Laufwerke (keine System-Drives).
         for conn_id in list(self._active_mounts):
             conn = self._mgr.get_by_id(conn_id)
-            if conn and conn.drive_letter:
+            letter = self._effective_letter(conn) if conn else ""
+            if letter:
                 try:
-                    self._controller.unmount(conn.drive_letter)
+                    self._controller.unmount(letter)
                 except Exception as e:
-                    logger.warning(f"Unmount {conn.drive_letter} fehlgeschlagen: {e}")
+                    logger.warning(f"Unmount {letter} fehlgeschlagen: {e}")
 
     def _debug_widget_under_mouse(self):
         """Debug the widget currently under the mouse cursor (triggered by F2)."""

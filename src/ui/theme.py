@@ -1205,6 +1205,23 @@ QFrame#rpInfoField QComboBox:focus {
     border-bottom: 1px solid #0077b6;
     background-color: transparent;
 }
+/* Locked while the host is mounted (edit form) */
+QFrame#rpInfoField QLineEdit:disabled,
+QFrame#rpInfoField QSpinBox:disabled,
+QFrame#rpInfoField QComboBox:disabled {
+    color: #556070;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.10);
+}
+QFrame#rpInfoField QPushButton:disabled {
+    color: #3a4a5a;
+}
+QCheckBox:disabled {
+    color: #556070;
+}
+QCheckBox::indicator:disabled {
+    background-color: #111822;
+    border: 1.5px solid #1a2330;
+}
 QFrame#rpInfoField QPushButton {
     min-height: 16px;
     max-height: 20px;
@@ -2659,6 +2676,23 @@ QFrame#rpInfoField QSpinBox:focus,
 QFrame#rpInfoField QComboBox:focus {
     border-bottom: 1px solid #0077b6;
     background-color: transparent;
+}
+/* Locked while the host is mounted (edit form) */
+QFrame#rpInfoField QLineEdit:disabled,
+QFrame#rpInfoField QSpinBox:disabled,
+QFrame#rpInfoField QComboBox:disabled {
+    color: #9aa6b2;
+    border-bottom: 1px dashed rgba(0, 0, 0, 0.12);
+}
+QFrame#rpInfoField QPushButton:disabled {
+    color: #b8c4cf;
+}
+QCheckBox:disabled {
+    color: #9aa6b2;
+}
+QCheckBox::indicator:disabled {
+    background-color: #f0f2f5;
+    border: 1.5px solid #dde2e8;
 }
 QFrame#rpInfoField QPushButton {
     min-height: 16px;

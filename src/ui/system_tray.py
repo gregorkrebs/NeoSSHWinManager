@@ -79,8 +79,11 @@ class SystemTray(QSystemTrayIcon):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._toggle_window()
 
-    def update_connections_menu(self, connections, mounted_set: set):
-        """Rebuild the tray menu to include quick-toggle for each connection."""
+    def update_connections_menu(self, connections, mounted: dict):
+        """Rebuild the tray menu to include quick-toggle for each connection.
+
+        mounted: {conn_id: drive letter it is mounted on} – hosts may share a
+        letter, so the state is per host, not per letter."""
         menu = self.contextMenu()
         menu.clear()
 
@@ -102,11 +105,11 @@ class SystemTray(QSystemTrayIcon):
                     )
                     menu.addAction(act)
                     continue
-                state = "✓ " if conn.drive_letter in mounted_set else "○ "
-                act = QAction(f"{state}{conn.name} ({conn.drive_letter})", self)
+                is_m = conn.id in mounted
+                state = "✓ " if is_m else "○ "
+                act = QAction(f"{state}{conn.name} ({mounted.get(conn.id) or conn.drive_letter})", self)
                 act.setData(conn.id)
                 # Slot verbinden (Toggle-Logik)
-                is_m = conn.drive_letter in mounted_set
                 act.triggered.connect(lambda _, cid=conn.id, m=is_m: self._on_tray_toggle(cid, m))
                 menu.addAction(act)
 

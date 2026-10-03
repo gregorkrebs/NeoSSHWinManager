@@ -124,6 +124,11 @@ class AppSettings:
     telemetry_enabled: bool = False
     telemetry_prompt_shown: bool = False
     sshfs_disable_cache: bool = False
+    # Several hosts may share one drive letter (only one can be mounted on it).
+    allow_shared_drive_letters: bool = False
+    # Letter taken at mount time: mount on a random free one instead of asking.
+    # Only effective together with allow_shared_drive_letters.
+    auto_pick_free_drive_letter: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
