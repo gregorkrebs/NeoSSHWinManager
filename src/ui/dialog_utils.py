@@ -2,9 +2,48 @@
 dialog_utils.py – Hilfsfunktionen für Dialoge.
 """
 
-from PyQt6.QtWidgets import QDialog, QWidget, QApplication, QPushButton
+from PyQt6.QtWidgets import QDialog, QWidget, QApplication, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QSize
-from src.ui.icons import icon as svg_icon
+from PyQt6.QtGui import QColor
+from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+
+
+# Message types → icon (own SVGs in assets/icons).
+MESSAGE_ICONS = {
+    "info": "circle-info",
+    "warning": "alert-triangle",
+    "error": "circle-x",
+    "question": "circle-help",
+}
+
+
+def message_color(mode: str, theme: str = "dark") -> str:
+    """Colour of a message type: accent for info/question, amber, red."""
+    from src.ui.theme import current_accent, is_light
+    light = is_light(theme)
+    if mode == "warning":
+        return "#d97706" if light else "#f59e0b"
+    if mode == "error":
+        return "#dc2626" if light else "#ef4444"
+    return current_accent()
+
+
+def dialog_icon(name: str, color: str, box: int = 48, glyph: int = 26) -> QLabel:
+    """Dialog icon: the SVG *name* in *color* on a tinted rounded tile."""
+    lbl = QLabel()
+    lbl.setObjectName("dialogIconTile")
+    lbl.setFixedSize(box, box)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    screen = QApplication.primaryScreen()
+    dpr = screen.devicePixelRatio() if screen is not None else 1.0
+    lbl.setPixmap(svg_pixmap(name, color, glyph, dpr))
+    c = QColor(color)
+    lbl.setStyleSheet(
+        f"QLabel#dialogIconTile {{ background-color: rgba({c.red()}, {c.green()}, {c.blue()}, 0.13);"
+        f" border: 1px solid rgba({c.red()}, {c.green()}, {c.blue()}, 0.32);"
+        f" border-radius: {box // 4}px; }}"
+    )
+    return lbl
 
 
 def match_parent_height(dialog: QDialog, parent: QWidget | None, max_fraction: float = 0.95) -> None:

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout,
     QScrollArea, QWidget, QFrame, QApplication
 )
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QSize, QUrl
 from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices
 
 import os
@@ -43,10 +43,13 @@ def _open(url: str):
     QDesktopServices.openUrl(QUrl(url))
 
 
-def _link_btn(label: str, url: str, icon_char: str = "", obj_name: str = "") -> QPushButton:
-    """Gleichgestalteter Link-Button für alle Sektionen."""
-    text = f"{icon_char}  {label}" if icon_char else label
-    btn = QPushButton(text)
+def _link_btn(label: str, url: str, icon_name: str = "", obj_name: str = "") -> QPushButton:
+    """Gleichgestalteter Link-Button für alle Sektionen (icon_name: SVG in assets/icons)."""
+    btn = QPushButton(label)
+    if icon_name:
+        from src.ui.icons import icon as svg_icon
+        btn.setIcon(svg_icon(icon_name, accent_tone("#0077b6"), 15))
+        btn.setIconSize(QSize(15, 15))
     btn.setObjectName(obj_name or "aboutLinkBtn")
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setFixedHeight(34)
@@ -191,9 +194,9 @@ class AboutDialog(FramelessDialog):
         proj_btns = QHBoxLayout()
         proj_btns.setSpacing(8)
 
-        wb = _link_btn(tr("about.website.btn"), _URL_PROJECT_WEBSITE, "🌐", "aboutWebBtn")
-        db = _link_btn(tr("about.docs.btn"),    docs_url(),           "📄", "aboutDocsBtn")
-        gb = _link_btn(tr("about.github.btn"),  _URL_PROJECT_GITHUB,  "⌨", "aboutGithubBtn")
+        wb = _link_btn(tr("about.website.btn"), _URL_PROJECT_WEBSITE, "globe", "aboutWebBtn")
+        db = _link_btn(tr("about.docs.btn"),    docs_url(),           "file-text", "aboutDocsBtn")
+        gb = _link_btn(tr("about.github.btn"),  _URL_PROJECT_GITHUB,  "keyboard", "aboutGithubBtn")
 
         for btn in (wb, db, gb):
             proj_btns.addWidget(btn, stretch=1)
@@ -217,8 +220,8 @@ class AboutDialog(FramelessDialog):
 
         auth_btns = QHBoxLayout()
         auth_btns.setSpacing(8)
-        awb = _link_btn(tr("about.author.website.btn"), _URL_AUTHOR_WEBSITE, "🌐", "aboutWebBtn")
-        agb = _link_btn(tr("about.author.github.btn"),  _URL_AUTHOR_GITHUB,  "⌨", "aboutGithubBtn")
+        awb = _link_btn(tr("about.author.website.btn"), _URL_AUTHOR_WEBSITE, "globe", "aboutWebBtn")
+        agb = _link_btn(tr("about.author.github.btn"),  _URL_AUTHOR_GITHUB,  "keyboard", "aboutGithubBtn")
         for btn in (awb, agb):
             auth_btns.addWidget(btn, stretch=1)
         auth_l.addLayout(auth_btns)

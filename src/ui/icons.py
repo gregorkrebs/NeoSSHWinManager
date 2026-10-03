@@ -59,17 +59,20 @@ def icon(name: str, color: str = "#aab4c4", size: int = 18) -> QIcon:
     return QIcon(pm)
 
 
-def pixmap(name: str, color: str = "#aab4c4", size: int = 18) -> QPixmap:
-    """SVG als QPixmap (für QLabel)."""
+def pixmap(name: str, color: str = "#aab4c4", size: int = 18, dpr: float = 1.0) -> QPixmap:
+    """SVG als QPixmap (für QLabel). dpr > 1 renders sharper for HiDPI
+    screens; the pixmap keeps the logical size *size*."""
     data = _svg_bytes(name, color)
     renderer = QSvgRenderer(QByteArray(data))
-    pm = QPixmap(size, size)
+    px = max(1, round(size * dpr))
+    pm = QPixmap(px, px)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
     renderer.render(painter)
     painter.end()
+    pm.setDevicePixelRatio(dpr)
     return pm
 
 

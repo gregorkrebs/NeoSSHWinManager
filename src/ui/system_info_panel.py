@@ -790,9 +790,10 @@ class SystemInfoPanel(QFrame):
         loading_l.setContentsMargins(18, 16, 18, 16)
         loading_l.setSpacing(8)
 
-        self._loading_icon = QLabel("⏳")
+        self._loading_icon = QLabel()
         self._loading_icon.setObjectName("sysinfoLoadingIcon")
         self._loading_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._set_overlay_icon("hourglass", "info")
         loading_l.addWidget(self._loading_icon)
 
         self._loading_title = QLabel(tr("sysinfo.loading"))
@@ -827,7 +828,7 @@ class SystemInfoPanel(QFrame):
         if not hasattr(self, "_loading_overlay"):
             return
         if visible:
-            self._loading_icon.setText("⏳")
+            self._set_overlay_icon("hourglass", "info")
             self._loading_title.setText(tr("sysinfo.loading"))
             self._loading_dots.setText("…")
             self._loading_dots.show()
@@ -839,11 +840,21 @@ class SystemInfoPanel(QFrame):
             elif not visible and self._loading_anim_timer.isActive():
                 self._loading_anim_timer.stop()
 
+    def _set_overlay_icon(self, name: str, mode: str):
+        """Overlay icon: SVG *name* in the colour of message type *mode*."""
+        from PyQt6.QtWidgets import QApplication
+        from src.ui.dialog_utils import message_color
+        from src.ui.icons import pixmap as svg_pixmap
+        screen = QApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+        self._loading_icon.setPixmap(svg_pixmap(name, message_color(mode), 30, dpr))
+
     def _show_overlay_error(self, icon: str, title: str, body: str):
+        """icon: name of an SVG in assets/icons (shown in the warning colour)."""
         if not hasattr(self, "_loading_overlay"):
             return
         self._loading_anim_timer.stop()
-        self._loading_icon.setText(icon)
+        self._set_overlay_icon(icon, "warning")
         self._loading_title.setText(title)
         self._loading_dots.setText(body)
         self._hero_card.hide()
@@ -1077,7 +1088,7 @@ class SystemInfoPanel(QFrame):
         if error_type == "auth_missing":
             self._state_card.hide()
             self._show_overlay_error(
-                "🔑",
+                "key",
                 tr("sysinfo.auth.missing.title"),
                 tr("sysinfo.auth.missing.desc"),
             )
@@ -1086,7 +1097,7 @@ class SystemInfoPanel(QFrame):
         if error_type == "key_missing":
             self._state_card.hide()
             self._show_overlay_error(
-                "🤷",
+                "key-off",
                 tr("sysinfo.key_missing.title"),
                 tr("sysinfo.key_missing.desc"),
             )

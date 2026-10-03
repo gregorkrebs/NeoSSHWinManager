@@ -46,20 +46,14 @@ class StyledMessageBox(FramelessDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
 
-        # Content row: emoji + text
+        # Content row: icon + text
         content_row = QHBoxLayout()
         content_row.setSpacing(16)
 
-        emoji_map = {
-            "info":     "💡",
-            "warning":  "🚨",
-            "error":    "💥",
-            "question": "🤔",
-        }
-        icon_lbl = QLabel(emoji_map.get(mode, "💬"))
-        icon_lbl.setStyleSheet("font-size: 36px; background: transparent; margin-right: 6px;")
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        content_row.addWidget(icon_lbl)
+        from src.ui.dialog_utils import MESSAGE_ICONS, dialog_icon, message_color
+        kind = mode if mode in MESSAGE_ICONS else "info"
+        icon_lbl = dialog_icon(MESSAGE_ICONS[kind], message_color(kind, self._fdlg_theme))
+        content_row.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(8)

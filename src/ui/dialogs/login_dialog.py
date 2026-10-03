@@ -72,6 +72,16 @@ class LoginDialog(FramelessDialog):
             w.setEchoMode(QLineEdit.EchoMode.Password)
         return w
 
+    @staticmethod
+    def _set_lock_icon(label) -> None:
+        """Fallback when the app icon is missing: a lock in the accent colour."""
+        from PyQt6.QtWidgets import QApplication
+        from src.ui.icons import pixmap as svg_pixmap
+        from src.ui.theme import current_accent
+        screen = QApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+        label.setPixmap(svg_pixmap("lock", current_accent(), 56, dpr))
+
     def _build_ui(self):
         layout = QVBoxLayout(self._fdlg_content)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -97,9 +107,9 @@ class LoginDialog(FramelessDialog):
                 )
                 icon_lbl.setPixmap(pm)
             else:
-                icon_lbl.setText("🔐")
+                self._set_lock_icon(icon_lbl)
         except Exception:
-            icon_lbl.setText("🔐")
+            self._set_lock_icon(icon_lbl)
         hero_l.addWidget(icon_lbl)
 
         title = QLabel("NEO SSH-Win Manager")
