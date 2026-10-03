@@ -1,5 +1,8 @@
 """
-icons.py – Zentrale SVG-Icon-Loader (lucide-Stil).
+icons.py – Zentrale SVG-Icon-Loader.
+
+Die Icons in assets/icons/ sind eigens für dieses Projekt gezeichnet
+(24er-Raster, runde Linienenden) und unterliegen keiner fremden Lizenz.
 
 Ermöglicht einheitliche, theme-farbige Icons für QPushButton/QLabel.
 SVGs liegen in assets/icons/ und verwenden stroke="currentColor";
