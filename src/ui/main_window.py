@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QRadioButton, QDialogButtonBox, QMenu,
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
-from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPen, QBrush, QShortcut, QKeySequence
+from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QPen, QBrush, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal
 import os
 import sys
@@ -42,6 +42,10 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
+from src.ui.theme import (
+    DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
+    normalize_hex,
+)
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
 from src.i18n import tr, current_language, available_languages, set_language, is_rtl
 from src.channel import display_name
@@ -256,6 +260,11 @@ class MainWindow(FramelessMainWindow):
             _apply_layout_direction()
         except Exception:
             pass
+        from src.ui.theme import set_current_accent
+        _s = self._mgr.get_settings()
+        set_current_accent(getattr(_s, "accent_color", ""))
+        # (theme, accent) the widgets were last painted in, see _apply_settings_object()
+        self._applied_look = (_s.theme or "dark", current_accent())
         self._controller = SSHFSController()
         self._cards: dict[str, ConnectionCard] = {}
         self._selected_id: str | None = None
@@ -641,14 +650,14 @@ class MainWindow(FramelessMainWindow):
             btn.setProperty("btn_type", btn_type)
         theme = (self._mgr.get_settings().theme or "dark")
         if btn_type == "danger":
-            color = "#ef4444" if theme == "dark" else "#b91c1c"
+            color = "#ef4444" if not is_light(theme) else "#b91c1c"
         elif btn_type == "warning":
             color = "#f59e0b"
         elif active:
-            # Keep legacy GitHub accent for active navigation icons in both themes.
-            color = "#00b4d8"
+            # Bright accent shade for active navigation icons in every theme.
+            color = accent_tone("#00b4d8")
         else:
-            color = "#aab4c4" if theme == "dark" else "#2f4051"
+            color = "#aab4c4" if not is_light(theme) else "#2f4051"
         self._set_sidebar_icon(btn, icon_name, color)
         if slot:
             btn.clicked.connect(slot)
@@ -727,7 +736,7 @@ class MainWindow(FramelessMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             theme = (self._mgr.get_settings().theme or "dark")
-            icon_color = "#00b4d8" if is_active else ("#aab4c4" if theme == "dark" else "#2f4051")
+            icon_color = accent_tone("#00b4d8") if is_active else ("#aab4c4" if not is_light(theme) else "#2f4051")
             self._set_sidebar_icon(btn, icon_name, icon_color)
 
     def _build_connections_panel(self) -> QWidget:
@@ -771,7 +780,7 @@ class MainWindow(FramelessMainWindow):
         self._mount_all_btn = QPushButton()
         self._mount_all_btn.setObjectName("headerActionBtn")
         self._mount_all_btn.setFixedSize(QSize(30, 30))
-        self._mount_all_btn.setIcon(svg_icon("cloud", "#0077b6", 16))
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
         self._mount_all_btn.setIconSize(QSize(16, 16))
         self._mount_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mount_all_btn.setToolTip(tr("main.mount_all"))
@@ -1439,7 +1448,7 @@ class MainWindow(FramelessMainWindow):
         if edit_locked:
             edit_icon_color = "#aab4c4" if theme == "light" else "#2a3a4a"
         else:
-            edit_icon_color = "#0077b6" if theme == "light" else "#aab4c4"
+            edit_icon_color = current_accent() if theme == "light" else "#aab4c4"
         self._rp_edit_btn.setIcon(svg_icon("edit", edit_icon_color, 15))
         self._rp_edit_btn.setVisible(True)
         self._rp_edit_btn.setEnabled(not edit_locked)
@@ -1518,7 +1527,7 @@ class MainWindow(FramelessMainWindow):
         is_mounted = (conn.id in self._cards and self._cards[conn.id].is_mounted)
 
         _theme = (self._mgr.get_settings().theme or "dark")
-        _val_color = "#ffffff" if _theme == "dark" else "#1a2332"
+        _val_color = "#ffffff" if not is_light(_theme) else "#1a2332"
 
         body = QWidget()
         body.setObjectName("rpInfoBody")
@@ -1529,7 +1538,7 @@ class MainWindow(FramelessMainWindow):
         def _section(title):
             lbl = QLabel(title.upper())
             lbl.setObjectName("rpSectionLabel")
-            lbl.setStyleSheet("color: #0077b6; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
+            lbl.setStyleSheet(f"color: {current_accent()}; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
             return lbl
 
         def _row(label, value, value_obj_name="rpValue"):
@@ -1622,9 +1631,9 @@ class MainWindow(FramelessMainWindow):
         - FTP folder (always shown): opens the built-in file browser, which
           works with or without a mount.
         """
-        green = "#00d464" if theme == "dark" else "#007a3d"
+        green = "#00d464" if not is_light(theme) else "#007a3d"
         grey = "#8a9aa8"
-        accent = "#00b4d8" if theme == "dark" else "#0077b6"
+        accent = accent_tone("#00b4d8") if not is_light(theme) else current_accent()
 
         def _on_left_click(widget, callback):
             def _handler(ev):
@@ -1900,11 +1909,11 @@ class MainWindow(FramelessMainWindow):
 
         _theme = self._mgr.get_settings().theme or "dark"
         _is_light = (_theme == "light")
-        _inp_bg    = "#ffffff"  if _is_light else "#0d1117"
-        _inp_bdr   = "#c0cad6" if _is_light else "#30363d"
-        _inp_fg    = "#1a2332" if _is_light else "#deebf7"
-        _lbl_muted = "#5a6a7a" if _is_light else "#8fa4b8"
-        _lbl_bold  = "#1a2332" if _is_light else "#deebf7"
+        _inp_bg    = "#ffffff"  if _is_light else dark_tone(_theme, "#0d1117")
+        _inp_bdr   = "#c0cad6" if _is_light else dark_tone(_theme, "#30363d")
+        _inp_fg    = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
+        _lbl_muted = "#5a6a7a" if _is_light else dark_tone(_theme, "#8fa4b8")
+        _lbl_bold  = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
         _inp_style = f"background-color: {_inp_bg}; border: 1px solid {_inp_bdr}; border-radius: 6px; padding: 8px; color: {_inp_fg};"
 
         body = QWidget()
@@ -1916,8 +1925,8 @@ class MainWindow(FramelessMainWindow):
         v.setSpacing(16)
 
         # User info section
-        _title_color  = "#1a2332" if _is_light else "#deebf7"
-        _pill_bg      = "#0077b6"
+        _title_color  = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
+        _pill_bg      = current_accent()
 
         def _section_card(title: str, pill_text: str = ""):
             frame = QFrame()
@@ -1942,7 +1951,7 @@ class MainWindow(FramelessMainWindow):
             if pill_text:
                 pill = QLabel(pill_text)
                 pill.setStyleSheet(
-                    f"background-color: {_pill_bg}; color: #ffffff; "
+                    f"background-color: {_pill_bg}; color: {accent_text_color(_pill_bg)}; "
                     f"border-radius: 8px; padding: 2px 8px; "
                     f"font-size: 10px; font-weight: 700;"
                 )
@@ -3111,13 +3120,41 @@ class MainWindow(FramelessMainWindow):
         self._sf_theme = NoWheelComboBox()
         self._sf_theme.setFixedWidth(180)
         self._sf_theme.addItem(tr("settings.theme.dark"), "dark")
+        self._sf_theme.addItem(tr("settings.theme.gray"), "gray")
         self._sf_theme.addItem(tr("settings.theme.light"), "light")
         idx = self._sf_theme.findData(getattr(s, 'theme', 'dark') or 'dark')
         if idx >= 0:
             self._sf_theme.setCurrentIndex(idx)
 
+        # Accent colour: swatch button opens the picker, "Standard" resets.
+        self._sf_accent = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        self._sf_accent_btn = QPushButton()
+        self._sf_accent_btn.setObjectName("settingsActionBtn")
+        self._sf_accent_btn.setFixedWidth(120)
+        self._sf_accent_btn.setMinimumHeight(32)
+        self._sf_accent_btn.setIconSize(QSize(14, 14))
+        self._sf_accent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_accent_btn.setToolTip(tr("colorpicker.title"))
+        self._sf_accent_btn.clicked.connect(self._sf_pick_accent)
+        self._sf_accent_reset_btn = QPushButton(tr("settings.accent.reset"))
+        self._sf_accent_reset_btn.setObjectName("settingsActionBtn")
+        self._sf_accent_reset_btn.setMinimumHeight(32)
+        self._sf_accent_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_accent_reset_btn.setToolTip(DEFAULT_ACCENT)
+        self._sf_accent_reset_btn.clicked.connect(
+            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True))
+        accent_box = QWidget()
+        accent_hl = QHBoxLayout(accent_box)
+        accent_hl.setContentsMargins(0, 0, 0, 0)
+        accent_hl.setSpacing(8)
+        accent_hl.addWidget(self._sf_accent_reset_btn)
+        accent_hl.addWidget(self._sf_accent_btn)
+        self._sf_update_accent_ui()
+
         app_card, app_vl = _group_card()
         app_vl.addWidget(_row_combo(tr("settings.theme.label"), self._sf_theme))
+        app_vl.addWidget(_inner_sep())
+        app_vl.addWidget(_row_combo(tr("settings.accent.label"), accent_box))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.language.label"), self._sf_lang))
         app_vl.addWidget(_hint_row(tr("settings.language.restart")))
@@ -3262,7 +3299,7 @@ class MainWindow(FramelessMainWindow):
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtCore import QUrl as _QUrl
         self._sf_putty_download_lbl = QLabel(
-            f'<a href="https://www.putty.org" style="color:#0077b6;">'
+            f'<a href="https://www.putty.org" style="color:{current_accent()};">'
             f'{tr("settings.putty_download_link")}</a>'
         )
         self._sf_putty_download_lbl.setObjectName("hintLabel")
@@ -3402,7 +3439,7 @@ class MainWindow(FramelessMainWindow):
             _key_row_hl.addWidget(self._sf_pro_activate_btn)
             _pro_inner.addWidget(_key_row_w)
             _donate_lbl = QLabel(
-                f'<a href="https://neosshwinmanager.org/pro" style="color:#0077b6;">'
+                f'<a href="https://neosshwinmanager.org/pro" style="color:{current_accent()};">'
                 f'{tr("settings.pro.learn_more")}</a>'
             )
             _donate_lbl.setObjectName("hintLabel")
@@ -3759,6 +3796,7 @@ class MainWindow(FramelessMainWindow):
             "auto_remount": self._safe_bool_checked("_sf_auto_remount", True),
             "disable_cache": self._safe_bool_checked("_sf_sshfs_disable_cache", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
+            "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
             "lang": self._safe_current_data("_sf_lang", "en"),
             "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
             "term_putty": self._safe_bool_checked("_sf_term_putty", False),
@@ -3849,6 +3887,8 @@ class MainWindow(FramelessMainWindow):
                 if action == "apply":
                     if not self._save_settings_form(navigate_home=False):
                         return False
+                else:
+                    self._sf_revert_accent_preview()
                 self._settings_initial_snapshot = None
                 return True
 
@@ -4097,6 +4137,7 @@ class MainWindow(FramelessMainWindow):
             telemetry_enabled=getattr(self, "_sf_telemetry").isChecked() if hasattr(self, "_sf_telemetry") else False,
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
+            accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
         )
         self._mgr.save_settings(new_settings)
         self._apply_settings_object(new_settings)
@@ -4883,12 +4924,20 @@ class MainWindow(FramelessMainWindow):
         if self._poll_timer.interval() != interval:
             self._poll_timer.setInterval(interval)
         self._apply_debug_mode()
-        from src.ui.theme import get_stylesheet
+        from src.ui.theme import build_stylesheet, set_current_accent
         theme = s.theme or "dark"
-        QApplication.instance().setStyleSheet(get_stylesheet(theme))
+        set_current_accent(getattr(s, "accent_color", ""))
+        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        # Connection cards paint their icons in the theme/accent they were
+        # built with; rebuild them when either changed.
+        look = (theme, current_accent())
+        if look != self._applied_look:
+            self._applied_look = look
+            self._refresh_list()
         # Repaint sidebar icon colors for current theme and active item.
         if self._panel_mode == _PANEL_SETTINGS:
             self._set_sidebar_active("settings")
@@ -4902,6 +4951,53 @@ class MainWindow(FramelessMainWindow):
             self._set_sidebar_active("home")
         if self._file_browser is not None:
             self._file_browser.set_theme(theme)
+
+    # ── accent colour (settings panel) ────────────────────────────────────────
+
+    def _sf_update_accent_ui(self):
+        """Show the pending accent on the swatch button."""
+        color = self._sf_accent
+        pm = QPixmap(14, 14)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(128, 128, 128, 140), 1))
+        p.setBrush(QColor(color))
+        p.drawRoundedRect(0, 0, 13, 13, 4, 4)
+        p.end()
+        self._sf_accent_btn.setIcon(QIcon(pm))
+        self._sf_accent_btn.setText(color.upper())
+        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT)
+
+    def _sf_preview_accent(self, color: str):
+        """Live preview: restyle the app in *color* without saving it."""
+        from src.ui.theme import build_stylesheet, set_current_accent
+        set_current_accent(color)
+        theme = self._mgr.get_settings().theme or "dark"
+        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        self._set_sidebar_active("settings")
+        if self._file_browser is not None:
+            self._file_browser.set_theme(theme)
+
+    def _sf_set_accent(self, color: str, preview: bool):
+        self._sf_accent = normalize_hex(color) or DEFAULT_ACCENT
+        self._sf_update_accent_ui()
+        if preview:
+            self._sf_preview_accent(self._sf_accent)
+
+    def _sf_pick_accent(self):
+        from src.ui.widgets.color_picker import AccentColorDialog
+        # Cancel makes the dialog preview the colour it started with again.
+        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent)
+        if chosen is not None:
+            self._sf_set_accent(chosen, preview=False)
+
+    def _sf_revert_accent_preview(self):
+        """Settings discarded: go back to the saved accent if a preview changed it."""
+        saved = normalize_hex(getattr(self._mgr.get_settings(), "accent_color", "")) or DEFAULT_ACCENT
+        if current_accent() != saved:
+            self._sf_preview_accent(saved)
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":

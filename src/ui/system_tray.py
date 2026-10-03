@@ -17,7 +17,8 @@ def _create_tray_icon() -> QIcon:
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#00b4d8"))
+    from src.ui.theme import accent_tone
+    painter.setBrush(QColor(accent_tone("#00b4d8")))
     # Draw a simple cloud shape via ellipses
     painter.drawEllipse(2, 14, 12, 12)
     painter.drawEllipse(8, 10, 14, 14)

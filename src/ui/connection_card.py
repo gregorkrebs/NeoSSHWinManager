@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QIcon
 from src.config import Connection
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+from src.ui.theme import accent_tone, current_accent
 from src.i18n import tr
 
 
@@ -145,7 +146,7 @@ class ConnectionCard(QFrame):
         self._drive_badge.setProperty("mounted", mounted)
         self._mount_btn.setProperty("mounted", mounted)
 
-        cloud_color = "#00b4d8" if mounted else "#6a7a8a"
+        cloud_color = accent_tone("#00b4d8") if mounted else "#6a7a8a"
         self._cloud_lbl.setPixmap(svg_pixmap("cloud", cloud_color, 32))
 
         if mounted:
@@ -175,7 +176,7 @@ class ConnectionCard(QFrame):
         )
 
         self._edit_btn.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
-        self._edit_btn.setStyleSheet("QPushButton#cardEditBtn:hover { border:  1px solid #243243; }" if locked else "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }")
+        self._edit_btn.setStyleSheet("QPushButton#cardEditBtn:hover { border:  1px solid #243243; }" if locked else f"QPushButton#cardEditBtn:hover {{ border: 1px solid {accent_tone('#72add6')}; }}")
 
         if self._loading:
             return
@@ -213,7 +214,7 @@ class ConnectionCard(QFrame):
         self._edit_btn.setToolTip(tr("card.tooltip.edit"))
         self._edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._edit_btn.setStyleSheet(
-            "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }"
+            f"QPushButton#cardEditBtn:hover {{ border: 1px solid {accent_tone('#72add6')}; }}"
         )
 
         if self._loading:
@@ -288,7 +289,7 @@ class ConnectionCard(QFrame):
     def set_terminal_active(self, active: bool):
         """Highlight the SSH button when an integrated terminal session is alive."""
         if active:
-            color = "#0077b6"
+            color = current_accent()
         else:
             color = "#aab4c4"
         self._ssh_btn.setIcon(svg_icon("terminal", color, 16))

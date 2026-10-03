@@ -307,7 +307,7 @@ def init_db() -> None:
                 auto_login               INTEGER DEFAULT 0,  -- Windows Auto-Login
                 auto_reconnect           INTEGER DEFAULT 1,  -- Beim Start automatisch reconnecten
                 language                 TEXT    DEFAULT 'en',  -- UI Sprache (en, de, es, ru, nl, ar)
-                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, light)
+                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, gray, light)
                 security_level           INTEGER DEFAULT 0,  -- 0=Strict, 1=Key-Auth, 2=Insecure-PW
                 allow_passwordless_key_auth INTEGER DEFAULT 0,
                 allow_insecure_password_auth INTEGER DEFAULT 0,
@@ -447,6 +447,8 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN terminal_client TEXT DEFAULT 'xterm'")
             if "sshfs_disable_cache" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sshfs_disable_cache INTEGER DEFAULT 0")
+            if "accent_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_color TEXT DEFAULT ''")
             # File browser settings: one encrypted JSON document (bookmarks
             # hold remote paths, which are encrypted like connection metadata).
             if "sftp_browser_enc" not in cols:

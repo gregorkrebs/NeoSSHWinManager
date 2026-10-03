@@ -20,6 +20,7 @@ from PyQt6.QtGui import QFont
 
 from src.config import Connection, CliHistoryEntry
 from src.ui.icons import icon as svg_icon
+from src.ui.theme import current_accent, dark_tone, is_light
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.i18n import tr
 
@@ -57,7 +58,7 @@ class CliHistoryPanel(QFrame):
         self._entries: list[CliHistoryEntry] = []
 
         self._theme = (getattr(settings, "theme", None) or "dark")
-        self._val_color = "#ffffff" if self._theme == "dark" else "#1a2332"
+        self._val_color = "#ffffff" if not is_light(self._theme) else "#1a2332"
 
         self.setObjectName("cliHistoryPanel")
         self._build_ui()
@@ -203,7 +204,7 @@ class CliHistoryPanel(QFrame):
 
         if entry.kind == "session":
             ts = f"{_format_ts(entry.started_at)} – {_format_ts(entry.ended_at)}"
-            kind_label, kind_color = tr("clihistory.kind.session"), "#0077b6"
+            kind_label, kind_color = tr("clihistory.kind.session"), current_accent()
         else:
             ts = _format_ts(entry.started_at)
             kind_label, kind_color = tr("clihistory.kind.exec"), "#6a7a8a"
@@ -258,8 +259,8 @@ class CliHistoryPanel(QFrame):
         output_view.setReadOnly(True)
         output_view.setFont(QFont("Consolas", 9))
         output_view.setFixedHeight(150)
-        if self._theme == "dark":
-            _bg, _fg, _border = "#111822", "#deebf7", "#1f2b3a"
+        if not is_light(self._theme):
+            _bg, _fg, _border = (dark_tone(self._theme, c) for c in ("#111822", "#deebf7", "#1f2b3a"))
         else:
             _bg, _fg, _border = "#ffffff", "#182536", "#d5dde7"
         output_view.setStyleSheet(

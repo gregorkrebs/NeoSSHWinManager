@@ -40,6 +40,19 @@ DARK_PALETTE = TitlebarPalette(
     border="#1a1a2e",
 )
 
+GRAY_PALETTE = TitlebarPalette(
+    bg="#181818",
+    bg_hover="#2a2d2e",
+    bg_pressed="#313131",
+    close_hover="#c42b1c",
+    close_pressed="#9e1b0e",
+    text="#cccccc",
+    text_dim="#9d9d9d",
+    icon="#8b8b8b",
+    icon_hover="#cccccc",
+    border="#2b2b2b",
+)
+
 LIGHT_PALETTE = TitlebarPalette(
     bg="#f0f2f5",
     bg_hover="#e2e6ec",
@@ -55,5 +68,5 @@ LIGHT_PALETTE = TitlebarPalette(
 
 
 def get_palette(theme: str) -> TitlebarPalette:
-    """Return the palette for *theme* ('dark' or 'light')."""
-    return LIGHT_PALETTE if theme == "light" else DARK_PALETTE
+    """Return the palette for *theme* ('dark', 'gray' or 'light')."""
+    return {"light": LIGHT_PALETTE, "gray": GRAY_PALETTE}.get(theme, DARK_PALETTE)

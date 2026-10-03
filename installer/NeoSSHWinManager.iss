@@ -110,6 +110,12 @@ es.ThemeDark=Oscuro
 ru.ThemeDark=Тёмная
 nl.ThemeDark=Donker
 
+en.ThemeGray=Gray
+de.ThemeGray=Grau
+es.ThemeGray=Gris
+ru.ThemeGray=Серая
+nl.ThemeGray=Grijs
+
 en.ThemeLight=Light
 de.ThemeLight=Hell
 es.ThemeLight=Claro
@@ -288,6 +294,7 @@ begin
   ThemeCombo.Top := ThemeLabel.Top + ThemeLabel.Height + ScaleY(4);
   ThemeCombo.Width := AppPrefsPage.SurfaceWidth;
   ThemeCombo.Items.Add(CustomMessage('ThemeDark'));
+  ThemeCombo.Items.Add(CustomMessage('ThemeGray'));
   ThemeCombo.Items.Add(CustomMessage('ThemeLight'));
   ThemeCombo.ItemIndex := 0;
 end;
@@ -320,10 +327,12 @@ begin
     ForceDirectories(PrefsDir);
     PrefsFile := PrefsDir + '\install_prefs.json';
 
-    if ThemeCombo.ItemIndex = 1 then
-      ThemeCode := 'light'
+    case ThemeCombo.ItemIndex of
+      1: ThemeCode := 'gray';
+      2: ThemeCode := 'light';
     else
       ThemeCode := 'dark';
+    end;
 
     if WizardIsTaskSelected('autostart') then
       StartWithWindowsJson := 'true'

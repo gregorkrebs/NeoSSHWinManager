@@ -559,6 +559,11 @@ class FilePane(QWidget):
         if self.current_dir is not None:
             self._update_nav()
 
+    def set_drop_color(self, accent: str) -> None:
+        """Accent switch: the drag-and-drop highlight follows the accent."""
+        self._drop_color = QColor(accent)
+        self._drop_color.setAlpha(90)
+
     def set_tree_root(self, root: str) -> None:
         """Server tree: start at another folder (setting changed)."""
         if self.local or same_path(root, self.tree.root_path or "/", False):

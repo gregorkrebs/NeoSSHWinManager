@@ -13,6 +13,7 @@ import os
 from src.channel import display_name, display_version
 from src.ui.dialog_utils import match_parent_height
 from src.ui.frameless_dialog import FramelessDialog
+from src.ui.theme import accent_tone
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import current_language, tr
 
@@ -140,7 +141,7 @@ class AboutDialog(FramelessDialog):
             icon_lbl.setPixmap(pix)
         else:
             from src.ui.icons import pixmap as svg_pixmap
-            icon_lbl.setPixmap(svg_pixmap("cloud", "#00b4d8", 64))
+            icon_lbl.setPixmap(svg_pixmap("cloud", accent_tone("#00b4d8"), 64))
         hero_l.addWidget(icon_lbl)
 
         title_lbl = QLabel(display_name())

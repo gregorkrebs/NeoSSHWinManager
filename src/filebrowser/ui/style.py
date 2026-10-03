@@ -7,7 +7,7 @@ of the application, which has its own global stylesheet.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,11 @@ DARK = Palette(
     accent="#0077b6", border="#1a2535", alt_row="#0a0e14", hover="rgba(0,119,182,0.12)",
     selection_text="#ffffff", icon="#aab4c4", ok="#00d464", warn="#f59e0b", error="#ef4444",
 )
+GRAY = Palette(
+    bg="#181818", surface="#1f1f1f", raised="#252526", text="#cccccc", text_dim="#9d9d9d",
+    accent="#0077b6", border="#2b2b2b", alt_row="#1c1c1c", hover="rgba(0,119,182,0.12)",
+    selection_text="#ffffff", icon="#b5b5b5", ok="#00d464", warn="#f59e0b", error="#ef4444",
+)
 LIGHT = Palette(
     bg="#f0f2f5", surface="#ffffff", raised="#f7f9fb", text="#1a2332", text_dim="#6a7a8a",
     accent="#0077b6", border="#dde2e8", alt_row="#f8fafc", hover="rgba(0,119,182,0.08)",
@@ -40,8 +45,19 @@ LIGHT = Palette(
 )
 
 
-def palette(theme: str) -> Palette:
-    return LIGHT if theme == "light" else DARK
+def palette(theme: str, accent: str | None = None) -> Palette:
+    """The palette of *theme* in *accent* (default: the app's current accent)."""
+    from src.ui.theme import DEFAULT_ACCENT, accent_text_color, current_accent, recolor_accent
+    base = {"light": LIGHT, "gray": GRAY}.get(theme, DARK)
+    accent = accent or current_accent()
+    if accent == DEFAULT_ACCENT:
+        return base
+    return replace(
+        base,
+        accent=recolor_accent(base.accent, accent),
+        hover=recolor_accent(base.hover, accent),
+        selection_text=accent_text_color(accent),
+    )
 
 
 def stylesheet(p: Palette, close_icon: str = "", close_icon_hover: str = "") -> str:

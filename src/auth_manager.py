@@ -1015,6 +1015,7 @@ class UserConnectionManager:
             telemetry_enabled=bool(row["telemetry_enabled"]) if "telemetry_enabled" in row.keys() else False,
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
             sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
+            accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -1026,9 +1027,9 @@ class UserConnectionManager:
                     use_putty, putty_path, terminal_client, auto_login, auto_reconnect, language, theme,
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
-                    sshfs_disable_cache,
+                    sshfs_disable_cache, accent_color,
                     updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1049,6 +1050,7 @@ class UserConnectionManager:
                      telemetry_enabled=excluded.telemetry_enabled,
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
                      sshfs_disable_cache=excluded.sshfs_disable_cache,
+                     accent_color=excluded.accent_color,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
@@ -1061,7 +1063,8 @@ class UserConnectionManager:
                  int(bool(getattr(s, "auto_remount_on_lost", True))),
                  int(bool(getattr(s, "telemetry_enabled", False))),
                  int(bool(getattr(s, "telemetry_prompt_shown", False))),
-                 int(bool(getattr(s, "sshfs_disable_cache", False))))
+                 int(bool(getattr(s, "sshfs_disable_cache", False))),
+                 getattr(s, "accent_color", "") or "")
             )
 
     # Backwards-compatible alias used by main.py
