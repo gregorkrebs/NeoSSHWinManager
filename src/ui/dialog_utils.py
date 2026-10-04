@@ -34,6 +34,12 @@ def dialog_icon(name: str, color: str, box: int = 48, glyph: int = 26) -> QLabel
     lbl.setObjectName("dialogIconTile")
     lbl.setFixedSize(box, box)
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    tint_dialog_icon(lbl, name, color, glyph)
+    return lbl
+
+
+def tint_dialog_icon(lbl: QLabel, name: str, color: str, glyph: int = 26) -> None:
+    """(Re)colour a tile made by dialog_icon, e.g. after a theme change."""
     screen = QApplication.primaryScreen()
     dpr = screen.devicePixelRatio() if screen is not None else 1.0
     lbl.setPixmap(svg_pixmap(name, color, glyph, dpr))
@@ -41,9 +47,8 @@ def dialog_icon(name: str, color: str, box: int = 48, glyph: int = 26) -> QLabel
     lbl.setStyleSheet(
         f"QLabel#dialogIconTile {{ background-color: rgba({c.red()}, {c.green()}, {c.blue()}, 0.13);"
         f" border: 1px solid rgba({c.red()}, {c.green()}, {c.blue()}, 0.32);"
-        f" border-radius: {box // 4}px; }}"
+        f" border-radius: {lbl.width() // 4}px; }}"
     )
-    return lbl
 
 
 def match_parent_height(dialog: QDialog, parent: QWidget | None, max_fraction: float = 0.95) -> None:

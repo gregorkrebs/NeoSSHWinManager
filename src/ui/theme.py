@@ -1477,6 +1477,56 @@ QLineEdit[invalid="true"] {
     border: 2px solid #0077b6;
 }
 QLineEdit[invalid="true"]:focus {
+/* About dialog */
+QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
+QFrame#aboutFeatureTile, QFrame#aboutCard {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 12px;
+}
+QLabel#aboutFeatureTitle, QLabel#aboutCardTitle {
+    color: #e4eaf0;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#aboutFeatureBody {
+    color: #8fa4b8;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#aboutCardHint, QLabel#aboutLinkHint {
+    color: #6a7a8a;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#aboutLinkLabel {
+    color: #c1cfdd;
+    font-size: 13px;
+    background: transparent;
+}
+QPushButton#aboutLinkRow {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 44px;
+    max-height: 44px;
+}
+QPushButton#aboutLinkRow:hover {
+    background-color: #141d28;
+    border: 1px solid #243243;
+}
+QPushButton#aboutLinkRow:pressed {
+    background-color: #0d2137;
+}
+QPushButton#aboutLinkRow:focus {
+    border: 1px solid #0077b6;
+}
+QLabel#aboutCredits {
+    color: #6a7a8a;
+    font-size: 11px;
+}
     border: 2px solid #0077b6;
 }
 QLineEdit:focus, QPushButton:focus {
@@ -2941,6 +2991,56 @@ QLineEdit[invalid="true"]:focus {
 }
 QLineEdit:focus, QPushButton:focus {
     border: 1px solid #0077b6;
+/* About dialog */
+QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
+QFrame#aboutFeatureTile, QFrame#aboutCard {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 12px;
+}
+QLabel#aboutFeatureTitle, QLabel#aboutCardTitle {
+    color: #1a2a3a;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#aboutFeatureBody {
+    color: #617386;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#aboutCardHint, QLabel#aboutLinkHint {
+    color: #8a9aab;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#aboutLinkLabel {
+    color: #2a3a4a;
+    font-size: 13px;
+    background: transparent;
+}
+QPushButton#aboutLinkRow {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 44px;
+    max-height: 44px;
+}
+QPushButton#aboutLinkRow:hover {
+    background-color: #f0f5fa;
+    border: 1px solid #d5dde7;
+}
+QPushButton#aboutLinkRow:pressed {
+    background-color: #e0eef8;
+}
+QPushButton#aboutLinkRow:focus {
+    border: 1px solid #0077b6;
+}
+QLabel#aboutCredits {
+    color: #8a9aab;
+    font-size: 11px;
+}
 }
 
 #dialogBtnBar {
