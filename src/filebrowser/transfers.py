@@ -427,15 +427,34 @@ class TransferQueue(QObject):
                 self.job_changed.emit(job)
         self.activity_changed.emit()
 
+    def retry(self, job_ids: list[int]) -> None:
+        """Queue failed or cancelled jobs again. A failed one continues where
+        it stopped; a cancelled one starts over, as its partial target was
+        removed on cancel."""
+        for jid in job_ids:
+            job = self.jobs.get(jid)
+            if job and job.state == CANCELLED:
+                job.done = 0
+                job.note = ""
+                if job.decision == RESUME:
+                    job.decision = None
+                job.state = PAUSED
+        self.resume(job_ids)
+
     def cancel_all(self) -> None:
         self.cancel([j.id for j in self.jobs.values() if j.state not in FINISHED_STATES])
 
-    def clear_finished(self) -> None:
-        ids = [j.id for j in self.jobs.values() if j.state in FINISHED_STATES]
+    def remove(self, job_ids: list[int]) -> None:
+        """Drop finished jobs from the list; unfinished ones stay."""
+        ids = [jid for jid in job_ids
+               if jid in self.jobs and self.jobs[jid].state in FINISHED_STATES]
         for jid in ids:
             del self.jobs[jid]
         if ids:
             self.jobs_removed.emit(ids)
+
+    def clear_finished(self) -> None:
+        self.remove(list(self.jobs))
 
     def shutdown(self) -> None:
         self._closed = True
