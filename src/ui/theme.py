@@ -495,9 +495,8 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoHeroCard, #sysinfoSectionCard, #sysinfoStateCard {
-    background-color: #111822;
-    border: 1px solid #1f2b3a;
-    border-radius: 18px;
+    background-color: transparent;
+    border: none;
 }
 
 #sysinfoLoadingOverlay {
@@ -564,37 +563,42 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoStatLabel {
-    color: #6f8599;
-    font-size: 11px;
-    font-weight: 600;
+    color: #8fa4b8;
+    font-size: 12px;
+}
+#sysinfoStatLabel[strong="true"] {
+    color: #e4eaf0;
+    font-weight: 700;
 }
 
 #sysinfoStatValue {
-    color: #deebf7;
+    color: #e4eaf0;
+    font-family: "Consolas";
     font-size: 12px;
     font-weight: 700;
 }
 
 #sysinfoDriveMeta {
-    color: #8fa4b8;
+    color: #6a7a8a;
     font-size: 10px;
 }
 
 QProgressBar#sysinfoProgress {
-    background-color: #0d1720;
-    border-radius: 3px;
+    background-color: #1a2330;
+    border: none;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress::chunk {
     background-color: #0077b6;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="warn"]::chunk {
     background-color: #f59e0b;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="error"]::chunk {
     background-color: #ef4444;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 QMenu {
@@ -1473,10 +1477,6 @@ QPushButton#aboutLinkBtn:hover {
 QPushButton#aboutLinkBtn:pressed {
     background-color: #0a1929;
 }
-QLineEdit[invalid="true"] {
-    border: 2px solid #0077b6;
-}
-QLineEdit[invalid="true"]:focus {
 /* About dialog */
 QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
 QFrame#aboutFeatureTile, QFrame#aboutCard {
@@ -1527,6 +1527,10 @@ QLabel#aboutCredits {
     color: #6a7a8a;
     font-size: 11px;
 }
+QLineEdit[invalid="true"] {
+    border: 2px solid #0077b6;
+}
+QLineEdit[invalid="true"]:focus {
     border: 2px solid #0077b6;
 }
 QLineEdit:focus, QPushButton:focus {
@@ -2106,9 +2110,8 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoHeroCard, #sysinfoSectionCard, #sysinfoStateCard {
-    background-color: #ffffff;
-    border: 1px solid #d5dde7;
-    border-radius: 18px;
+    background-color: transparent;
+    border: none;
 }
 
 #sysinfoLoadingOverlay {
@@ -2175,37 +2178,42 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoStatLabel {
-    color: #6a7a8a;
-    font-size: 11px;
-    font-weight: 600;
+    color: #617386;
+    font-size: 12px;
+}
+#sysinfoStatLabel[strong="true"] {
+    color: #182536;
+    font-weight: 700;
 }
 
 #sysinfoStatValue {
     color: #182536;
+    font-family: "Consolas";
     font-size: 12px;
     font-weight: 700;
 }
 
 #sysinfoDriveMeta {
-    color: #617386;
+    color: #8a9aab;
     font-size: 10px;
 }
 
 QProgressBar#sysinfoProgress {
-    background-color: #e7edf4;
-    border-radius: 3px;
+    background-color: #e3e9f0;
+    border: none;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress::chunk {
     background-color: #0077b6;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="warn"]::chunk {
     background-color: #d97706;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="error"]::chunk {
     background-color: #dc2626;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 QMenu {
@@ -2983,14 +2991,6 @@ QPushButton#aboutLinkBtn:hover {
 QPushButton#aboutLinkBtn:pressed {
     background-color: #d0e6f5;
 }
-QLineEdit[invalid="true"] {
-    border: 1px solid #0077b6;
-}
-QLineEdit[invalid="true"]:focus {
-    border: 1px solid #0077b6;
-}
-QLineEdit:focus, QPushButton:focus {
-    border: 1px solid #0077b6;
 /* About dialog */
 QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
 QFrame#aboutFeatureTile, QFrame#aboutCard {
@@ -3041,6 +3041,14 @@ QLabel#aboutCredits {
     color: #8a9aab;
     font-size: 11px;
 }
+QLineEdit[invalid="true"] {
+    border: 1px solid #0077b6;
+}
+QLineEdit[invalid="true"]:focus {
+    border: 1px solid #0077b6;
+}
+QLineEdit:focus, QPushButton:focus {
+    border: 1px solid #0077b6;
 }
 
 #dialogBtnBar {

@@ -633,14 +633,14 @@ class SystemInfoPanel(QFrame):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(18)
 
         hero = QFrame()
         self._hero_card = hero
         hero.setObjectName("sysinfoHeroCard")
         hero_l = QVBoxLayout(hero)
-        hero_l.setContentsMargins(18, 16, 18, 16)
+        hero_l.setContentsMargins(0, 0, 0, 0)
         hero_l.setSpacing(8)
 
         hero_top = QHBoxLayout()
@@ -679,6 +679,8 @@ class SystemInfoPanel(QFrame):
         self._hero_path.setObjectName("dialogLead")
         self._hero_path.setWordWrap(True)
         hero_l.addWidget(self._hero_path)
+        hero_l.addSpacing(10)
+        hero_l.addWidget(self._make_divider())
         root.addWidget(hero)
 
         # Error card only. Loading is shown solely by the overlay popup, so no
@@ -686,7 +688,7 @@ class SystemInfoPanel(QFrame):
         self._state_card = QFrame()
         self._state_card.setObjectName("sysinfoStateCard")
         state_l = QVBoxLayout(self._state_card)
-        state_l.setContentsMargins(16, 14, 16, 14)
+        state_l.setContentsMargins(0, 0, 0, 0)
         state_l.setSpacing(6)
         self._error_lbl = QLabel()
         self._error_lbl.setObjectName("sysinfoErrorText")
@@ -700,31 +702,33 @@ class SystemInfoPanel(QFrame):
         # Content stays visible to avoid layout jumps; values are placeholders while loading.
         content_v = QVBoxLayout(self._content)
         content_v.setContentsMargins(0, 0, 0, 0)
-        content_v.setSpacing(12)
+        content_v.setSpacing(26)
 
         resources_card, resources_l, self._sys_section = self._make_section_card(tr("sysinfo.os"))
 
         self._cpu_row = self._make_stat_row(tr("sysinfo.cpu"), "0%")
         self._cpu_bar = self._make_progress_bar()
         resources_l.addWidget(self._cpu_row)
+        resources_l.addSpacing(7)
         resources_l.addWidget(self._cpu_bar)
-        resources_l.addSpacing(10)
+        resources_l.addSpacing(18)
 
         self._ram_row = self._make_stat_row(tr("sysinfo.ram"), "— / —")
         self._ram_bar = self._make_progress_bar()
         resources_l.addWidget(self._ram_row)
+        resources_l.addSpacing(7)
         resources_l.addWidget(self._ram_bar)
-        resources_l.addSpacing(10)
+        resources_l.addSpacing(18)
 
         self._disk_row = self._make_stat_row(tr("sysinfo.disk"), "— / —")
         self._disk_bar = self._make_progress_bar()
         resources_l.addWidget(self._disk_row)
+        resources_l.addSpacing(7)
         resources_l.addWidget(self._disk_bar)
-        resources_l.addSpacing(12)
 
         self._temp_widget = QWidget()
         temp_v = QVBoxLayout(self._temp_widget)
-        temp_v.setContentsMargins(0, 0, 0, 10)
+        temp_v.setContentsMargins(0, 18, 0, 0)
         temp_v.setSpacing(0)
         self._temp_row = self._make_stat_row(tr("sysinfo.temperature"), "—")
         temp_v.addWidget(self._temp_row)
@@ -739,7 +743,7 @@ class SystemInfoPanel(QFrame):
         self._drives_box = QWidget()
         self._drives_box_l = QVBoxLayout(self._drives_box)
         self._drives_box_l.setContentsMargins(0, 0, 0, 0)
-        self._drives_box_l.setSpacing(12)
+        self._drives_box_l.setSpacing(18)
         placeholder = QLabel("—")
         placeholder.setObjectName("sysinfoDriveMeta")
         self._drives_box_l.addWidget(placeholder)
@@ -748,29 +752,25 @@ class SystemInfoPanel(QFrame):
 
         details_card, details_l, self._uptime_section = self._make_section_card(tr("sysinfo.uptime"))
 
-        self._uptime_row = self._make_stat_row(tr("sysinfo.host"), "—")
+        self._uptime_row = self._make_stat_row(tr("sysinfo.host"), "—", strong=True)
         details_l.addWidget(self._uptime_row)
-        details_l.addSpacing(4)
-        self._load_row = self._make_stat_row(tr("sysinfo.load"), "—")
-        details_l.addWidget(self._load_row)
-        details_l.addSpacing(4)
-
-        self._detail_section = self._make_section_label(tr("sysinfo.active_users") + " & " + tr("sysinfo.processes"))
-        details_l.addWidget(self._make_divider())
         details_l.addSpacing(10)
-        details_l.addWidget(self._detail_section)
-        details_l.addSpacing(8)
-
-        self._users_row = self._make_stat_row(tr("sysinfo.active_users"), "—")
-        details_l.addWidget(self._users_row)
-        details_l.addSpacing(4)
-        self._proc_row = self._make_stat_row(tr("sysinfo.processes"), "—")
-        details_l.addWidget(self._proc_row)
-        details_l.addSpacing(4)
-        self._ip_row = self._make_stat_row(tr("sysinfo.ip"), "—")
-        details_l.addWidget(self._ip_row)
-        details_l.addStretch()
+        self._load_row = self._make_stat_row(tr("sysinfo.load"), "—", strong=True)
+        details_l.addWidget(self._load_row)
         content_v.addWidget(details_card)
+
+        activity_card, activity_l, self._detail_section = self._make_section_card(
+            tr("sysinfo.active_users") + " & " + tr("sysinfo.processes"))
+        self._users_row = self._make_stat_row(tr("sysinfo.active_users"), "—", strong=True)
+        activity_l.addWidget(self._users_row)
+        activity_l.addSpacing(10)
+        self._proc_row = self._make_stat_row(tr("sysinfo.processes"), "—", strong=True)
+        activity_l.addWidget(self._proc_row)
+        activity_l.addSpacing(10)
+        self._ip_row = self._make_stat_row(tr("sysinfo.ip"), "—", strong=True)
+        activity_l.addWidget(self._ip_row)
+        content_v.addWidget(activity_card)
+        content_v.addStretch()
 
         root.addWidget(self._content, stretch=1)
 
@@ -866,11 +866,11 @@ class SystemInfoPanel(QFrame):
         frame = QFrame()
         frame.setObjectName("sysinfoSectionCard")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         section = self._make_section_label(title)
         layout.addWidget(section)
-        layout.addSpacing(8)
+        layout.addSpacing(14)
         return frame, layout, section
 
     def _make_section_label(self, text: str) -> QLabel:
@@ -884,13 +884,16 @@ class SystemInfoPanel(QFrame):
         f.setFixedHeight(1)
         return f
 
-    def _make_stat_row(self, label: str, value: str) -> QWidget:
+    def _make_stat_row(self, label: str, value: str, strong: bool = False) -> QWidget:
+        """Label left, value right. *strong* labels are for key/value lists
+        without a bar underneath."""
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(4)
+        h.setSpacing(12)
         lbl = QLabel(label)
         lbl.setObjectName("sysinfoStatLabel")
+        lbl.setProperty("strong", "true" if strong else "false")
         val = QLabel(value)
         val.setObjectName("sysinfoStatValue")
         val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -923,7 +926,7 @@ class SystemInfoPanel(QFrame):
             row = QWidget()
             v = QVBoxLayout(row)
             v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(3)
+            v.setSpacing(0)
 
             pct = float(drive.get("percent", 0.0))
             stat = self._make_stat_row(
@@ -939,9 +942,11 @@ class SystemInfoPanel(QFrame):
             if meta_text:
                 meta = QLabel(meta_text)
                 meta.setObjectName("sysinfoDriveMeta")
+                v.addSpacing(2)
                 v.addWidget(meta)
 
             bar = self._make_progress_bar()
+            v.addSpacing(7)
             bar.setValue(int(min(max(pct, 0.0), 100.0)))
             self._set_bar_color(bar, pct)
             v.addWidget(bar)
@@ -953,7 +958,7 @@ class SystemInfoPanel(QFrame):
         bar.setObjectName("sysinfoProgress")
         bar.setMaximum(100)
         bar.setValue(0)
-        bar.setFixedHeight(6)
+        bar.setFixedHeight(4)
         bar.setTextVisible(False)
         return bar
 
