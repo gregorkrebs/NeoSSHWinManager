@@ -307,7 +307,7 @@ def init_db() -> None:
                 auto_login               INTEGER DEFAULT 0,  -- Windows Auto-Login
                 auto_reconnect           INTEGER DEFAULT 1,  -- Beim Start automatisch reconnecten
                 language                 TEXT    DEFAULT 'en',  -- UI Sprache (en, de, es, ru, nl, ar)
-                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, light)
+                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, gray, light)
                 security_level           INTEGER DEFAULT 0,  -- 0=Strict, 1=Key-Auth, 2=Insecure-PW
                 allow_passwordless_key_auth INTEGER DEFAULT 0,
                 allow_insecure_password_auth INTEGER DEFAULT 0,
@@ -447,12 +447,28 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN terminal_client TEXT DEFAULT 'xterm'")
             if "sshfs_disable_cache" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sshfs_disable_cache INTEGER DEFAULT 0")
+            if "accent_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_color TEXT DEFAULT ''")
+            if "allow_shared_drive_letters" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN allow_shared_drive_letters INTEGER DEFAULT 0")
+            if "auto_pick_free_drive_letter" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN auto_pick_free_drive_letter INTEGER DEFAULT 0")
             # File browser settings: one encrypted JSON document (bookmarks
             # hold remote paths, which are encrypted like connection metadata).
             if "sftp_browser_enc" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_enc TEXT DEFAULT ''")
             if "sftp_browser_iv" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_iv TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Migration: the letter a host was actually mounted on (may differ
+        # from its configured one when another letter was picked at mount time)
+        try:
+            cursor = conn.execute("PRAGMA table_info(active_mounts)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "drive_letter" not in cols:
+                conn.execute("ALTER TABLE active_mounts ADD COLUMN drive_letter TEXT DEFAULT ''")
         except Exception:
             pass
 

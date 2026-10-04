@@ -136,6 +136,7 @@ def test_direct_mount_rejects_preoccupied_drive(monkeypatch, tmp_path):
 
     assert result.success is False
     assert "bereits belegt" in result.message
+    assert result.code == "drive_in_use"
     popen.assert_not_called()
 
 

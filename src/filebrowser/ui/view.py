@@ -443,11 +443,12 @@ class FileBrowserView(QWidget):
         self._root.setStyleSheet(stylesheet(self.palette, *close_icons))
 
     def set_theme(self, theme: str) -> None:
-        """Switch between dark and light while hosts stay connected."""
-        if theme == self.theme:
+        """Switch theme or accent while hosts stay connected."""
+        new_palette = palette(theme)
+        if theme == self.theme and new_palette == self.palette:
             return
         self.theme = theme
-        self.palette = palette(theme)
+        self.palette = new_palette
         self._apply_stylesheet()
         c = self.palette.icon
         for btn in self.findChildren(QToolButton):
@@ -456,6 +457,7 @@ class FileBrowserView(QWidget):
                 btn.setIcon(svg_icon(name, c, btn.iconSize().width() or 16))
         for pane in self._all_panes():
             pane.set_icon_color(c)
+            pane.set_drop_color(self.palette.accent)
         self._panel.set_palette(self.palette)
         self._update_session_ui()
 

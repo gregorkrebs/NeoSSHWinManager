@@ -1,7 +1,19 @@
 """
 theme.py - Global stylesheets for SSH Win Manager.
+
+Three themes share two hand-written sheets: "dark" (STYLESHEET), "light"
+(LIGHT_STYLESHEET) and "gray", which is derived from the dark sheet by mapping
+its navy-tinted neutrals onto VS Code's gray palette (see _to_gray).
+
+The accent is the default teal DEFAULT_ACCENT plus a family of shades around
+it. A user-chosen accent is applied by moving every one of those shades onto
+the new hue (recolor_accent), so hover, border and tint colours keep their
+relationship to the base colour whatever the user picks.
 """
 
+import colorsys
+import re
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -9,28 +21,192 @@ _ICON_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
 _CHECKMARK_URL = str(_ICON_DIR / "check.svg").replace("\\", "/")
 _CHEVRON_URL = str(_ICON_DIR / "chevron-down.svg").replace("\\", "/")
 
+THEMES = ("dark", "gray", "light")
+DEFAULT_ACCENT = "#0077b6"
+
 THEME_COLORS = {
     "dark": {
         "background": "#0d0d12",
         "surface": "#0D1117",
         "text": "#c8d6e5",
-        "accent": "#0077b6"
+        "accent": DEFAULT_ACCENT
+    },
+    "gray": {
+        "background": "#181818",
+        "surface": "#1f1f1f",
+        "text": "#cccccc",
+        "accent": DEFAULT_ACCENT
     },
     "light": {
         "background": "#f0f2f5",
         "surface": "#ffffff",
         "text": "#1a2332",
-        "accent": "#0077b6"
+        "accent": DEFAULT_ACCENT
     }
 }
 
-def get_stylesheet(theme: str = "dark") -> str:
-    """Return the stylesheet for the given theme ('dark' or 'light')."""
-    sheet = LIGHT_STYLESHEET if theme == "light" else STYLESHEET
+
+def normalize_theme(theme) -> str:
+    """Return *theme* if it is a known theme name, otherwise "dark"."""
+    return theme if theme in THEMES else "dark"
+
+
+def is_light(theme) -> bool:
+    """True for the light theme; "dark" and "gray" are both dark themes."""
+    return theme == "light"
+
+
+_HEX_RE = re.compile(r"#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
+
+
+def normalize_hex(value) -> str | None:
+    """'#abc', 'abc', '#AABBCC' -> '#aabbcc'; anything else -> None."""
+    m = _HEX_RE.fullmatch((value or "").strip())
+    if not m:
+        return None
+    digits = m.group(1)
+    if len(digits) == 3:
+        digits = "".join(c * 2 for c in digits)
+    return "#" + digits.lower()
+
+
+# ── Accent ─────────────────────────────────────────────────────────────────
+
+# Every shade of the default teal used by the sheets (and by a few widgets
+# that paint their own colours). recolor_accent() replaces exactly these.
+_ACCENT_HEX = (
+    # base and the shades around it (hover, pressed, borders, gradients)
+    "#0077b6", "#0088c8", "#005a8a", "#005a8e", "#0066a0", "#005fa3",
+    "#009add", "#006fb8", "#004a75", "#0f7cb2", "#0099d8", "#1590cf",
+    "#00b4d8", "#22c4e8", "#38d4f8", "#47c3ff", "#58a6ff", "#72add6",
+    "#7ddfff",
+    # dark tints: pill, mounted/selected card and link-hover backgrounds
+    "#0f2430", "#0d2137", "#0a1929", "#10202a", "#172531",
+    # the same tints in the gray theme (see _GRAY_MAP)
+    "#1a303d", "#222e35", "#283139", "#1a2b3d", "#14212e",
+    # light tints: hover and selection fills of the light theme
+    "#c7dfef", "#d0e6f5", "#e0eef8", "#dff1fb", "#e8f6fb", "#edf5fb",
+    "#edf7fc",
+)
+_ACCENT_RGB = ((0, 119, 182), (71, 195, 255), (125, 223, 255))
+
+_ACCENT_RE = re.compile(
+    r"#(?:%s)\b|rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,"
+    % "|".join(h[1:] for h in _ACCENT_HEX),
+    re.IGNORECASE,
+)
+
+
+def _hex_rgb(color: str) -> tuple[int, int, int]:
+    return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _hls(rgb) -> tuple[float, float, float]:
+    return colorsys.rgb_to_hls(*(c / 255 for c in rgb))
+
+
+_BASE_HLS = _hls(_hex_rgb(DEFAULT_ACCENT))
+
+
+@lru_cache(maxsize=4096)
+def _shift_rgb(shade: tuple[int, int, int], accent: str) -> tuple[int, int, int]:
+    """Move one shade of the default accent onto *accent*."""
+    sh, sl, ss = _hls(shade)
+    ah, al, as_ = _hls(_hex_rgb(accent))
+    bh, bl, bs = _BASE_HLS
+    h = (ah + sh - bh) % 1.0
+    s = ss * as_ / bs
+    # Mid shades (hover, borders, gradients) follow the accent's lightness.
+    # Very dark tints (backgrounds) and very light ones (text on dark, fills
+    # on light) keep their own lightness so they stay readable on any accent.
+    l = sl + (al - bl) if 0.2 <= sl <= 0.6 else sl
+    r, g, b = colorsys.hls_to_rgb(h, min(max(l, 0.0), 1.0), min(max(s, 0.0), 1.0))
+    return round(r * 255), round(g * 255), round(b * 255)
+
+
+def recolor_accent(text: str, accent: str) -> str:
+    """Replace every default-accent shade in *text* with its *accent* version."""
+    accent = normalize_hex(accent) or DEFAULT_ACCENT
+    if accent == DEFAULT_ACCENT:
+        return text
+
+    def sub(m):
+        if m.group(1) is None:
+            return "#%02x%02x%02x" % _shift_rgb(_hex_rgb(m.group(0)), accent)
+        rgb = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if rgb not in _ACCENT_RGB:
+            return m.group(0)
+        return "rgba(%d, %d, %d," % _shift_rgb(rgb, accent)
+
+    return _ACCENT_RE.sub(sub, text)
+
+
+def _luminance(color: str) -> float:
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = _hex_rgb(color)
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def accent_text_color(accent: str) -> str:
+    """Text colour that stays readable on a button filled with *accent*."""
+    accent = normalize_hex(accent) or DEFAULT_ACCENT
+    return "#111111" if _luminance(accent) > 0.36 else "#ffffff"
+
+
+# Primary buttons are filled with the accent and carry light text; a light
+# accent (yellow, light green …) needs dark text instead.
+_ON_ACCENT_RULE = """
+#actionBtn[btn_type="primary"], #primaryBtn,
+QPushButton#settingsActionBtn[btn_type="primary"],
+QPushButton#rpActionBtn[btn_type="primary"] {
+    color: %s;
+}
+"""
+
+_current_accent = DEFAULT_ACCENT
+
+
+def set_current_accent(accent) -> None:
+    """Set the accent used by get_stylesheet() and accent_tone()."""
+    global _current_accent
+    _current_accent = normalize_hex(accent) or DEFAULT_ACCENT
+    # The terminal (terminal_panel.load_session) reads its cursor and
+    # selection colour from THEME_COLORS.
+    for colors in THEME_COLORS.values():
+        colors["accent"] = _current_accent
+
+
+def current_accent() -> str:
+    return _current_accent
+
+
+def accent_tone(default_shade: str) -> str:
+    """The current accent's version of a shade of the default teal,
+    e.g. accent_tone("#00b4d8") for the bright cyan used on icons."""
+    return recolor_accent(default_shade, _current_accent)
+
+
+@lru_cache(maxsize=16)
+def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT) -> str:
+    """Return the application stylesheet for *theme* in *accent*."""
+    theme = normalize_theme(theme)
+    accent = normalize_hex(accent) or DEFAULT_ACCENT
+    sheet = {"dark": STYLESHEET, "gray": GRAY_STYLESHEET, "light": LIGHT_STYLESHEET}[theme]
+    sheet = recolor_accent(sheet, accent)
+    if accent_text_color(accent) != "#ffffff":
+        sheet += _ON_ACCENT_RULE % accent_text_color(accent)
     return (
         sheet.replace("__CHECKMARK_URL__", _CHECKMARK_URL)
         .replace("__CHEVRON_URL__", _CHEVRON_URL)
+        .replace("__SURFACE__", THEME_COLORS[theme]["surface"])
     )
+
+
+def get_stylesheet(theme: str = "dark") -> str:
+    """Return the stylesheet for *theme* in the current accent."""
+    return build_stylesheet(normalize_theme(theme), _current_accent)
 
 
 STYLESHEET = """
@@ -234,6 +410,11 @@ QPushButton#settingsActionBtn:hover {
     border: 1px solid #36506c;
     color: #deebf7;
 }
+QPushButton#settingsActionBtn:disabled {
+    background-color: #111822;
+    border: 1px solid #1a2330;
+    color: #3a4a5a;
+}
 QPushButton#settingsActionBtn[btn_type="primary"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #0088c8, stop:1 #005fa3);
@@ -314,9 +495,8 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoHeroCard, #sysinfoSectionCard, #sysinfoStateCard {
-    background-color: #111822;
-    border: 1px solid #1f2b3a;
-    border-radius: 18px;
+    background-color: transparent;
+    border: none;
 }
 
 #sysinfoLoadingOverlay {
@@ -383,37 +563,42 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoStatLabel {
-    color: #6f8599;
-    font-size: 11px;
-    font-weight: 600;
+    color: #8fa4b8;
+    font-size: 12px;
+}
+#sysinfoStatLabel[strong="true"] {
+    color: #e4eaf0;
+    font-weight: 700;
 }
 
 #sysinfoStatValue {
-    color: #deebf7;
+    color: #e4eaf0;
+    font-family: "Consolas";
     font-size: 12px;
     font-weight: 700;
 }
 
 #sysinfoDriveMeta {
-    color: #8fa4b8;
+    color: #6a7a8a;
     font-size: 10px;
 }
 
 QProgressBar#sysinfoProgress {
-    background-color: #0d1720;
-    border-radius: 3px;
+    background-color: #1a2330;
+    border: none;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress::chunk {
     background-color: #0077b6;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="warn"]::chunk {
     background-color: #f59e0b;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="error"]::chunk {
     background-color: #ef4444;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 QMenu {
@@ -916,7 +1101,7 @@ QPushButton#sidebarBtn[btn_type="warning"]:hover {
 
 /* ---- Small Add button in header --------------------------- */
 QPushButton#headerAddBtn {
-    background-color: 14141F;
+    background-color: #14141F;
     border: 1px solid #243243;
     border-radius: 10px;
     min-width: 32px;
@@ -1023,6 +1208,23 @@ QFrame#rpInfoField QSpinBox:focus,
 QFrame#rpInfoField QComboBox:focus {
     border-bottom: 1px solid #0077b6;
     background-color: transparent;
+}
+/* Locked while the host is mounted (edit form) */
+QFrame#rpInfoField QLineEdit:disabled,
+QFrame#rpInfoField QSpinBox:disabled,
+QFrame#rpInfoField QComboBox:disabled {
+    color: #556070;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.10);
+}
+QFrame#rpInfoField QPushButton:disabled {
+    color: #3a4a5a;
+}
+QCheckBox:disabled {
+    color: #556070;
+}
+QCheckBox::indicator:disabled {
+    background-color: #111822;
+    border: 1.5px solid #1a2330;
 }
 QFrame#rpInfoField QPushButton {
     min-height: 16px;
@@ -1274,6 +1476,56 @@ QPushButton#aboutLinkBtn:hover {
 }
 QPushButton#aboutLinkBtn:pressed {
     background-color: #0a1929;
+}
+/* About dialog */
+QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
+QFrame#aboutFeatureTile, QFrame#aboutCard {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 12px;
+}
+QLabel#aboutFeatureTitle, QLabel#aboutCardTitle {
+    color: #e4eaf0;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#aboutFeatureBody {
+    color: #8fa4b8;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#aboutCardHint, QLabel#aboutLinkHint {
+    color: #6a7a8a;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#aboutLinkLabel {
+    color: #c1cfdd;
+    font-size: 13px;
+    background: transparent;
+}
+QPushButton#aboutLinkRow {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 44px;
+    max-height: 44px;
+}
+QPushButton#aboutLinkRow:hover {
+    background-color: #141d28;
+    border: 1px solid #243243;
+}
+QPushButton#aboutLinkRow:pressed {
+    background-color: #0d2137;
+}
+QPushButton#aboutLinkRow:focus {
+    border: 1px solid #0077b6;
+}
+QLabel#aboutCredits {
+    color: #6a7a8a;
+    font-size: 11px;
 }
 QLineEdit[invalid="true"] {
     border: 2px solid #0077b6;
@@ -1598,11 +1850,6 @@ QMessageBox QPushButton {
 }
 """
 
-# Fill __SURFACE__ placeholder using selected theme colors
-def get_stylesheet_v2(theme: str = "dark") -> str:
-    colors = THEME_COLORS.get(theme, THEME_COLORS["dark"])
-    sheet = get_stylesheet(theme)
-    return sheet.replace("__SURFACE__", colors["surface"])
 LIGHT_STYLESHEET = """
 /* ============================================================
     NEO SSH-Win Manager - Light Theme
@@ -1791,6 +2038,11 @@ QPushButton#settingsActionBtn:hover {
     border: 1px solid #9ab0c5;
     color: #182536;
 }
+QPushButton#settingsActionBtn:disabled {
+    background-color: #f6f9fc;
+    border: 1px solid #dde2e8;
+    color: #aab4c4;
+}
 QPushButton#settingsActionBtn[btn_type="primary"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #0088c8, stop:1 #005fa3);
@@ -1858,9 +2110,8 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoHeroCard, #sysinfoSectionCard, #sysinfoStateCard {
-    background-color: #ffffff;
-    border: 1px solid #d5dde7;
-    border-radius: 18px;
+    background-color: transparent;
+    border: none;
 }
 
 #sysinfoLoadingOverlay {
@@ -1927,37 +2178,42 @@ QPushButton#dialogMaximizeBtn:checked {
 }
 
 #sysinfoStatLabel {
-    color: #6a7a8a;
-    font-size: 11px;
-    font-weight: 600;
+    color: #617386;
+    font-size: 12px;
+}
+#sysinfoStatLabel[strong="true"] {
+    color: #182536;
+    font-weight: 700;
 }
 
 #sysinfoStatValue {
     color: #182536;
+    font-family: "Consolas";
     font-size: 12px;
     font-weight: 700;
 }
 
 #sysinfoDriveMeta {
-    color: #617386;
+    color: #8a9aab;
     font-size: 10px;
 }
 
 QProgressBar#sysinfoProgress {
-    background-color: #e7edf4;
-    border-radius: 3px;
+    background-color: #e3e9f0;
+    border: none;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress::chunk {
     background-color: #0077b6;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="warn"]::chunk {
     background-color: #d97706;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QProgressBar#sysinfoProgress[level="error"]::chunk {
     background-color: #dc2626;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 QMenu {
@@ -2479,6 +2735,23 @@ QFrame#rpInfoField QComboBox:focus {
     border-bottom: 1px solid #0077b6;
     background-color: transparent;
 }
+/* Locked while the host is mounted (edit form) */
+QFrame#rpInfoField QLineEdit:disabled,
+QFrame#rpInfoField QSpinBox:disabled,
+QFrame#rpInfoField QComboBox:disabled {
+    color: #9aa6b2;
+    border-bottom: 1px dashed rgba(0, 0, 0, 0.12);
+}
+QFrame#rpInfoField QPushButton:disabled {
+    color: #b8c4cf;
+}
+QCheckBox:disabled {
+    color: #9aa6b2;
+}
+QCheckBox::indicator:disabled {
+    background-color: #f0f2f5;
+    border: 1.5px solid #dde2e8;
+}
 QFrame#rpInfoField QPushButton {
     min-height: 16px;
     max-height: 20px;
@@ -2717,6 +2990,56 @@ QPushButton#aboutLinkBtn:hover {
 }
 QPushButton#aboutLinkBtn:pressed {
     background-color: #d0e6f5;
+}
+/* About dialog */
+QWidget#aboutBody, QScrollArea#aboutScroll { background: transparent; }
+QFrame#aboutFeatureTile, QFrame#aboutCard {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 12px;
+}
+QLabel#aboutFeatureTitle, QLabel#aboutCardTitle {
+    color: #1a2a3a;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#aboutFeatureBody {
+    color: #617386;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#aboutCardHint, QLabel#aboutLinkHint {
+    color: #8a9aab;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#aboutLinkLabel {
+    color: #2a3a4a;
+    font-size: 13px;
+    background: transparent;
+}
+QPushButton#aboutLinkRow {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 44px;
+    max-height: 44px;
+}
+QPushButton#aboutLinkRow:hover {
+    background-color: #f0f5fa;
+    border: 1px solid #d5dde7;
+}
+QPushButton#aboutLinkRow:pressed {
+    background-color: #e0eef8;
+}
+QPushButton#aboutLinkRow:focus {
+    border: 1px solid #0077b6;
+}
+QLabel#aboutCredits {
+    color: #8a9aab;
+    font-size: 11px;
 }
 QLineEdit[invalid="true"] {
     border: 1px solid #0077b6;
@@ -3035,3 +3358,89 @@ QMessageBox QPushButton {
     padding: 0 14px;
 }
 """
+
+
+# ── Gray theme ─────────────────────────────────────────────────────────────
+# A neutral gray dark mode after VS Code's "Dark Modern": the dark sheet with
+# every navy-tinted neutral moved onto VS Code's grays. Accent shades and the
+# semantic colours (green = mounted, red = danger, amber = warning) stay.
+
+_GRAY_MAP = {
+    # window, sidebar, headers, status bar
+    "#0a0a0f": "#181818", "#0d0d12": "#1f1f1f", "#0a0f15": "#181818",
+    "#0d1117": "#1f1f1f", "#0f1218": "#1f1f1f", "#0e0e19": "#181818",
+    "#0f0f1a": "#1f1f1f",
+    # cards, panels, menus
+    "#0d1720": "#2b2b2b", "#0f1720": "#252526", "#13131e": "#252526",
+    "#111820": "#252526", "#111822": "#252526", "#101925": "#2d2d2d",
+    "#161b22": "#2a2a2a",
+    # inputs and buttons
+    "#14141f": "#313131", "#141d28": "#313131", "#16162a": "#313131",
+    # hover and selection fills
+    "#16202c": "#2a2d2e", "#182232": "#37373d", "#192433": "#3c3c3c",
+    "#1a1a2e": "#2b2b2b", "#1a2330": "#2b2b2b", "#1e1e2e": "#2b2b2b",
+    # borders
+    "#1c2633": "#2b2b2b", "#1a2738": "#333333", "#1e1e30": "#3c3c3c",
+    "#21262d": "#3c3c3c", "#1f2b3a": "#3c3c3c", "#243243": "#454545",
+    "#2a2a4a": "#454545", "#2f4358": "#555555", "#31465d": "#5a5a5a",
+    "#3a5068": "#6b6b6b", "#36506c": "#6b6b6b",
+    # muted / disabled text and icons
+    "#2a3a4a": "#4a4a4a", "#3a3a4a": "#5a5a5a", "#3a4a5a": "#5a5a5a",
+    "#3f4e5e": "#6e6e6e", "#556070": "#858585", "#5a6d7e": "#8b8b8b",
+    "#607489": "#8b8b8b", "#6a7a8a": "#969696", "#6f8599": "#969696",
+    "#8b949e": "#9d9d9d", "#8fa4b8": "#9d9d9d", "#9ab0c5": "#b0b0b0",
+    "#aab4c4": "#b5b5b5",
+    # text
+    "#c1cfdd": "#c5c5c5", "#c8d6e5": "#cccccc", "#d8e4f0": "#d4d4d4",
+    "#e4eaf0": "#e0e0e0", "#deebf7": "#e0e0e0", "#e6edf3": "#e0e0e0",
+    "#edf4fb": "#e8e8e8",
+    # accent tints, re-based on the gray surfaces (still accent shades)
+    "#0f2430": "#1a303d", "#10202a": "#222e35", "#172531": "#283139",
+    "#0d2137": "#1a2b3d", "#0a1929": "#14212e",
+}
+_GRAY_RGBA = {
+    (8, 12, 18): (12, 12, 12),          # loading overlays
+    (17, 24, 34): (37, 37, 38),         # loading cards
+    (170, 180, 196): (180, 180, 180),   # scrollbar handle
+    (106, 122, 138): (128, 128, 128),   # "+n" group pill
+    (96, 116, 137): (120, 120, 120),    # connections badge border
+}
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\b|rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,")
+_ACCENT_SET = frozenset(_ACCENT_HEX)
+
+
+def _neutral_gray(color: str) -> str:
+    """Fallback for a dark-sheet colour missing from _GRAY_MAP."""
+    h, l, s = _hls(_hex_rgb(color))
+    if s > 0.5:                 # a real colour, not a tinted neutral
+        return color
+    if l < 0.2:                 # lift backgrounds into VS Code's range
+        l = 0.094 + l * 0.6
+    v = round(l * 255)
+    return "#%02x%02x%02x" % (v, v, v)
+
+
+def _to_gray(sheet: str) -> str:
+    def sub(m):
+        if m.group(1) is None:
+            c = m.group(0).lower()
+            if c in _GRAY_MAP:
+                return _GRAY_MAP[c]
+            if c in _ACCENT_SET:
+                return m.group(0)
+            return _neutral_gray(c)
+        rgb = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if rgb in _GRAY_RGBA:
+            return "rgba(%d, %d, %d," % _GRAY_RGBA[rgb]
+        return m.group(0)
+
+    return _COLOR_RE.sub(sub, sheet)
+
+
+GRAY_STYLESHEET = _to_gray(STYLESHEET)
+
+
+def dark_tone(theme: str, color: str) -> str:
+    """A colour picked for the dark theme as *theme* shows it: the gray theme
+    maps it onto its grays. For widgets that paint colours outside the QSS."""
+    return _to_gray(color) if theme == "gray" else color

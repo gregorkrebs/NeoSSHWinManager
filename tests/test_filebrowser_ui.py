@@ -449,7 +449,7 @@ def test_further_hosts_open_in_their_own_tabs(app, qt_errors, tmp_path, monkeypa
             win.queue.upload([str(upload)], "/")
             assert _pump(app, 5, lambda: (tmp_path / "b" / "upload.txt").exists())
             assert not (tmp_path / "a" / "upload.txt").exists()
-            assert win._panel.jobs.topLevelItem(0).text(C_HOST) == "Beta"
+            assert [it.text(C_HOST) for it in win._panel._items.values()] == ["Beta"]
 
             # Undo belongs to the host: Beta's new folder is not undoable in Alpha's tab.
             monkeypatch.setattr(view_mod.StyledInputDialog, "get_text",

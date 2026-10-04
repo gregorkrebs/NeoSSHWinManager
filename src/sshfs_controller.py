@@ -36,6 +36,9 @@ WINFSP_DLL_PATHS = [
 class MountResult:
     success: bool
     message: str
+    # Machine-readable reason for a failure the UI handles itself:
+    # "drive_in_use" = the drive letter is already taken.
+    code: str = ""
 
 
 def _find_sshfs_exe() -> str | None:
@@ -290,7 +293,7 @@ class SSHFSController:
         if letter is None:
             return MountResult(False, f"Ungültiger Laufwerksbuchstabe: {conn.drive_letter!r}")
         if _drive_letter_in_use(f"{letter}:"):
-            return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.")
+            return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.", "drive_in_use")
 
         logger.info(f"=== SSHFS Mount Debug ===")
         logger.info(f"Connection name: {conn.name}")
@@ -460,7 +463,7 @@ class SSHFSController:
             # Preparing a key or connection can take long enough for another
             # device to claim the letter, so check again immediately before Popen.
             if _drive_letter_in_use(f"{letter}:"):
-                return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.")
+                return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.", "drive_in_use")
 
             proc = subprocess.Popen(
                 cmd,
@@ -992,6 +995,36 @@ class SSHFSController:
 
     def is_mounted(self, drive_letter: str) -> bool:
         return _drive_letter_in_use(drive_letter)
+
+    def sshfs_letters(self, letters) -> set:
+        """Those of *letters* that hold an SSHFS mount: a direct mount (an
+        sshfs.exe with the letter as mount point) or a net-use mount of an
+        \\\\sshfs UNC path. Other drives on a letter (USB stick, subst, a
+        network share) are not ours."""
+        wanted = {self._drive_char(l) for l in letters} - {None}
+        if not wanted:
+            return set()
+        found = set()
+        for ch in wanted:
+            unc = (self._get_actual_unc(f"{ch}:") or "").lower()
+            if unc.startswith("\\\\sshfs"):
+                found.add(f"{ch}:")
+        rest = wanted - {f[0] for f in found}
+        if rest:
+            try:
+                for proc in psutil.process_iter(["name", "cmdline"]):
+                    try:
+                        if (proc.info.get("name") or "").lower() != "sshfs.exe":
+                            continue
+                        for arg in proc.info.get("cmdline") or ():
+                            a = str(arg).strip().strip('"').rstrip("\\/").upper()
+                            if len(a) == 2 and a[1] == ":" and a[0] in rest:
+                                found.add(a)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+            except (psutil.Error, OSError):
+                pass
+        return found
 
     def get_mounted_drives(self) -> dict:
         bitmask = ctypes.windll.kernel32.GetLogicalDrives()

@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QIcon
 from src.config import Connection
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+from src.ui.theme import accent_tone, current_accent
 from src.i18n import tr
 
 
@@ -34,6 +35,9 @@ class ConnectionCard(QFrame):
         self._debug_edit = debug_edit
         self._loading = False
         self._is_ftp = bool(getattr(conn, "is_ftp", False))
+        # Letter the host is actually mounted on, when it differs from its
+        # configured one (picked at mount time because that one was taken).
+        self._mounted_letter: str | None = None
         self.setObjectName("connectionCard")
         # Increase height when groups are present
         self.setFixedHeight(68)
@@ -68,6 +72,14 @@ class ConnectionCard(QFrame):
         # Let the name only take what it needs, but allow it to shrink if needed
         self._name_lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         name_row.addWidget(self._name_lbl)
+
+        # Warning: this host's drive letter is assigned to other hosts too.
+        self._letter_warn_lbl = QLabel()
+        self._letter_warn_lbl.setObjectName("letterWarning")
+        self._letter_warn_lbl.setPixmap(svg_pixmap("alert-triangle", "#f59e0b", 15))
+        self._letter_warn_lbl.setFixedSize(QSize(16, 16))
+        self._letter_warn_lbl.setVisible(False)
+        name_row.addWidget(self._letter_warn_lbl)
 
         # Groups/Tags pills (directly behind name)
         self._groups_widget = self._build_groups_pills()
@@ -128,7 +140,28 @@ class ConnectionCard(QFrame):
 
     def _badge_text(self) -> str:
         """Drive letter for SFTP, protocol name for FTP/FTPS (never mounted)."""
-        return self._conn.protocol_label if self._is_ftp else self._conn.drive_letter
+        if self._is_ftp:
+            return self._conn.protocol_label
+        if self._mounted and self._mounted_letter:
+            return self._mounted_letter
+        return self._conn.drive_letter
+
+    def set_mounted_letter(self, letter: str | None) -> None:
+        """Show the letter the host is actually mounted on (None: its own)."""
+        if letter == self._conn.drive_letter:
+            letter = None
+        if letter == self._mounted_letter:
+            return
+        self._mounted_letter = letter
+        self._drive_badge.setText(self._badge_text())
+        self._update_detail_text()
+
+    def set_letter_warning(self, warn: bool) -> None:
+        """Warning triangle: the drive letter is assigned to several hosts."""
+        self._letter_warn_lbl.setVisible(bool(warn) and not self._is_ftp)
+        self._letter_warn_lbl.setToolTip(
+            tr("card.tooltip.letter_duplicate", drive=self._conn.drive_letter) if warn else ""
+        )
 
     def _browser_tooltip(self) -> str:
         return tr("card.tooltip.ftp_browser", proto=self._conn.protocol_label)
@@ -145,7 +178,7 @@ class ConnectionCard(QFrame):
         self._drive_badge.setProperty("mounted", mounted)
         self._mount_btn.setProperty("mounted", mounted)
 
-        cloud_color = "#00b4d8" if mounted else "#6a7a8a"
+        cloud_color = accent_tone("#00b4d8") if mounted else "#6a7a8a"
         self._cloud_lbl.setPixmap(svg_pixmap("cloud", cloud_color, 32))
 
         if mounted:
@@ -158,24 +191,14 @@ class ConnectionCard(QFrame):
             self._drive_badge.setCursor(Qt.CursorShape.ArrowCursor)
 
         self._ssh_btn.setIcon(svg_icon("terminal", "#aab4c4", 16))
-        # In DEBUG mode editing is always allowed, so the edit button stays "active"
-        # even while mounted.
-        locked = mounted and not self._debug_edit
-        # Light theme: active icon must be darker (#4a5a6a) to be visible on a light
-        # background; disabled icon lighter (#b8c4cf). Dark theme keeps original values.
-        if self._theme == "light":
-            _edit_active   = "#4a5a6a"
-            _edit_disabled = "#b8c4cf"
-        else:
-            _edit_active   = "#aab4c4"
-            _edit_disabled = "#6a7a8a"
-        self._edit_btn.setIcon(svg_icon("edit", _edit_active if not locked else _edit_disabled, 15))
-        self._edit_btn.setToolTip(
-            tr("card.tooltip.edit_locked") if locked else tr("card.tooltip.edit")
-        )
-
-        self._edit_btn.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
-        self._edit_btn.setStyleSheet("QPushButton#cardEditBtn:hover { border:  1px solid #243243; }" if locked else "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }")
+        self._drive_badge.setText(self._badge_text())
+        self._update_detail_text()
+        # Editing is always possible; while mounted the edit form locks the
+        # connection fields itself. Light theme needs a darker icon.
+        self._edit_btn.setIcon(svg_icon("edit", "#4a5a6a" if self._theme == "light" else "#aab4c4", 15))
+        self._edit_btn.setToolTip(tr("card.tooltip.edit"))
+        self._edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edit_btn.setStyleSheet(f"QPushButton#cardEditBtn:hover {{ border: 1px solid {accent_tone('#72add6')}; }}")
 
         if self._loading:
             return
@@ -213,7 +236,7 @@ class ConnectionCard(QFrame):
         self._edit_btn.setToolTip(tr("card.tooltip.edit"))
         self._edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._edit_btn.setStyleSheet(
-            "QPushButton#cardEditBtn:hover { border: 1px solid #72add6; }"
+            f"QPushButton#cardEditBtn:hover {{ border: 1px solid {accent_tone('#72add6')}; }}"
         )
 
         if self._loading:
@@ -230,7 +253,7 @@ class ConnectionCard(QFrame):
 
     def _update_detail_text(self):
         """Set detail label with elided remote_path if it would be very long."""
-        prefix = self._conn.protocol_label if self._is_ftp else self._conn.drive_letter
+        prefix = self._badge_text()
         detail = f"{prefix}  •  {self._conn.user}@{self._conn.host}:{self._conn.port}"
         self._detail_lbl.setText(detail)
         # Full text as tooltip so user can see the whole path
@@ -288,7 +311,7 @@ class ConnectionCard(QFrame):
     def set_terminal_active(self, active: bool):
         """Highlight the SSH button when an integrated terminal session is alive."""
         if active:
-            color = "#0077b6"
+            color = current_accent()
         else:
             color = "#aab4c4"
         self._ssh_btn.setIcon(svg_icon("terminal", color, 16))
@@ -366,7 +389,7 @@ class ConnectionCard(QFrame):
         return self._mounted
 
     def set_debug_edit(self, enabled: bool):
-        """Toggle whether editing is allowed while mounted (DEBUG mode)."""
+        """DEBUG mode: the edit form does not lock fields while mounted."""
         if self._debug_edit == enabled:
             return
         self._debug_edit = enabled

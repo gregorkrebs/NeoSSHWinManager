@@ -303,7 +303,7 @@ def main():
 
     # Apply global stylesheet
     from src.ui.theme import THEME_COLORS
-    app.setStyleSheet(get_stylesheet("dark").replace("__SURFACE__", THEME_COLORS["dark"]["surface"]))
+    app.setStyleSheet(get_stylesheet("dark"))
 
     # Setze Palette für native Popups
     from PyQt6.QtGui import QPalette, QColor
@@ -378,6 +378,8 @@ def main():
         app.setLayoutDirection(
             Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
         )
+        from src.ui.theme import set_current_accent
+        set_current_accent(getattr(user_settings, "accent_color", ""))
         app.setStyleSheet(get_stylesheet(user_settings.theme))
         
         # Telemetry Opt-In / Send
