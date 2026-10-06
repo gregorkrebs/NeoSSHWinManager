@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QFont, QIcon
 import os
 
-from src.auth_manager import AuthManager, Session, LoginLockedError
+from src.auth_manager import AuthManager, Session, LoginLockedError, SingleUserModeError
 from src.crypto import is_available, is_keyring_available
 from src.ui.dialog_utils import match_parent_height, make_maximize_button
 from src.ui.dialogs.styled_message_box import StyledMessageBox
@@ -205,7 +205,7 @@ class LoginDialog(FramelessDialog):
         self._reg_error.setVisible(False)
         layout.addWidget(self._reg_error)
 
-        btn = QPushButton(tr("login.create_account"))
+        btn = QPushButton(tr("login.create_account").replace("&", "&&"))
         btn.setObjectName("primaryBtn")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumHeight(34)
@@ -331,7 +331,7 @@ class LoginDialog(FramelessDialog):
         try:
             user = AuthManager.initialize_single_user_mode()
         except Exception as e:
-            self._show_reg_error(str(e))
+            self._show_reg_error(SingleUserModeError.text_for(e))
             return
         Session.login(user)
         self.accept()

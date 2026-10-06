@@ -68,11 +68,15 @@ if len(sys.argv) > 2 and sys.argv[1] == "--repair-permissions":
 # Für CLI-Zugriff existiert NeoSSHWinManager-cli.exe (console-subsystem).
 if any(arg in sys.argv for arg in ("--connect-cli", "-connectssh")):
     import ctypes
+    sys.path.insert(0, os.path.dirname(__file__))
+    from src.config import read_install_prefs
+    from src.i18n import set_language, tr as _tr
+    # No user is signed in yet: use the language chosen in the installer.
+    set_language(read_install_prefs().get("language", "en"))
     ctypes.windll.user32.MessageBoxW(
         None,
-        "Für CLI-Zugriff bitte NeoSSHWinManager-cli.exe verwenden.\n\n"
-        "Beispiel:\n  NeoSSHWinManager-cli.exe --connect-cli <key>",
-        "SSH Win Manager – falscher Einstiegspunkt",
+        _tr("cli.wrong_entry.body"),
+        _tr("cli.wrong_entry.title"),
         0x30,  # MB_ICONWARNING
     )
     sys.exit(2)
@@ -194,7 +198,7 @@ def _install_global_exception_handlers():
                 box.setIcon(QMessageBox.Icon.Critical)
                 box.setWindowTitle(tr("app.unexpected_error.title"))
                 box.setText(tr("app.unexpected_error.body"))
-                copy_btn = box.addButton("Details kopieren", QMessageBox.ButtonRole.ActionRole)
+                copy_btn = box.addButton(tr("app.unexpected_error.copy"), QMessageBox.ButtonRole.ActionRole)
                 copy_btn.setIcon(svg_icon("copy", "#ffffff", 14))
                 copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(err_text))
                 box.addButton(QMessageBox.StandardButton.Ok)

@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDial
 from PyQt6.QtCore import Qt
 
 from src.ui.frameless_dialog import FramelessDialog
+from src.i18n import tr
 
 
 class StyledMessageBox(FramelessDialog):
@@ -26,22 +27,29 @@ class StyledMessageBox(FramelessDialog):
 
     @classmethod
     def question(cls, parent, title: str, text: str,
-                 yes_text: str = "Ja", no_text: str = "Nein") -> bool:
+                 yes_text: str | None = None, no_text: str | None = None,
+                 destructive: bool = False) -> bool:
+        """Ask a yes/no question. *destructive* shows the confirm button in red."""
         dlg = cls(parent, title, text, "question",
-                  yes_text=yes_text, no_text=no_text)
+                  yes_text=yes_text, no_text=no_text, destructive=destructive)
         return dlg.exec() == QDialog.DialogCode.Accepted
 
     def __init__(self, parent, title: str, text: str, mode: str = "info",
-                 yes_text: str = "Ja", no_text: str = "Nein"):
+                 yes_text: str | None = None, no_text: str | None = None,
+                 destructive: bool = False):
         super().__init__(parent)
         self.setModal(True)
         self.setWindowTitle(title)
         self.setMinimumWidth(380)
         self.setObjectName("dialogSurface")
-        self._build_content(title, text, mode, yes_text, no_text)
+        # Defaults are resolved here, not in the signature: the language is
+        # only known at runtime.
+        self._build_content(title, text, mode,
+                            yes_text or tr("dialog.yes"), no_text or tr("dialog.no"),
+                            destructive)
 
     def _build_content(self, title: str, text: str, mode: str,
-                       yes_text: str, no_text: str):
+                       yes_text: str, no_text: str, destructive: bool):
         layout = QVBoxLayout(self._fdlg_content)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
@@ -86,18 +94,14 @@ class StyledMessageBox(FramelessDialog):
             no_btn.clicked.connect(self.reject)
             btn_row.addWidget(no_btn)
 
-            is_destructive = any(
-                kw in text.lower()
-                for kw in ("löschen", "delete", "entfernen", "remove")
-            )
             yes_btn = QPushButton(yes_text)
-            yes_btn.setObjectName("dangerBtn" if is_destructive else "primaryBtn")
+            yes_btn.setObjectName("dangerBtn" if destructive else "primaryBtn")
             yes_btn.setMinimumHeight(32)
             yes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             yes_btn.clicked.connect(self.accept)
             btn_row.addWidget(yes_btn)
         else:
-            ok_btn = QPushButton("OK")
+            ok_btn = QPushButton(tr("dialog.ok"))
             ok_btn.setObjectName("primaryBtn")
             ok_btn.setMinimumHeight(32)
             ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -147,14 +151,14 @@ class StyledInputDialog(FramelessDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn = QPushButton(tr("dialog.cancel"))
         cancel_btn.setObjectName("secondaryBtn")
         cancel_btn.setMinimumHeight(32)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton(tr("dialog.ok"))
         ok_btn.setObjectName("primaryBtn")
         ok_btn.setMinimumHeight(32)
         ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)

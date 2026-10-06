@@ -142,7 +142,7 @@ class UpdateDialog(FramelessDialog):
         self.browser_btn.clicked.connect(self._open_browser)
 
         self.install_btn = QPushButton(
-            tr("update.btn.install_now") if self._downloaded else tr("update.btn.download")
+            (tr("update.btn.install_now") if self._downloaded else tr("update.btn.download")).replace("&", "&&")
         )
         self.install_btn.setObjectName("primaryBtn")
         self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -200,7 +200,7 @@ class UpdateDialog(FramelessDialog):
             self.schedule_cb.setChecked(self._armed)
             self.browser_btn.setEnabled(True)
             self.install_btn.setEnabled(True)
-            self.install_btn.setText(tr("update.btn.install_now"))
+            self.install_btn.setText(tr("update.btn.install_now").replace("&", "&&"))
         else:
             self.install_btn.setText(tr("update.btn.download_failed"))
             self.install_btn.setEnabled(True)

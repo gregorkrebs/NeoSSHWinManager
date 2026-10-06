@@ -2405,7 +2405,7 @@ class MainWindow(FramelessMainWindow):
         self._open_users_panel()
 
     def _enable_single_user_mode(self):
-        from src.auth_manager import AuthManager
+        from src.auth_manager import AuthManager, SingleUserModeError
         if not StyledMessageBox.question(
             self, tr("users.mode.title"), tr("users.mode.enable_single_confirm"),
             yes_text=tr("users.mode.enable_single"), no_text=tr("dialog.cancel")
@@ -2415,12 +2415,12 @@ class MainWindow(FramelessMainWindow):
             # Same account id and encryption key: self._mgr stays valid.
             self._user = AuthManager.enable_single_user_mode()
         except Exception as e:
-            self._set_status(str(e))
+            self._set_status(SingleUserModeError.text_for(e))
             return
         self._rebuild_users_panel()
 
     def _migrate_single_user_to_multi(self):
-        from src.auth_manager import AuthManager
+        from src.auth_manager import AuthManager, SingleUserModeError
         username = self._um_username.text().strip()
         pw = self._um_password.text()
 
@@ -2442,7 +2442,7 @@ class MainWindow(FramelessMainWindow):
         try:
             self._user = AuthManager.migrate_single_user_to_multi_user(username, pw)
         except Exception as e:
-            _error(str(e))
+            _error(SingleUserModeError.text_for(e))
             return
         StyledMessageBox.information(
             self, tr("users.mode.title"), tr("users.mode.multi_done", name=username)
@@ -2459,9 +2459,13 @@ class MainWindow(FramelessMainWindow):
         if len(pw) < 8:  # SECURITY FIX: NIST SP 800-63B minimum is 8
             self._set_status(tr("users.password_min"))
             return
+        import sqlite3
         try:
             AuthManager.register(username, pw, is_admin=self._uf_is_admin.isChecked())
             self._open_users_panel()
+        except sqlite3.IntegrityError:
+            # users.username is UNIQUE (case-insensitive)
+            self._set_status(tr("users.username_taken"))
         except Exception as e:
             self._set_status(str(e))
 
@@ -2470,7 +2474,7 @@ class MainWindow(FramelessMainWindow):
         if StyledMessageBox.question(
             self, tr("users.delete.title"),
             tr("users.delete.confirm", name=username),
-            yes_text="Löschen", no_text="Abbrechen"
+            yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True
         ):
             AuthManager.delete_user(user_id)
             self._open_users_panel()
@@ -2480,7 +2484,7 @@ class MainWindow(FramelessMainWindow):
         if not StyledMessageBox.question(
             self, tr("users.reset.title"),
             tr("users.reset.confirm", name=username),
-            yes_text="Zurücksetzen", no_text="Abbrechen"
+            yes_text=tr("users.reset.title"), no_text=tr("dialog.cancel")
         ):
             return
         new_pw = AuthManager.admin_reset_password(user_id)
@@ -3108,6 +3112,7 @@ class MainWindow(FramelessMainWindow):
             self,
             tr("addedit.template.delete.title"),
             tr("addedit.template.delete.confirm", name=name),
+            yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True,
         )
         if not confirmed:
             return
@@ -4472,7 +4477,7 @@ class MainWindow(FramelessMainWindow):
         copy_btn.setFixedSize(32, 32)
         copy_btn.setIcon(svg_icon("copy", "#aab4c4", 16))
         copy_btn.setIconSize(QSize(16, 16))
-        copy_btn.setToolTip("Fehlermeldung kopieren")
+        copy_btn.setToolTip(tr("dialog.copy_error"))
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         _clip_text = f"{title}\n\n{message}"
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_clip_text))
@@ -4666,7 +4671,7 @@ class MainWindow(FramelessMainWindow):
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.mounted_confirm", name=conn.name),
-                yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel")
+                yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel"), destructive=True
             ):
                 return
             self._controller.unmount(self._effective_letter(conn))
@@ -4675,7 +4680,7 @@ class MainWindow(FramelessMainWindow):
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.confirm", name=conn.name),
-                yes_text=tr("main.delete"), no_text=tr("dialog.cancel")
+                yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True
             ):
                 return
         self._mgr.delete(conn_id)
@@ -5537,7 +5542,7 @@ class MainWindow(FramelessMainWindow):
         lu = line.upper()
         if "[ERROR" in lu or "[CRITICAL" in lu:
             short = line.split(" — ", 1)[-1] if " — " in line else line
-            self._set_status(f"⚠ Fehler: {short[:140]}")
+            self._set_status(f"⚠ {tr('status.error', msg=short[:140])}")
 
     def _check_prerequisites(self):
         status = SSHFSController.get_install_status()
