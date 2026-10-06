@@ -1990,6 +1990,20 @@ class MainWindow(FramelessMainWindow):
 
         v.addWidget(info_card)
 
+        # Single-user mode: the app password is random and nobody knows it,
+        # so it cannot be changed here. Setting one means switching to
+        # multi-user login in the user management.
+        if AuthManager.single_user_mode_enabled():
+            su_card, su_l = _section_card(tr("profile.change_password"))
+            su_hint = QLabel(tr("profile.single_user_hint"))
+            su_hint.setWordWrap(True)
+            su_hint.setStyleSheet(f"color: {_lbl_muted}; font-size: 12px;")
+            su_l.addWidget(su_hint)
+            v.addWidget(su_card)
+            v.addStretch()
+            self._fs_layout.addWidget(body)
+            return
+
         # Password change card
         pw_card, pw_l = _section_card(tr("profile.change_password"))
 
@@ -2125,6 +2139,7 @@ class MainWindow(FramelessMainWindow):
     def _build_users_form(self):
         from src.auth_manager import AuthManager
         from src.database import get_connection
+        from src.crypto import is_keyring_available
 
         users = AuthManager.list_users()
         current_user = Session.current()
@@ -2191,6 +2206,73 @@ class MainWindow(FramelessMainWindow):
         )
         hero_l.addWidget(summary, 0, Qt.AlignmentFlag.AlignTop)
         v.addWidget(hero)
+
+        # Login mode. Switching keeps the account id and its encryption key,
+        # so connections and settings stay as they are.
+        mode_card, mode_layout = _section_card(tr("users.mode.title"))
+        if AuthManager.single_user_mode_enabled():
+            mode_hint = QLabel(tr("users.mode.single_hint"))
+            mode_hint.setObjectName("hintLabel")
+            mode_hint.setWordWrap(True)
+            mode_layout.addWidget(mode_hint)
+
+            mode_layout.addWidget(self._field_label(tr("users.placeholder.username")))
+            self._um_username = QLineEdit()
+            self._um_username.setPlaceholderText(tr("users.placeholder.username"))
+            mode_layout.addWidget(self._um_username)
+
+            mode_layout.addWidget(self._field_label(tr("users.placeholder.password")))
+            self._um_password = QLineEdit()
+            self._um_password.setPlaceholderText(tr("users.placeholder.password"))
+            self._um_password.setEchoMode(QLineEdit.EchoMode.Password)
+            mode_layout.addWidget(self._um_password)
+
+            mode_layout.addWidget(self._field_label(tr("login.pw_confirm")))
+            self._um_password2 = QLineEdit()
+            self._um_password2.setPlaceholderText(tr("login.pw_repeat"))
+            self._um_password2.setEchoMode(QLineEdit.EchoMode.Password)
+            self._um_password2.returnPressed.connect(self._migrate_single_user_to_multi)
+            mode_layout.addWidget(self._um_password2)
+
+            self._um_error = QLabel("")
+            self._um_error.setObjectName("errorLabel")
+            self._um_error.setWordWrap(True)
+            self._um_error.setVisible(False)
+            mode_layout.addWidget(self._um_error)
+
+            mode_btn = QPushButton(tr("users.mode.enable_multi"))
+            mode_btn.setObjectName("primaryBtn")
+            mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            mode_btn.clicked.connect(self._migrate_single_user_to_multi)
+            mode_layout.addWidget(mode_btn)
+
+            # A single account: no user list, no "create user" form
+            v.addWidget(mode_card)
+            v.addStretch()
+            self._fs_layout.addWidget(body, stretch=1)
+            return
+
+        mode_hint = QLabel(tr("users.mode.multi_hint"))
+        mode_hint.setObjectName("hintLabel")
+        mode_hint.setWordWrap(True)
+        mode_layout.addWidget(mode_hint)
+
+        keyring_available = is_keyring_available()
+        mode_btn = QPushButton(tr("users.mode.enable_single"))
+        mode_btn.setObjectName("secondaryBtn")
+        mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mode_btn.setEnabled(keyring_available and len(users) <= 1)
+        mode_btn.clicked.connect(self._enable_single_user_mode)
+        mode_layout.addWidget(mode_btn)
+
+        if not keyring_available or len(users) > 1:
+            notice = QLabel(
+                tr("login.single_unavailable_keyring") if not keyring_available
+                else tr("login.single_unavailable_users")
+            )
+            notice.setObjectName("hintLabel")
+            notice.setWordWrap(True)
+            mode_layout.addWidget(notice)
 
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -2307,6 +2389,7 @@ class MainWindow(FramelessMainWindow):
         right_col.setContentsMargins(0, 0, 0, 0)
         right_col.setSpacing(16)
         right_col.addWidget(create_card, 0, Qt.AlignmentFlag.AlignTop)
+        right_col.addWidget(mode_card, 0, Qt.AlignmentFlag.AlignTop)
         right_col.addStretch(1)
 
         columns.addLayout(left_col, 6)
@@ -2315,6 +2398,56 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._fs_layout.addWidget(body, stretch=1)
+
+    def _rebuild_users_panel(self):
+        """Rebuild the open users panel (_open_users_panel would close it)."""
+        self._panel_mode = None
+        self._open_users_panel()
+
+    def _enable_single_user_mode(self):
+        from src.auth_manager import AuthManager
+        if not StyledMessageBox.question(
+            self, tr("users.mode.title"), tr("users.mode.enable_single_confirm"),
+            yes_text=tr("users.mode.enable_single"), no_text=tr("dialog.cancel")
+        ):
+            return
+        try:
+            # Same account id and encryption key: self._mgr stays valid.
+            self._user = AuthManager.enable_single_user_mode()
+        except Exception as e:
+            self._set_status(str(e))
+            return
+        self._rebuild_users_panel()
+
+    def _migrate_single_user_to_multi(self):
+        from src.auth_manager import AuthManager
+        username = self._um_username.text().strip()
+        pw = self._um_password.text()
+
+        def _error(msg: str):
+            self._um_error.setText(f"⚠ {msg}")
+            self._um_error.setVisible(True)
+
+        if len(username) < 3:
+            _error(tr("users.username_min"))
+            return
+        if len(pw) < 8:  # NIST SP 800-63B minimum, as for every other account
+            _error(tr("users.password_min"))
+            return
+        if pw != self._um_password2.text():
+            _error(tr("login.passwords_differ"))
+            self._um_password2.clear()
+            self._um_password2.setFocus()
+            return
+        try:
+            self._user = AuthManager.migrate_single_user_to_multi_user(username, pw)
+        except Exception as e:
+            _error(str(e))
+            return
+        StyledMessageBox.information(
+            self, tr("users.mode.title"), tr("users.mode.multi_done", name=username)
+        )
+        self._rebuild_users_panel()
 
     def _uf_add_user(self):
         from src.auth_manager import AuthManager

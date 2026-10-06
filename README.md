@@ -44,7 +44,7 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 - **Public key authentication.**
 - **SSH certificate authentication.**
 - **Live remote system info panel** (OS, CPU, RAM, drives, uptime, load, temperature) for Linux and Windows servers.
-- **Multi-user accounts** with encrypted credential storage (SQLite + cryptography).
+- **Multi-user accounts** with encrypted credential storage (SQLite + cryptography), or a **single-user mode** that signs you in automatically with the app password kept in Windows Credential Manager.
 - **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left).
 - **System tray** with quick mount toggles, minimize to tray.
 - **Auto drive-letter detection** (free letters only) and ghost-drive cleanup.
@@ -128,7 +128,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first launch you will be prompted to create an admin user. All SSH credentials you enter afterwards are encrypted with a key derived from that user's password.
+On first launch you will be prompted to create an admin user. All SSH credentials you enter afterwards are encrypted with a key derived from that user's password. If you are the only user, choose "Initial setup (single-user mode)" instead: the app then gets a random password that is kept in Windows Credential Manager and signs you in automatically. You can switch between the two modes later under User Management.
 
 ## Build as `.exe`
 

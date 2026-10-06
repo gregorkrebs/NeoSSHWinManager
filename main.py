@@ -135,10 +135,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QIcon
 
 from src.ui.theme import STYLESHEET, get_stylesheet
-from src.ui.main_window import MainWindow
 from src.database import init_db
-from src.ui.dialogs.login_dialog import LoginDialog
-from src.auth_manager import Session
 from src.i18n import tr
 from src.channel import display_name
 
@@ -359,9 +356,20 @@ def main():
                 logger.debug(f"Auto-Login deaktiviert für '{windows_user}'")
 
     # ── 4. Login / Registration ──────────────────────────────────
-    login_dlg = LoginDialog()
-    if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
-        sys.exit(0)
+    # AuthManager loads the persisted login attempts on import, so it is
+    # imported only now, after the permission repair and init_db().
+    from src.auth_manager import AuthManager, Session
+    from src.ui.dialogs.login_dialog import LoginDialog
+
+    # Single-user mode keeps the app password in Windows Credential Manager
+    # and therefore needs no interactive login.
+    single_user = AuthManager.authenticate_single_user()
+    if single_user:
+        Session.login(single_user)
+    else:
+        login_dlg = LoginDialog()
+        if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
+            sys.exit(0)
 
     if not Session.is_logged_in():
         sys.exit(0)
@@ -461,6 +469,9 @@ def main():
 
     try:
         # Create and show main window (maximiert mit Titelleiste)
+        # The large UI module is imported only after the login, so the
+        # login dialog appears sooner.
+        from src.ui.main_window import MainWindow
         window = MainWindow()
         window.showMaximized()
 

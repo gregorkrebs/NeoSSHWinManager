@@ -16,7 +16,7 @@ from PyQt6.QtGui import QFont, QIcon
 import os
 
 from src.auth_manager import AuthManager, Session, LoginLockedError
-from src.crypto import is_available
+from src.crypto import is_available, is_keyring_available
 from src.ui.dialog_utils import match_parent_height, make_maximize_button
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
@@ -212,6 +212,23 @@ class LoginDialog(FramelessDialog):
         btn.clicked.connect(self._do_register)
         layout.addWidget(btn)
 
+        # Alternative: no account of one's own, automatic sign-in instead
+        keyring_ok = is_keyring_available()
+        self._single_btn = QPushButton(tr("login.initial_setup"))
+        self._single_btn.setObjectName("secondaryBtn")
+        self._single_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._single_btn.setMinimumHeight(34)
+        self._single_btn.setEnabled(keyring_ok)
+        self._single_btn.clicked.connect(self._initial_single_setup)
+        layout.addWidget(self._single_btn)
+
+        single_hint = QLabel(
+            tr("login.single_hint") if keyring_ok else tr("login.single_unavailable_keyring")
+        )
+        single_hint.setObjectName("hintLabel")
+        single_hint.setWordWrap(True)
+        layout.addWidget(single_hint)
+
         self._reg_user.setFocus()
 
     # ------------------------------------------------------------------
@@ -306,6 +323,18 @@ class LoginDialog(FramelessDialog):
             self.accept()
         except Exception as e:
             self._show_reg_error(str(e))
+
+    def _initial_single_setup(self):
+        if not is_available():
+            StyledMessageBox.critical(self, tr("dialog.error"), tr("login.no_crypto"))
+            return
+        try:
+            user = AuthManager.initialize_single_user_mode()
+        except Exception as e:
+            self._show_reg_error(str(e))
+            return
+        Session.login(user)
+        self.accept()
 
     def _show_login_error(self, msg: str):
         self._login_error.setText(f"⚠ {msg}")

@@ -253,6 +253,14 @@ def init_db() -> None:
 
     with get_connection() as conn:
         conn.executescript("""
+            -- App-weiter Anmeldemodus: single_user=1 → automatische Anmeldung
+            -- mit dem Passwort aus der Windows-Anmeldeinformationsverwaltung
+            CREATE TABLE IF NOT EXISTS application_mode (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                single_user INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO application_mode (id, single_user) VALUES (1, 0);
+
             CREATE TABLE IF NOT EXISTS users (
                 id          TEXT PRIMARY KEY,
                 username    TEXT NOT NULL UNIQUE COLLATE NOCASE,
