@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QDialog, QWidget, QApplication, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+from src.i18n import tr
 
 
 # Message types → icon (own SVGs in assets/icons).
@@ -81,7 +82,7 @@ def make_maximize_button(dialog: QDialog) -> QPushButton:
     btn.setIcon(svg_icon("maximize", "#aab4c4", 16))
     btn.setIconSize(QSize(16, 16))
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn.setToolTip("Auf volle Höhe / zurück (Toggle)")
+    btn.setToolTip(tr("dialog.height.expand"))
     btn.setCheckable(True)
 
     # Merke den ursprünglichen Min-Wert, um beim Toggle-off wiederherzustellen.
@@ -99,13 +100,13 @@ def make_maximize_button(dialog: QDialog) -> QPushButton:
             dialog.setMinimumHeight(h)
             dialog.resize(dialog.width(), h)
             dialog.move(dialog.x(), y)
-            btn.setToolTip("Zurück auf kompakte Höhe")
+            btn.setToolTip(tr("dialog.height.compact"))
         else:
             if original_min_h["v"] is not None:
                 dialog.setMinimumHeight(original_min_h["v"])
                 original_min_h["v"] = None
             dialog.resize(dialog.width(), dialog.sizeHint().height())
-            btn.setToolTip("Auf volle Höhe ziehen")
+            btn.setToolTip(tr("dialog.height.expand"))
 
     btn.toggled.connect(_toggle)
     return btn

@@ -17,6 +17,9 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   - On an installation with one account, switch it on under User Management → "Application login mode". Your account is renamed to "default"; your connections and settings stay as they are.
   - To sign in with a password again, choose a username and password in the same place. In single-user mode, your profile shows how to do that instead of the password change form, because there is no password to change.
 - **The login window appears a little sooner.** The main window is now loaded after you have signed in.
+- **The whole interface follows your language.** Some texts stayed in German (or English) whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
+- **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
+- Button texts with "&", such as "Create account & start", no longer lose the "&".
 
 Single-user mode comes from the community fork [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user) by notstevy. Thank you!
 
@@ -47,6 +50,18 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - `Session` is now imported in `main()` before its first use. Before, the import inside the `USERNAME` block made `Session` a local name of `main()`, so starting without a `USERNAME` environment variable raised `UnboundLocalError`.
 - Not adopted, because nothing used them: `AuthManager.set_single_user_mode()` and the strings `login.enable_single`, `login.single_title`, `login.single_username` and `login.single_password`.
 - New tests in `tests/test_single_user_mode.py` cover the first setup, the automatic login, both switches with an existing connection, the rollback when Credential Manager cannot store the password, input checks and the import order in `main.py`.
+
+#### Fixed: texts that bypassed the translations
+
+- Texts written into the code instead of going through `tr()` now have translation keys in all six languages: the tooltips of the window buttons (`custom_titlebar.py`, `frameless_dialog.py`) and of the dialog height button (`dialog_utils.py`); "Cancel"/"OK" in `StyledInputDialog` and "OK" in `StyledMessageBox`; the confirm buttons for deleting a user and resetting a password; the "Copy error message" tooltip; the "Error:" prefix in the status bar; "Copy details" in the crash dialog; the "Exit {code}" badge in the CLI history; the debug window titles.
+- `StyledMessageBox.question()` defaulted to the German "Ja"/"Nein". The defaults are now `tr("dialog.yes")`/`tr("dialog.no")`, resolved when the dialog opens, because the language is only known at runtime. This affected the confirmation for deleting a template.
+- `StyledMessageBox` chose the red confirm button by looking for "löschen", "delete", "entfernen" or "remove" in the message, so it worked only in German and English. A `destructive` parameter replaces the word list; the six confirmations that were red in English pass `destructive=True`. Deleting local files, which go to the Recycle Bin, stays blue as before.
+- The CPU line in the system info used a hard-coded "cores"; it now uses the existing `sysinfo.cores` key.
+- The warning shown when the GUI exe is started with `--connect-cli` uses the language chosen in the installer (`install_prefs.json`), since no user is signed in at that point.
+- `QPushButton` reads "&" as a shortcut marker. The texts of `login.create_account`, `logout.quit_unmount` and `update.btn.install_now` are escaped to "&&", as the file browser already did for `fb.settings.confirm_move`.
+- Errors from switching the login mode are raised as `SingleUserModeError` with a translation key instead of English messages. Unexpected errors show a translated sentence with the technical detail in brackets.
+- Adding a user whose name already exists showed SQLite's "UNIQUE constraint failed" text; it now says that the name is taken.
+- `tests/test_ui_translations.py` checks that all languages have the same keys, that every `tr()` key exists, that no live module passes a fixed text to a widget, and that the dialogs, title bar and message boxes show translated texts in English, Spanish and Russian. Three modules that nothing imports any more (`settings_dialog.py`, `add_edit_dialog.py`, `loading_overlay.py`) and the unused `UserManagementDialog` are left out of the text check; a test fails if one of them is used again.
 
 </details>
 

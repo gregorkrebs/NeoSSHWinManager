@@ -1025,7 +1025,7 @@ class SystemInfoPanel(QFrame):
         except Exception:
             cpu_pct = 0.0
         cores = info.get("cpu_cores", "?")
-        self._cpu_row._value_lbl.setText(f"{cpu_pct:.0f}%  ({cores} cores)")
+        self._cpu_row._value_lbl.setText(f"{cpu_pct:.0f}%  ({tr('sysinfo.cores', cores=cores)})")
         self._cpu_bar.setValue(int(cpu_pct))
         self._set_bar_color(self._cpu_bar, cpu_pct)
 

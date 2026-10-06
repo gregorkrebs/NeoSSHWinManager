@@ -237,7 +237,7 @@ class CliHistoryPanel(QFrame):
 
         if entry.kind == "exec" and entry.exit_code is not None:
             ok = entry.exit_code == 0
-            exit_badge = QLabel(f"Exit {entry.exit_code}")
+            exit_badge = QLabel(tr("clihistory.exit_code", code=entry.exit_code))
             exit_badge.setStyleSheet(
                 f"background-color: {'rgba(0, 212, 100, 0.15)' if ok else 'rgba(239, 68, 68, 0.15)'}; "
                 f"color: {'#00d464' if ok else '#ef4444'}; font-size: 10px; font-weight: 700; "
@@ -299,6 +299,7 @@ class CliHistoryPanel(QFrame):
         if StyledMessageBox.question(
             self, tr("clihistory.clear.title"), tr("clihistory.clear.body"),
             yes_text=tr("clihistory.clear.confirm"), no_text=tr("dialog.cancel"),
+            destructive=True,
         ):
             self._mgr.clear_cli_history(self._conn.id)
             self._load()

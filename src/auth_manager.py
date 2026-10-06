@@ -147,6 +147,22 @@ class LoginLockedError(Exception):
         )
 
 
+class SingleUserModeError(RuntimeError):
+    """A login mode switch was refused. *key* is the translation key of the
+    message the UI shows."""
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(key)
+
+    @staticmethod
+    def text_for(exc: Exception) -> str:
+        """User-facing, translated message for an error from a mode switch."""
+        from src.i18n import tr
+        if isinstance(exc, SingleUserModeError):
+            return tr(exc.key)
+        return f"{tr('login.mode_failed')} ({exc})"
+
+
 # ------------------------------------------------------------------
 # Datenmodelle
 # ------------------------------------------------------------------
@@ -280,15 +296,17 @@ class AuthManager:
     @classmethod
     def initialize_single_user_mode(cls) -> AppUser:
         """First start: create the hidden ``default`` administrator."""
-        if not cls.can_enable_single_user_mode() or cls.has_any_users():
-            raise RuntimeError("Single-user mode is unavailable.")
+        if not is_keyring_available():
+            raise SingleUserModeError("login.single_unavailable_keyring")
+        if cls.has_any_users():
+            raise SingleUserModeError("login.single_unavailable_users")
         import secrets
         password = secrets.token_urlsafe(32)
         user = cls.register(cls._SINGLE_USERNAME, password, is_admin=True)
         if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
             with get_connection() as conn:
                 conn.execute("DELETE FROM users WHERE id=?", (user.id,))
-            raise RuntimeError("Windows Credential Manager is unavailable.")
+            raise SingleUserModeError("login.single_store_failed")
         cls._set_single_user_mode(True)
         return user
 
@@ -296,15 +314,16 @@ class AuthManager:
     def enable_single_user_mode(cls) -> AppUser:
         """Switch the signed-in only account to automatic ``default`` login."""
         if not is_keyring_available():
-            raise RuntimeError("Windows Credential Manager is unavailable.")
+            raise SingleUserModeError("login.single_unavailable_keyring")
         current = Session.current()
         if not current or not current.is_admin or not current.enc_key:
-            raise RuntimeError("An authenticated administrator session is required.")
+            # Not reachable from the UI: only administrators see the switch.
+            raise SingleUserModeError("login.mode_failed")
         with get_connection() as conn:
             count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
             row = conn.execute("SELECT id FROM users WHERE id=?", (current.id,)).fetchone()
         if count != 1 or not row:
-            raise RuntimeError("Single-user mode requires exactly one existing user.")
+            raise SingleUserModeError("login.single_unavailable_users")
 
         import secrets
         password = secrets.token_urlsafe(32)
@@ -313,7 +332,7 @@ class AuthManager:
             current.enc_key, password, salt, kdf="argon2"
         )
         if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
-            raise RuntimeError("Windows Credential Manager is unavailable.")
+            raise SingleUserModeError("login.single_store_failed")
         try:
             with get_connection() as conn:
                 conn.execute(
@@ -334,23 +353,23 @@ class AuthManager:
     def migrate_single_user_to_multi_user(cls, username: str, password: str) -> AppUser:
         """Give the ``default`` account a name and password; login is required again."""
         if not cls.single_user_mode_enabled():
-            raise RuntimeError("Single-user mode is not enabled.")
+            raise SingleUserModeError("login.mode_failed")
         if not is_keyring_available():
-            raise RuntimeError("Windows Credential Manager is unavailable.")
+            raise SingleUserModeError("login.single_unavailable_keyring")
         username = username.strip()
         if len(username) < 3 or len(password) < 8:
             raise ValueError("Username must have at least 3 characters and password at least 8 characters.")
 
         old_password = retrieve_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
         if not old_password:
-            raise RuntimeError("The single-user credential is unavailable.")
+            raise SingleUserModeError("users.mode.credential_missing")
         with get_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
                 (cls._SINGLE_USERNAME,),
             ).fetchone()
         if not row:
-            raise RuntimeError("The default account was not found.")
+            raise SingleUserModeError("login.mode_failed")
 
         key = decrypt_key(
             row["enc_key_enc"], row["enc_key_iv"], old_password,

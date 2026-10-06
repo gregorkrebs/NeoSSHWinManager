@@ -38,6 +38,7 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QCursor, QPixmap
 
 from src.ui.titlebar_theme import get_palette, TitlebarPalette
+from src.i18n import tr
 
 
 # ── compact dialog titlebar ──────────────────────────────────────────────────
@@ -92,7 +93,7 @@ class _DialogTitleBar(QWidget):
             icon_name = "restore" if maximized else "maximize"
             self._max_btn.setIcon(svg_icon(icon_name, self._palette.icon, 13))
             self._max_btn.setIconSize(QSize(13, 13))
-            self._max_btn.setToolTip("Wiederherstellen" if maximized else "Maximieren")
+            self._max_btn.setToolTip(tr("window.restore") if maximized else tr("window.maximize"))
 
     # ── private ──────────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ class _DialogTitleBar(QWidget):
             self._max_btn.setFixedSize(40, self.HEIGHT)
             self._max_btn.setCursor(Qt.CursorShape.ArrowCursor)
             self._max_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self._max_btn.setToolTip("Maximieren")
+            self._max_btn.setToolTip(tr("window.maximize"))
             self._max_btn.clicked.connect(self.maximize_requested)
             layout.addWidget(self._max_btn)
 

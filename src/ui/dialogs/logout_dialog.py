@@ -93,7 +93,7 @@ class LogoutConfirmDialog(FramelessDialog):
         btn_layout.addWidget(quit_only_btn)
 
         # Option 3: Quit and unmount all
-        logout_btn = QPushButton(tr("logout.quit_unmount"))
+        logout_btn = QPushButton(tr("logout.quit_unmount").replace("&", "&&"))
         logout_btn.setObjectName("dangerBtn")
         logout_btn.setMinimumHeight(36)
         logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)

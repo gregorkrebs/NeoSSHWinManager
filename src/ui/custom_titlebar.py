@@ -15,6 +15,7 @@ from PyQt6.QtGui import QPixmap, QCursor
 
 from src.ui.titlebar_theme import TitlebarPalette, get_palette
 from src.ui.icons import icon as svg_icon
+from src.i18n import tr
 
 
 # ── control button ──────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@ class CustomTitleBar(QWidget):
         icon_name = "restore" if maximized else "maximize"
         self._max_btn.set_icon_name(icon_name, self._palette)
         self._max_btn.setToolTip(
-            "Wiederherstellen" if maximized else "Maximieren"
+            tr("window.restore") if maximized else tr("window.maximize")
         )
 
     def button_rects_global(self) -> list[QRect]:
@@ -264,15 +265,15 @@ class CustomTitleBar(QWidget):
 
         p = self._palette
         self._min_btn = _TitlebarButton("minus", p, parent=self)
-        self._min_btn.setToolTip("Minimieren")
+        self._min_btn.setToolTip(tr("window.minimize"))
         self._min_btn.clicked.connect(self.minimize_requested)
 
         self._max_btn = _TitlebarButton("maximize", p, parent=self)
-        self._max_btn.setToolTip("Maximieren")
+        self._max_btn.setToolTip(tr("window.maximize"))
         self._max_btn.clicked.connect(self.maximize_requested)
 
         self._close_btn = _TitlebarButton("x", p, is_close=True, parent=self)
-        self._close_btn.setToolTip("Schließen")
+        self._close_btn.setToolTip(tr("dialog.close"))
         self._close_btn.clicked.connect(self.close_requested)
 
         layout.addWidget(self._min_btn)

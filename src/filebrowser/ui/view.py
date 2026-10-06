@@ -1272,8 +1272,10 @@ class FileBrowserView(QWidget):
                 names += "\n" + tr("fb.delete.more", count=len(entries) - 8)
             text = tr("fb.delete.local_text" if pane.local else "fb.delete.remote_text",
                       count=len(entries)) + "\n\n" + names
+            # Server deletions are final; local ones go to the Recycle Bin.
             if not StyledMessageBox.question(self, tr("fb.delete.title"), text,
-                                             yes_text=tr("fb.delete.yes"), no_text=tr("dialog.cancel")):
+                                             yes_text=tr("fb.delete.yes"), no_text=tr("dialog.cancel"),
+                                             destructive=not pane.local):
                 return
         fs = pane.fs
         paths = [e.path for e in entries]
