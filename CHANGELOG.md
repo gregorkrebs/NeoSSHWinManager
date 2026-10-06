@@ -8,6 +8,50 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [Unreleased]
+
+### What changes for you
+
+- **Single-user mode: no password at startup.** If you are the only one using NEO SSH-Win Manager on your Windows account, the app can now sign you in automatically. Its password is then a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
+  - On a new installation, choose "Initial setup (single-user mode)" instead of creating an account.
+  - On an installation with one account, switch it on under User Management → "Application login mode". Your account is renamed to "default"; your connections and settings stay as they are.
+  - To sign in with a password again, choose a username and password in the same place. In single-user mode, your profile shows how to do that instead of the password change form, because there is no password to change.
+- **The login window appears a little sooner.** The main window is now loaded after you have signed in.
+
+Single-user mode comes from the community fork [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user) by notstevy. Thank you!
+
+<details>
+<summary>Technical details</summary>
+
+#### Adopted from the fork
+
+Taken from [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user), which is based on 1.6.1, in its final state (branch `newmain2`):
+
+- [`04241d7`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/04241d7a1c4809d6b14385304ee145bc2e69b5f1) / [`26256dc`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/26256dc6f1ae11ea674a1bc10ae37f87e4fc8322) "Single-user, automatic login": a new `application_mode` table (one row with a `single_user` flag) in `init_db()`; `AuthManager.authenticate_single_user()`, `initialize_single_user_mode()`, `enable_single_user_mode()` and `migrate_single_user_to_multi_user()`; `main.py` tries the automatic login before it shows `LoginDialog`; a first-run button in the login dialog and a login mode card in the users panel. Switching modes re-wraps the existing encryption key with the new password (a random `secrets.token_urlsafe(32)` in single-user mode), so the account id and all encrypted data stay untouched.
+- [`b77e06f`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/b77e06f042c958d8ba782d4a610b45cc45948bd1) "Fix security issues with the single-user/multi-user mode switching": single-user mode can no longer be switched on from the login dialog with a freely chosen username and password. It is switched on only from a signed-in administrator session, and only when exactly one account exists. The users panel then shows neither the user list nor the form for new users.
+- [`4970ab3`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/4970ab39864c9a3ad77cb85d38403834a99287be) "Improve translation": wording of `login.single_unavailable_users`.
+- [`e105613`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/e1056134dc467ce7a28a2147c609b18fa3f14667) "Improve startup performance": `src.auth_manager`, `LoginDialog` and `MainWindow` are imported inside `main()`. Importing `src.auth_manager` reads the stored login attempts from the database; this now happens after the permission repair and `init_db()` instead of before them. Measured from source, the login dialog appears about 50 ms sooner; the time until the main window is shown is unchanged.
+- `crypto.is_keyring_available()` asks the keyring backend instead of only checking that the `keyring` package can be imported.
+
+The identifiers are the same as in the fork (table `application_mode`, Credential Manager entry `NeoSSHWinManager` / `single_user_password`, account `default`). An installation that ran the fork keeps signing in automatically after the update; this was checked against a copy of such a database.
+
+#### Changed while adopting
+
+- Translations for all six languages; the fork had English only.
+- Switching back to multi-user login asks for the new password twice, in fields on the users panel. The fork used two plain input boxes without confirmation, so a typo would have locked the account at the next start.
+- Switching to single-user mode asks for confirmation first.
+- In single-user mode, the profile shows a hint instead of the password change form, which needs the current password and so could not work.
+- The main window keeps its `UserConnectionManager` when the mode changes, because the account id and key stay the same. Components that hold it, such as the file browser, are not left with a second instance.
+- After a mode change the users panel is rebuilt in place; `_open_users_panel()` alone would close it, since it toggles an open panel.
+- In single-user mode, a missing Credential Manager entry or an unavailable keyring is logged before the login dialog is shown.
+- `Session` is now imported in `main()` before its first use. Before, the import inside the `USERNAME` block made `Session` a local name of `main()`, so starting without a `USERNAME` environment variable raised `UnboundLocalError`.
+- Not adopted, because nothing used them: `AuthManager.set_single_user_mode()` and the strings `login.enable_single`, `login.single_title`, `login.single_username` and `login.single_password`.
+- New tests in `tests/test_single_user_mode.py` cover the first setup, the automatic login, both switches with an existing connection, the rollback when Credential Manager cannot store the password, input checks and the import order in `main.py`.
+
+</details>
+
+---
+
 ## [1.6.1] — 2026-09-28
 
 ### What changes for you

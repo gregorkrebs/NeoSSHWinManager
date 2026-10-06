@@ -19,7 +19,9 @@ from typing import Dict, List, Optional
 from src.database import get_connection
 from src.crypto import (
     hash_password, verify_password, generate_enc_key,
-    encrypt_key, decrypt_key, encrypt, decrypt, is_available
+    encrypt_key, decrypt_key, encrypt, decrypt, is_available,
+    is_keyring_available, store_key_in_credential_manager,
+    retrieve_key_from_credential_manager, delete_key_from_credential_manager
 )
 from src.config import Connection, AppSettings, CliHistoryEntry
 from src.app_logger import logger
@@ -212,6 +214,166 @@ class Session:
 # ------------------------------------------------------------------
 
 class AuthManager:
+
+    # ------------------------------------------------------------------
+    # Single-user mode
+    #
+    # The only account gets a random password that lives in Windows
+    # Credential Manager, so the app signs in without a login dialog.
+    # The account id and its encryption key stay the same when switching
+    # between the modes; only the key wrapping changes.
+    # ------------------------------------------------------------------
+
+    _SINGLE_CREDENTIAL = "single_user_password"
+    _SINGLE_USERNAME = "default"
+
+    @staticmethod
+    def single_user_mode_enabled() -> bool:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT single_user FROM application_mode WHERE id=1"
+            ).fetchone()
+        return bool(row and row["single_user"])
+
+    @staticmethod
+    def can_enable_single_user_mode() -> bool:
+        if not is_keyring_available():
+            return False
+        with get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] <= 1
+
+    @staticmethod
+    def _set_single_user_mode(enabled: bool) -> None:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE application_mode SET single_user=? WHERE id=1",
+                (int(enabled),),
+            )
+
+    @classmethod
+    def authenticate_single_user(cls) -> Optional[AppUser]:
+        """Sign in the account whose password is stored in Credential Manager.
+
+        Returns None when single-user mode is off or the stored password is
+        unavailable; the caller then shows the normal login dialog.
+        """
+        if not cls.single_user_mode_enabled():
+            return None
+        if not is_keyring_available():
+            logger.warning("Single-User-Modus aktiv, aber die Windows-Anmeldeinformationsverwaltung ist nicht verfügbar.")
+            return None
+        password = retrieve_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+        if not password:
+            logger.warning("Single-User-Modus aktiv, aber das gespeicherte App-Passwort fehlt.")
+            return None
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT username FROM users ORDER BY created_at LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return cls.authenticate(row["username"], password)
+        except LoginLockedError:
+            return None
+
+    @classmethod
+    def initialize_single_user_mode(cls) -> AppUser:
+        """First start: create the hidden ``default`` administrator."""
+        if not cls.can_enable_single_user_mode() or cls.has_any_users():
+            raise RuntimeError("Single-user mode is unavailable.")
+        import secrets
+        password = secrets.token_urlsafe(32)
+        user = cls.register(cls._SINGLE_USERNAME, password, is_admin=True)
+        if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
+            with get_connection() as conn:
+                conn.execute("DELETE FROM users WHERE id=?", (user.id,))
+            raise RuntimeError("Windows Credential Manager is unavailable.")
+        cls._set_single_user_mode(True)
+        return user
+
+    @classmethod
+    def enable_single_user_mode(cls) -> AppUser:
+        """Switch the signed-in only account to automatic ``default`` login."""
+        if not is_keyring_available():
+            raise RuntimeError("Windows Credential Manager is unavailable.")
+        current = Session.current()
+        if not current or not current.is_admin or not current.enc_key:
+            raise RuntimeError("An authenticated administrator session is required.")
+        with get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+            row = conn.execute("SELECT id FROM users WHERE id=?", (current.id,)).fetchone()
+        if count != 1 or not row:
+            raise RuntimeError("Single-user mode requires exactly one existing user.")
+
+        import secrets
+        password = secrets.token_urlsafe(32)
+        pw_hash, salt = hash_password(password)
+        enc_key_enc, enc_key_iv = encrypt_key(
+            current.enc_key, password, salt, kdf="argon2"
+        )
+        if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
+            raise RuntimeError("Windows Credential Manager is unavailable.")
+        try:
+            with get_connection() as conn:
+                conn.execute(
+                    """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                       enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
+                       is_admin=1 WHERE id=?""",
+                    (cls._SINGLE_USERNAME, pw_hash, salt, enc_key_enc, enc_key_iv, current.id),
+                )
+                conn.execute("UPDATE application_mode SET single_user=1 WHERE id=1")
+        except Exception:
+            delete_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+            raise
+        user = AppUser(current.id, cls._SINGLE_USERNAME, True, current.enc_key)
+        Session.login(user)
+        return user
+
+    @classmethod
+    def migrate_single_user_to_multi_user(cls, username: str, password: str) -> AppUser:
+        """Give the ``default`` account a name and password; login is required again."""
+        if not cls.single_user_mode_enabled():
+            raise RuntimeError("Single-user mode is not enabled.")
+        if not is_keyring_available():
+            raise RuntimeError("Windows Credential Manager is unavailable.")
+        username = username.strip()
+        if len(username) < 3 or len(password) < 8:
+            raise ValueError("Username must have at least 3 characters and password at least 8 characters.")
+
+        old_password = retrieve_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+        if not old_password:
+            raise RuntimeError("The single-user credential is unavailable.")
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+                (cls._SINGLE_USERNAME,),
+            ).fetchone()
+        if not row:
+            raise RuntimeError("The default account was not found.")
+
+        key = decrypt_key(
+            row["enc_key_enc"], row["enc_key_iv"], old_password,
+            row["pw_salt"], kdf=row["enc_key_kdf"],
+        )
+        pw_hash, salt = hash_password(password)
+        enc_key_enc, enc_key_iv = encrypt_key(key, password, salt, kdf="argon2")
+        with get_connection() as conn:
+            conn.execute(
+                """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                   enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
+                   is_admin=1 WHERE id=?""",
+                (username, pw_hash, salt, enc_key_enc, enc_key_iv, row["id"]),
+            )
+            conn.execute("UPDATE application_mode SET single_user=0 WHERE id=1")
+
+        # The stored password is no longer needed for automatic login.
+        if not delete_key_from_credential_manager(cls._SINGLE_CREDENTIAL):
+            logger.warning("Single-User-Passwort konnte nicht aus der Anmeldeinformationsverwaltung entfernt werden.")
+
+        user = AppUser(row["id"], username, True, key)
+        Session.login(user)
+        return user
 
     @staticmethod
     def has_any_users() -> bool:
