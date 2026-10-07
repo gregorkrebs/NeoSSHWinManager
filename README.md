@@ -44,8 +44,8 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 - **Public key authentication.**
 - **SSH certificate authentication.**
 - **Live remote system info panel** (OS, CPU, RAM, drives, uptime, load, temperature) for Linux and Windows servers.
-- **Multi-user accounts** with encrypted credential storage (SQLite + cryptography), or a **single-user mode** that signs you in automatically with the app password kept in Windows Credential Manager.
-- **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left).
+- **No setup at the first start:** the app starts in single-user mode and signs you in automatically; its password is kept in Windows Credential Manager. When several people share the computer, create **accounts with passwords** instead. Credentials are stored encrypted (SQLite + cryptography).
+- **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left), selectable right on the login screen. The login screen also takes the theme and accent colour of the user who signed in last.
 - **System tray** with quick mount toggles, minimize to tray.
 - **Auto drive-letter detection** (free letters only) and ghost-drive cleanup.
 - "Start with Windows" and "Auto-reconnect on connection loss" options.
@@ -86,8 +86,8 @@ Manage multiple SSH connections, mount them with one click, switch languages per
   </tr>
   <tr>
     <td align="center">
-      <img src="assets/screenshots/login.png" alt="Per-user login" width="380"/><br/>
-      <sub><b>Per-user login</b></sub>
+      <img src="assets/screenshots/login.png" alt="Login screen with language picker" width="380"/><br/>
+      <sub><b>Login with language picker</b></sub>
     </td>
     <td align="center">
       <img src="assets/screenshots/user_management.png" alt="User management" width="380"/><br/>
@@ -128,7 +128,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first launch you will be prompted to create an admin user. All SSH credentials you enter afterwards are encrypted with a key derived from that user's password. If you are the only user, choose "Initial setup (single-user mode)" instead: the app then gets a random password that is kept in Windows Credential Manager and signs you in automatically. You can switch between the two modes later under User Management.
+On first launch the app starts in single-user mode: it creates an account with a random password, keeps that password in Windows Credential Manager and signs you in automatically. All SSH credentials you enter are encrypted with a key that this password protects. To sign in with a password of your own, create an account under User Management; your connections and settings are kept. If Windows Credential Manager is not available, the app asks you to create an admin account instead.
 
 ## Build as `.exe`
 

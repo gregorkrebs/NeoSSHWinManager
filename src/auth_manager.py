@@ -311,6 +311,27 @@ class AuthManager:
         return user
 
     @classmethod
+    def sign_in_automatically(cls) -> Optional[AppUser]:
+        """The account the app starts with without a login dialog, if any.
+
+        Single-user mode signs in its account. On the very first start there
+        is no account yet: single-user mode is set up, so nobody has to
+        create an account before using the app; one with a password can be
+        created later in the user management. Returns None when the login
+        dialog is needed: password login is on, or Windows Credential
+        Manager is unavailable on the first start.
+        """
+        user = cls.authenticate_single_user()
+        if user is not None or cls.has_any_users():
+            return user
+        try:
+            return cls.initialize_single_user_mode()
+        except Exception as e:
+            reason = e.key if isinstance(e, SingleUserModeError) else e
+            logger.warning(f"Single-User-Modus beim ersten Start nicht eingerichtet ({reason}); Registrierung wird angezeigt.")
+            return None
+
+    @classmethod
     def enable_single_user_mode(cls) -> AppUser:
         """Switch the signed-in only account to automatic ``default`` login."""
         if not is_keyring_available():
@@ -393,6 +414,56 @@ class AuthManager:
         user = AppUser(row["id"], username, True, key)
         Session.login(user)
         return user
+
+    # ------------------------------------------------------------------
+    # Login screen
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def record_login(user_id: str) -> None:
+        """Remember who signed in last; the login screen takes its look from them."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", (user_id,)
+            )
+
+    @staticmethod
+    def set_user_language(user_id: str, language: str) -> None:
+        """Store the language picked on the login screen for this user."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE app_settings SET language = ? WHERE user_id = ?", (language, user_id)
+            )
+
+    @staticmethod
+    def login_screen_appearance() -> dict:
+        """Theme, accent colour and language for the login screen.
+
+        They are those of the user who signed in last (accounts from before
+        last_login_at existed count as never signed in; then the oldest
+        account wins). Before the first account exists, the installer's
+        choices apply. None of these settings is encrypted.
+        """
+        with get_connection() as conn:
+            row = conn.execute(
+                """SELECT s.theme, s.accent_color, s.language
+                   FROM users u JOIN app_settings s ON s.user_id = u.id
+                   ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
+                   LIMIT 1"""
+            ).fetchone()
+        if row:
+            return {
+                "theme": row["theme"] or "dark",
+                "accent": row["accent_color"] or "",
+                "language": row["language"] or "en",
+            }
+        from src.config import read_install_prefs
+        prefs = read_install_prefs()
+        return {
+            "theme": prefs.get("theme", "dark"),
+            "accent": "",
+            "language": prefs.get("language", "en"),
+        }
 
     @staticmethod
     def has_any_users() -> bool:

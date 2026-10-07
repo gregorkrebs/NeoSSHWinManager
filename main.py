@@ -366,17 +366,30 @@ def main():
     from src.ui.dialogs.login_dialog import LoginDialog
 
     # Single-user mode keeps the app password in Windows Credential Manager
-    # and therefore needs no interactive login.
-    single_user = AuthManager.authenticate_single_user()
+    # and therefore needs no interactive login. It is also how the app starts
+    # the very first time, so nobody has to create an account up front.
+    single_user = AuthManager.sign_in_automatically()
     if single_user:
         Session.login(single_user)
     else:
-        login_dlg = LoginDialog()
+        # The login screen looks like the app did for whoever signed in last:
+        # same theme, accent colour and language.
+        look = AuthManager.login_screen_appearance()
+        from src.i18n import set_language, is_rtl
+        from src.ui.theme import set_current_accent
+        set_language(look["language"])
+        app.setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
+        )
+        set_current_accent(look["accent"])
+        app.setStyleSheet(get_stylesheet(look["theme"]))
+        login_dlg = LoginDialog(theme=look["theme"])
         if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
             sys.exit(0)
 
     if not Session.is_logged_in():
         sys.exit(0)
+    AuthManager.record_login(Session.current().id)
 
     # Apply user's preferred language
     user_settings = None

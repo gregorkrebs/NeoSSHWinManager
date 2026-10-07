@@ -184,3 +184,39 @@ def _register(username, password):
     from src.auth_manager import AuthManager
     AuthManager.register(username, password)
     return username, password
+
+
+# ── first start ──────────────────────────────────────────────────────────────
+
+def test_first_start_lands_in_single_user_mode(env):
+    from src.auth_manager import AuthManager
+    user = AuthManager.sign_in_automatically()
+    assert user is not None and user.username == "default" and user.is_admin
+    assert AuthManager.single_user_mode_enabled()
+    # The next start signs the same account in again.
+    again = AuthManager.sign_in_automatically()
+    assert (again.id, again.enc_key) == (user.id, user.enc_key)
+
+
+def test_first_start_without_credential_manager_asks_for_an_account(env, monkeypatch):
+    import src.auth_manager as am
+    monkeypatch.setattr(am, "is_keyring_available", lambda: False)
+    assert am.AuthManager.sign_in_automatically() is None
+    assert not am.AuthManager.has_any_users()
+
+
+def test_first_start_when_storing_fails_asks_for_an_account(env, monkeypatch):
+    import src.auth_manager as am
+    monkeypatch.setattr(am, "store_key_in_credential_manager", lambda value, name: False)
+    assert am.AuthManager.sign_in_automatically() is None
+    assert not am.AuthManager.has_any_users()
+
+
+def test_password_login_stays_password_login(env):
+    from src.auth_manager import AuthManager
+    AuthManager.register("alice", "password123")
+    assert AuthManager.sign_in_automatically() is None
+    assert not AuthManager.single_user_mode_enabled()
+    from src.database import get_connection
+    with get_connection() as conn:
+        assert [r[0] for r in conn.execute("SELECT username FROM users")] == ["alice"]

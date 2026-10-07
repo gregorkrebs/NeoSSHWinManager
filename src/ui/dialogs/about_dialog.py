@@ -14,9 +14,9 @@ from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
-    QColor, QDesktopServices, QLinearGradient, QPainter, QPainterPath, QPen,
+    QColor, QDesktopServices, QLinearGradient, QPainter, QPainterPath,
     QPixmap,
 )
 
@@ -24,6 +24,7 @@ from src.channel import display_name, display_version
 from src.ui.dialog_utils import dialog_icon, tint_dialog_icon
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
+from src.ui.node_network import paint_node_network
 from src.ui.theme import accent_text_color, accent_tone, current_accent, is_light
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import current_language, tr
@@ -122,11 +123,6 @@ class _Banner(QFrame):
     """Accent gradient with a faint network of linked nodes on the right –
     a nod to the remote hosts the app connects to."""
 
-    # Node positions as fractions of the banner size, and the links between them.
-    _NODES = ((0.73, 0.11), (0.85, 0.19), (0.97, 0.07), (0.985, 0.52),
-              (0.93, 0.85), (0.81, 0.93), (0.69, 0.86))
-    _LINKS = ((0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (1, 3))
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("aboutBanner")
@@ -206,32 +202,10 @@ class _Banner(QFrame):
         grad.setColorAt(1.0, accent.lighter(118))
         p.fillPath(clip, grad)
 
-        on = QColor(accent_text_color(current_accent()))
-        w, h = rect.width(), rect.height()
-
-        # Two large soft circles for depth.
-        glow = QColor(on)
-        glow.setAlpha(14)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(glow)
         # The text sits on the leading side, so the network goes to the other.
         rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
-        pts = [QPointF((1 - x if rtl else x) * w, y * h) for x, y in self._NODES]
-        p.drawEllipse(QPointF((0.08 if rtl else 0.92) * w, h * 0.05), h * 0.95, h * 0.95)
-        p.drawEllipse(QPointF((0.38 if rtl else 0.62) * w, h * 1.10), h * 0.55, h * 0.55)
-
-        line = QColor(on)
-        line.setAlpha(46)
-        p.setPen(QPen(line, 1.3))
-        for a, b in self._LINKS:
-            p.drawLine(pts[a], pts[b])
-        p.setPen(Qt.PenStyle.NoPen)
-        for i, pt in enumerate(pts):
-            dot = QColor(on)
-            dot.setAlpha(110 if i in (1, 4) else 70)
-            p.setBrush(dot)
-            radius = 4.5 if i in (1, 4) else 3.0
-            p.drawEllipse(pt, radius, radius)
+        paint_node_network(p, QRectF(0, 0, rect.width(), rect.height()),
+                           QColor(accent_text_color(current_accent())), mirrored=rtl)
         p.end()
 
 

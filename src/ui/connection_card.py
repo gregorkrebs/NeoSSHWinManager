@@ -126,9 +126,10 @@ class ConnectionCard(QFrame):
         self._ssh_btn.setToolTip(tr("card.tooltip.ssh"))
         self._ssh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ssh_btn.clicked.connect(lambda: self.ssh_requested.emit(self._conn.id))
-        # No SSH terminal for FTP/FTPS hosts
-        self._ssh_btn.setVisible(not self._is_ftp)
         layout.addWidget(self._ssh_btn)
+        # No SSH terminal for FTP/FTPS hosts. Only after addWidget(): shown
+        # without a parent, the button would flash up as a window of its own.
+        self._ssh_btn.setVisible(not self._is_ftp)
 
         self._mount_btn = QPushButton()
         self._mount_btn.setObjectName("mountBtn")
