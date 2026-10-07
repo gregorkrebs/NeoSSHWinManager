@@ -1303,6 +1303,30 @@ QPushButton#headerActionBtn:hover {
     border: 1px solid #31465d;
 }
 
+/* ---- Connection filter ---------------------------------------- */
+QLineEdit#connectionsFilterInput {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 17px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 6px;
+    color: #deebf7;
+    font-size: 13px;
+}
+QLineEdit#connectionsFilterInput:focus {
+    background-color: #111822;
+    border: 1px solid #0077b6;
+}
+#connectionsFilterCount {
+    color: #8fa4b8;
+    font-size: 12px;
+}
+QPushButton#headerActionBtn[active="true"] {
+    background-color: #0f2430;
+    border: 1px solid #0077b6;
+}
+
 /* ---- Groups Filter Dropdown ---------------------------- */
 QComboBox#headerGroupsCombo {
     background-color: #111822;
@@ -2987,6 +3011,30 @@ QPushButton#headerActionBtn {
 QPushButton#headerActionBtn:hover {
     background-color: #edf5fb;
     border: 1px solid #aec6dd;
+}
+
+/* ---- Connection filter (Light) -------------------------------- */
+QLineEdit#connectionsFilterInput {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 17px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 6px;
+    color: #1a2332;
+    font-size: 13px;
+}
+QLineEdit#connectionsFilterInput:focus {
+    background-color: #ffffff;
+    border: 1px solid #0077b6;
+}
+#connectionsFilterCount {
+    color: #5a6a7a;
+    font-size: 12px;
+}
+QPushButton#headerActionBtn[active="true"] {
+    background-color: #e0eef8;
+    border: 1px solid #0077b6;
 }
 
 /* ---- Groups Filter Dropdown (Light) -------------------- */

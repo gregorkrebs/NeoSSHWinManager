@@ -474,6 +474,12 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_enc TEXT DEFAULT ''")
             if "sftp_browser_iv" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_iv TEXT DEFAULT ''")
+            # Text filter of the connection list, encrypted like the
+            # connections it names.
+            if "connection_filter_enc" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_enc TEXT DEFAULT ''")
+            if "connection_filter_iv" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_iv TEXT DEFAULT ''")
         except Exception:
             pass
 

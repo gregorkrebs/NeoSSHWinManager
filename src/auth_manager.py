@@ -1359,6 +1359,31 @@ class UserConnectionManager:
             return {}
         return data if isinstance(data, dict) else {}
 
+    # The connection list's text filter stays until the user changes it,
+    # across restarts too. It may name hosts, so it is encrypted like them,
+    # and it has columns of its own, which saving the settings never touches.
+    def get_connection_filter(self) -> str:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT connection_filter_enc, connection_filter_iv FROM app_settings WHERE user_id = ?",
+                (self._user.id,),
+            ).fetchone()
+        if not row:
+            return ""
+        return self._decrypt_pw(row["connection_filter_enc"] or "", row["connection_filter_iv"] or "")
+
+    def save_connection_filter(self, text: str) -> None:
+        enc, iv = self._encrypt_pw(text)
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO app_settings (user_id, connection_filter_enc, connection_filter_iv)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     connection_filter_enc=excluded.connection_filter_enc,
+                     connection_filter_iv=excluded.connection_filter_iv""",
+                (self._user.id, enc, iv),
+            )
+
     def save_sftp_browser_settings(self, data: dict) -> None:
         enc, iv = self._encrypt_pw(json.dumps(data, separators=(",", ":")))
         with get_connection() as conn:

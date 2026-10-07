@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QPen, QBrush, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal, QRectF
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal, QRectF, QEvent
 import os
 import sys
 from PyQt6 import sip
@@ -120,6 +120,24 @@ class _PillHandle(QSplitterHandle):
         painter.setBrush(QBrush(pill))
         painter.drawRoundedRect(x, y, pill_w, pill_h, pill_w, pill_w)
         painter.end()
+
+
+class _FilterLineEdit(QLineEdit):
+    """The connection filter field. Esc belongs to it rather than to the
+    window's Esc shortcut, and is reported through escape_pressed."""
+    escape_pressed = pyqtSignal()
+
+    def event(self, e):  # noqa: D401
+        if e.type() == QEvent.Type.ShortcutOverride and e.key() == Qt.Key.Key_Escape:
+            e.accept()
+            return True
+        return super().event(e)
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            return
+        super().keyPressEvent(e)
 
 
 class _PillSplitter(QSplitter):
@@ -792,6 +810,17 @@ class MainWindow(FramelessMainWindow):
         header_h.addWidget(title_wrap)
         header_h.addStretch()
 
+        # Magnifier: opens the filter field below the header
+        self._search_btn = QPushButton()
+        self._search_btn.setObjectName("headerActionBtn")
+        self._search_btn.setFixedSize(QSize(30, 30))
+        self._search_btn.setIconSize(QSize(16, 16))
+        self._search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._search_btn.setToolTip(tr("search.tooltip"))
+        self._search_btn.setAccessibleName(tr("search.tooltip"))
+        self._search_btn.clicked.connect(self._toggle_search)
+        header_h.addWidget(self._search_btn)
+
         self._add_btn = QPushButton()
         self._add_btn.setObjectName("headerAddBtn")
         self._add_btn.setFixedSize(QSize(32, 32))
@@ -838,6 +867,7 @@ class MainWindow(FramelessMainWindow):
         header_h.addWidget(self._badge_lbl)
 
         v.addWidget(header)
+        v.addWidget(self._build_filter_bar())
 
         scroll = QScrollArea()
         scroll.setObjectName("connectionScroll")
@@ -1289,7 +1319,7 @@ class MainWindow(FramelessMainWindow):
         self._update_status()
         self._tray.update_connections_menu(connections, mounted)
         self._refresh_groups_combo()  # Gruppen-Filter aktualisieren
-        self._apply_group_filter()
+        self._apply_list_filters()
         # Restore terminal-active indicators on rebuilt cards
         for conn_id in list(self._terminal_conn_tabs.keys()):
             self._update_card_terminal_indicator(conn_id)
@@ -1319,6 +1349,7 @@ class MainWindow(FramelessMainWindow):
         layout.addWidget(card)
         container._card = card
         container._conn_id = conn.id
+        container._conn = conn
         return container
 
     # ------------------------------------------------------------------
@@ -3240,6 +3271,7 @@ class MainWindow(FramelessMainWindow):
             ("Ctrl+S", self._shortcut_save),
             ("Esc", self._shortcut_escape),
             ("Ctrl+N", self._shortcut_add),
+            ("Ctrl+F", self._open_search),
             ("Ctrl+E", self._shortcut_edit),
             ("Delete", self._shortcut_delete),
         ]
@@ -4979,7 +5011,7 @@ class MainWindow(FramelessMainWindow):
                 return
             self._set_status(tr("status.connect_failed", name=name))
         self._update_status()
-        self._apply_group_filter()
+        self._apply_list_filters()
 
     def _show_key_fallback_dialog(self, conn) -> bool:
         """Zeigt Dialog an, der fragt ob mit Passwort statt Key verbunden werden soll.
@@ -5055,7 +5087,7 @@ class MainWindow(FramelessMainWindow):
         finally:
             try:
                 self._update_status()
-                self._apply_group_filter()
+                self._apply_list_filters()
             except Exception:
                 pass
 
@@ -5402,6 +5434,7 @@ class MainWindow(FramelessMainWindow):
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
         self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        self._update_filter_ui()
         # Connection cards paint their icons in the theme/accent they were
         # built with, and show duplicate-letter warnings only while letters
         # may not be shared; rebuild them when any of that changed.
@@ -5714,26 +5747,123 @@ class MainWindow(FramelessMainWindow):
 
     def _on_group_filter_changed(self, index: int):
         """Handle group filter selection change."""
-        self._apply_group_filter()
+        self._apply_list_filters()
 
-    def _apply_group_filter(self):
-        """Show/hide connection containers based on the active filter selection."""
+    def _apply_list_filters(self):
+        """Show the connections that pass both the group filter and the
+        text filter (name, host or user, see connection_filter)."""
+        from src.connection_filter import matches
         selected = self._groups_combo.currentData()
+        query = self._filter_input.text()
+        in_group = shown = 0
         for conn_id, container in self._containers.items():
             card = self._cards.get(conn_id)
+            conn = getattr(container, "_conn", None) or self._mgr.get_by_id(conn_id)
             if selected == "__all__":
-                container.setVisible(True)
+                ok = True
             elif selected == "__mounted__":
-                container.setVisible(bool(card and card.is_mounted))
+                ok = bool(card and card.is_mounted)
             elif selected == "__unmounted__":
-                container.setVisible(bool(card and not card.is_mounted))
+                ok = bool(card and not card.is_mounted)
+            elif conn:
+                conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
+                ok = selected in conn_groups
             else:
-                conn = self._mgr.get_by_id(conn_id)
-                if conn:
-                    conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
-                    container.setVisible(selected in conn_groups)
-                else:
-                    container.setVisible(False)
+                ok = False
+            in_group += ok
+            ok = ok and conn is not None and matches(conn, query)
+            shown += ok
+            container.setVisible(ok)
+        self._update_filter_ui(shown, in_group)
+
+    # ── text filter ───────────────────────────────────────────────────────────
+
+    def _build_filter_bar(self) -> QWidget:
+        """The filter field below the header. It filters the list with every
+        character typed, and what is typed stays, across restarts too, until
+        it is changed or cleared by hand."""
+        bar = QWidget()
+        bar.setObjectName("connectionsFilterBar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 0)
+        h.setSpacing(10)
+        self._filter_input = _FilterLineEdit()
+        self._filter_input.setObjectName("connectionsFilterInput")
+        self._filter_input.setPlaceholderText(tr("search.placeholder"))
+        self._filter_input.setAccessibleName(tr("search.tooltip"))
+        self._filter_icon_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.LeadingPosition)
+        self._filter_clear_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.TrailingPosition)
+        self._filter_clear_action.setToolTip(tr("search.clear"))
+        self._filter_clear_action.triggered.connect(self._clear_filter)
+        self._filter_input.setText(self._mgr.get_connection_filter())
+        self._filter_input.textChanged.connect(self._on_filter_changed)
+        self._filter_input.escape_pressed.connect(self._on_filter_escape)
+        h.addWidget(self._filter_input, 1)
+        self._filter_count = QLabel("")
+        self._filter_count.setObjectName("connectionsFilterCount")
+        h.addWidget(self._filter_count)
+        self._filter_bar = bar
+        if not self._filter_input.text():
+            bar.hide()      # never show() here: the bar has no parent yet
+        self._update_filter_ui()
+        return bar
+
+    def _toggle_search(self):
+        """Magnifier: open the field; close it again only while it is empty,
+        because a filter stays until it is cleared by hand."""
+        if self._filter_bar.isHidden() or self._filter_input.text():
+            self._open_search()
+        else:
+            self._filter_bar.hide()
+
+    def _open_search(self):
+        if self._main_stack.currentIndex() != 0:
+            self._nav_home()
+            if self._main_stack.currentIndex() != 0:   # the user stayed on a form
+                return
+        self._filter_bar.show()
+        self._filter_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._filter_input.selectAll()
+
+    def _on_filter_changed(self, text: str):
+        self._mgr.save_connection_filter(text)
+        self._apply_list_filters()
+
+    def _on_filter_escape(self):
+        """Esc closes an empty field; a filter stays, only the focus leaves."""
+        if self._filter_input.text():
+            self._filter_input.clearFocus()
+        else:
+            self._filter_bar.hide()
+
+    def _clear_filter(self):
+        self._filter_input.clear()
+        self._filter_input.setFocus()
+
+    def _update_filter_ui(self, shown: int | None = None, total: int | None = None):
+        """Icons in the theme's colours (the accent while a filter is set),
+        the clear button and the "3 of 8" count."""
+        theme = self._mgr.get_settings().theme or "dark"
+        text = self._filter_input.text()
+        active = bool(text.strip())
+        idle = "#4a5a6a" if is_light(theme) else dark_tone(theme, "#aab4c4")
+        self._search_btn.setIcon(svg_icon("magnifier", current_accent() if active else idle, 16))
+        if self._search_btn.property("active") != ("true" if active else "false"):
+            self._search_btn.setProperty("active", "true" if active else "false")
+            self._search_btn.style().unpolish(self._search_btn)
+            self._search_btn.style().polish(self._search_btn)
+        self._filter_icon_action.setIcon(svg_icon("magnifier", current_accent() if active else idle, 15))
+        self._filter_clear_action.setIcon(svg_icon("x", idle, 14))
+        self._filter_clear_action.setVisible(bool(text))
+        if shown is not None:
+            if not active:
+                self._filter_count.setText("")
+            elif shown:
+                self._filter_count.setText(tr("search.count", shown=shown, total=total))
+            else:
+                self._filter_count.setText(tr("search.none"))
 
     def _refresh_groups_combo(self):
         """Refresh the groups filter combo with available groups."""
