@@ -20,8 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/app-preview-dark.png" alt="NEO SSH-Win Manager — connections and in-app terminal, dark mode" width="49%"/>
-  <img src="assets/screenshots/app-preview-light.png" alt="NEO SSH-Win Manager — file browser, light mode" width="49%"/>
+  <img src="assets/screenshots/overview.png" alt="NEO SSH-Win Manager — connection list with a host's details, in the four themes Black, Light, Blue (classic) and Gray" width="100%"/>
 </p>
 
 <p align="center">
@@ -50,54 +49,63 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 - **Auto drive-letter detection** (free letters only) and ghost-drive cleanup.
 - "Start with Windows" and "Auto-reconnect on connection loss" options.
 - **Optional CLI companion** for scripting / agent integration.
+- **Four themes** — Black, Blue (classic), Gray and Light — with an accent colour of your own and a text colour on it that is chosen automatically or by you. A network of linked nodes runs behind the empty overview, a host's details, user management and the profile (can be switched off).
+- **Filter the connection list** by name, host or user name, with every character you type; the filter stays until you clear it.
+- **Help where you need it:** the connection form links every field to the [online documentation](https://www.neosshwinmanager.org/en/docs/connections#connection-form), with tips such as how to find the remote path.
 
 ## Screenshots
 
+Every picture shows the four themes: **Black** (top left) and **Gray** (bottom right) with the accent colour `#228c2b`, **Light** (top right) and **Blue (classic)** (bottom left) with the default accent. All hosts, users and data are fictional.
+
+<p align="center">
+  <img src="assets/screenshots/overview.png" alt="Connection list with a host's details — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Connections and a host's details</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/search.png" alt="The connection list filtered by the user name deploy — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Filter by name, host or user</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/terminal.png" alt="In-app terminal next to the connection list — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Integrated terminal</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/file-browser.png" alt="Dual-pane file browser — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>File browser: this PC and the server side by side</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/connection-form.png" alt="Connection form with help buttons — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Add / edit a connection, with help for every field</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/system-info.png" alt="Live system info panel — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Live system info</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/users.png" alt="User management with three accounts — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>User management</b></sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/settings.png" alt="Settings page — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
+  <sub><b>Settings</b></sub>
+</p>
+
 <table>
   <tr>
-    <td align="center">
-      <img src="assets/screenshots/app-preview-dark.png" alt="Dark mode — connection list with the in-app terminal" width="380"/><br/>
-      <sub><b>Connections and in-app terminal (dark mode)</b></sub>
-    </td>
-    <td align="center">
-      <img src="assets/screenshots/file-browser-dark.png" alt="Dark mode — file browser with this PC and the server side by side" width="380"/><br/>
-      <sub><b>File browser (dark mode)</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="assets/screenshots/app-preview-light.png" alt="Light mode — file browser with this PC and the server side by side" width="380"/><br/>
-      <sub><b>File browser (light mode)</b></sub>
-    </td>
-    <td align="center">
-      <img src="assets/screenshots/add-edit-dialog.png" alt="Add / Edit connection dialog" width="380"/><br/>
-      <sub><b>Add / edit a connection</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="assets/screenshots/system-info.png" alt="Live system info panel" width="380"/><br/>
-      <sub><b>Live system info panel</b></sub>
-    </td>
-    <td align="center">
-      <img src="assets/screenshots/tray.png" alt="System tray quick toggles" width="380"/><br/>
-      <sub><b>System tray with quick mount toggles</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="assets/screenshots/login.png" alt="Login screen with language picker" width="380"/><br/>
+    <td align="center" width="62%">
+      <img src="assets/screenshots/login.png" alt="Login screen with language picker — Black, Light, Blue (classic) and Gray" width="100%"/><br/>
       <sub><b>Login with language picker</b></sub>
     </td>
-    <td align="center">
-      <img src="assets/screenshots/user_management.png" alt="User management" width="380"/><br/>
-      <sub><b>User management</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <img src="assets/screenshots/settings.png" alt="Settings dialog" width="380"/><br/>
-      <sub><b>Settings dialog</b></sub>
+    <td align="center" width="38%">
+      <img src="assets/screenshots/tray.png" alt="System tray menu with quick mount toggles — Black, Light, Blue (classic) and Gray" width="70%"/><br/>
+      <sub><b>System tray with quick mount toggles</b></sub>
     </td>
   </tr>
 </table>

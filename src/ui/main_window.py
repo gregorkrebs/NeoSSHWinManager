@@ -43,6 +43,7 @@ from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
 from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
+from src.help_links import CONNECTION_FORM, open_help
 from src.ui.theme import (
     DEFAULT_ACCENT, accent_tone, current_accent, current_accent_text, dark_tone, is_light,
     normalize_hex, text_on_accent,
@@ -918,6 +919,19 @@ class MainWindow(FramelessMainWindow):
         hh.addWidget(title_wrap)
         hh.addStretch()
 
+        # Help (shown with the connection form): the docs at the form
+        self._rp_help_btn = QPushButton()
+        self._rp_help_btn.setObjectName("rpHeaderBtn")
+        self._rp_help_btn.setFixedSize(QSize(32, 32))
+        self._rp_help_btn.setIcon(svg_icon("circle-help", "#aab4c4", 16))
+        self._rp_help_btn.setIconSize(QSize(16, 16))
+        self._rp_help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_help_btn.setToolTip(tr("help.form_tooltip"))
+        self._rp_help_btn.setAccessibleName(tr("help.form_tooltip"))
+        self._rp_help_btn.clicked.connect(lambda: open_help("connections", CONNECTION_FORM))
+        self._rp_help_btn.hide()
+        hh.addWidget(self._rp_help_btn)
+
         # Info button (shown in info mode - opens system info panel)
         self._rp_info_btn = QPushButton("i")
         self._rp_info_btn.setObjectName("cardInfoBtn")
@@ -1412,6 +1426,7 @@ class MainWindow(FramelessMainWindow):
     def _set_right_panel_header(self, kicker: str = "", title: str = ""):
         self._right_panel_title.setText(title)
         self._right_panel_title.setVisible(bool(title))
+        self._rp_help_btn.setVisible(False)     # the connection form shows it again
 
     def _show_right_panel_placeholder(self):
         """Render the default empty-state panel instead of collapsing the area."""
@@ -1885,6 +1900,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(conn)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1920,6 +1936,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(None)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -2581,6 +2598,32 @@ class MainWindow(FramelessMainWindow):
         lbl.setObjectName("fieldLabel")
         return lbl
 
+    def _field_help_btn(self, anchor: str, page: str = "connections") -> QPushButton:
+        """A small "?" that opens the docs at *page*#*anchor*."""
+        theme = self._mgr.get_settings().theme or "dark"
+        btn = QPushButton()
+        btn.setObjectName("fieldHelpBtn")
+        btn.setFixedSize(QSize(16, 16))
+        btn.setIcon(svg_icon("circle-help", "#6a7a8a" if is_light(theme) else dark_tone(theme, "#8fa4b8"), 12))
+        btn.setIconSize(QSize(12, 12))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setToolTip(tr("help.field_tooltip"))
+        btn.setAccessibleName(tr("help.field_tooltip"))
+        btn.clicked.connect(lambda: open_help(page, anchor))
+        return btn
+
+    def _section_with_help(self, text: str, anchor: str) -> QWidget:
+        """A section label with a help "?" beside it."""
+        w = QWidget()
+        hl = QHBoxLayout(w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self._section_label(text))
+        hl.addWidget(self._field_help_btn(anchor), 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addStretch()
+        return w
+
     def _pill_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("connectionsBadge")
@@ -2602,7 +2645,9 @@ class MainWindow(FramelessMainWindow):
 
         is_edit = conn is not None
 
-        def _ef_field(label_text, input_widget):
+        def _ef_field(label_text, input_widget, help_anchor=None):
+            """A field frame; *help_anchor*: a "?" beside the label that opens
+            the docs at that field."""
             container = QFrame()
             container.setObjectName("rpInfoField")
             container.setFixedHeight(54)
@@ -2611,17 +2656,26 @@ class MainWindow(FramelessMainWindow):
             vl.setSpacing(4)
             lbl = QLabel(label_text.upper())
             lbl.setObjectName("rpFieldLabelCaps")
-            vl.addWidget(lbl)
+            if help_anchor:
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(4)
+                row.addWidget(lbl)
+                row.addWidget(self._field_help_btn(help_anchor))
+                row.addStretch()
+                vl.addLayout(row)
+            else:
+                vl.addWidget(lbl)
             vl.addWidget(input_widget)
             return container
 
-        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1):
+        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1, help1=None, help2=None):
             wrapper = QWidget()
             hl = QHBoxLayout(wrapper)
             hl.setContentsMargins(0, 0, 0, 0)
             hl.setSpacing(8)
-            hl.addWidget(_ef_field(label1, widget1), stretch=s1)
-            hl.addWidget(_ef_field(label2, widget2), stretch=s2)
+            hl.addWidget(_ef_field(label1, widget1, help1), stretch=s1)
+            hl.addWidget(_ef_field(label2, widget2, help2), stretch=s2)
             return wrapper
 
         body = QWidget()
@@ -2670,7 +2724,7 @@ class MainWindow(FramelessMainWindow):
             _templates = self._mgr.get_templates()
             if _templates:
                 self._ef_templates = _templates
-                v.addWidget(self._section_label(tr("addedit.section.template")))
+                v.addWidget(self._section_with_help(tr("addedit.section.template"), "field-template"))
                 self._ef_template_btn = QPushButton(tr("addedit.template.none"))
                 self._ef_template_btn.setObjectName("secondaryBtn")
                 self._ef_template_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2685,7 +2739,7 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.general")))
         self._ef_name = QLineEdit(conn.name if is_edit else "")
         self._ef_name.setPlaceholderText(tr("addedit.placeholder.name"))
-        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name))
+        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name, "field-name"))
 
         # Protocol: decides which transport the file browser uses and whether
         # the SSH-only fields below (key, drive letter, CLI, PuTTY) apply.
@@ -2697,7 +2751,7 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_protocol.findData(conn.protocol)
             if idx >= 0:
                 self._ef_protocol.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol))
+        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol, "field-protocol"))
 
         self._ef_host = QLineEdit(conn.host if is_edit else "")
         self._ef_host.setPlaceholderText("192.168.1.1")
@@ -2705,11 +2759,12 @@ class MainWindow(FramelessMainWindow):
         self._ef_port.setRange(1, 65535)
         self._ef_port.setValue(conn.port if is_edit else 22)
         v.addWidget(_ef_field_pair(tr("addedit.label.host"), self._ef_host,
-                                   tr("addedit.label.port"), self._ef_port, 2, 1))
+                                   tr("addedit.label.port"), self._ef_port, 2, 1,
+                                   "field-host", "field-port"))
 
         self._ef_user = QLineEdit(conn.user if is_edit else "")
         self._ef_user.setPlaceholderText("root")
-        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user))
+        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user, "field-user"))
 
         # Auth
         v.addSpacing(4)
@@ -2722,13 +2777,13 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_auth.findData(conn.auth_method)
             if idx >= 0:
                 self._ef_auth.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth))
+        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth, "field-auth-method"))
 
         self._ef_pw = QLineEdit(conn.password if is_edit else "")
         self._ef_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self._ef_pw.setPlaceholderText("••••••••")
         self._ef_pw.setStyleSheet("font-size: 8px; letter-spacing: 2px;")
-        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw))
+        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw, "field-password"))
 
         key_container = QWidget()
         key_hl = QHBoxLayout(key_container)
@@ -2742,7 +2797,7 @@ class MainWindow(FramelessMainWindow):
         self._ef_key_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ef_key_browse_btn.clicked.connect(self._ef_browse_key)
         key_hl.addWidget(self._ef_key_browse_btn)
-        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container)
+        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container, "field-key")
         v.addWidget(self._ef_key_field)
 
         # FTP options — only meaningful for FTP/FTPS, hidden for SFTP
@@ -2750,7 +2805,7 @@ class MainWindow(FramelessMainWindow):
         ftp_v = QVBoxLayout(self._ef_ftp_widget)
         ftp_v.setContentsMargins(0, 4, 0, 0)
         ftp_v.setSpacing(6)
-        ftp_v.addWidget(self._section_label(tr("addedit.section.ftp")))
+        ftp_v.addWidget(self._section_with_help(tr("addedit.section.ftp"), "field-ftp-options"))
 
         self._ef_ftp_plain_warning = QLabel(tr("addedit.ftp.plain_warning"))
         self._ef_ftp_plain_warning.setWordWrap(True)
@@ -2822,14 +2877,18 @@ class MainWindow(FramelessMainWindow):
         path_hl = QHBoxLayout(path_row)
         path_hl.setContentsMargins(0, 0, 0, 0)
         path_hl.setSpacing(8)
-        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive)
-        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path), stretch=3)
+        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive, "field-drive-letter")
+        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path, "field-remote-path"), stretch=3)
         path_hl.addWidget(self._ef_drive_field, stretch=1)
         v.addWidget(path_row)
+        # Where the files are is the question asked most: a tip right here.
+        path_hint = self._field_label(tr("addedit.path.hint"))
+        path_hint.setWordWrap(True)
+        v.addWidget(path_hint)
 
         # CLI
         v.addSpacing(4)
-        self._ef_cli_section = self._section_label(tr("addedit.section.cli"))
+        self._ef_cli_section = self._section_with_help(tr("addedit.section.cli"), "field-cli-access")
         v.addWidget(self._ef_cli_section)
         self._ef_cli_cb = QCheckBox(tr("addedit.cli.enable"))
         self._ef_cli_cb.setChecked(conn.cli_access_enabled if is_edit else False)
@@ -2892,7 +2951,7 @@ class MainWindow(FramelessMainWindow):
             putty_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             putty_browse_btn.clicked.connect(self._ef_browse_putty_key)
             putty_hl.addWidget(putty_browse_btn)
-            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container))
+            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container, "field-putty-key"))
             putty_v.addWidget(self._field_label(tr("addedit.putty_key.hint")))
             v.addWidget(self._ef_putty_widget)
 
@@ -2901,12 +2960,12 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.groups")))
         self._ef_groups = QLineEdit(conn.groups if is_edit else "")
         self._ef_groups.setPlaceholderText(tr("addedit.placeholder.groups"))
-        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups))
+        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups, "field-groups"))
         v.addWidget(self._field_label(tr("addedit.groups.hint")))
 
         # Template Option (nur im Add-Modus oder bei Bearbeitung sichtbar)
         v.addSpacing(4)
-        v.addWidget(self._section_label(tr("addedit.section.template_options")))
+        v.addWidget(self._section_with_help(tr("addedit.section.template_options"), "field-save-as-template"))
         # Editing a host: the box saves a template COPY; the host stays as it is.
         _copy = is_edit and not conn.is_template
         self._ef_template_cb = QCheckBox(tr("addedit.template.save_copy") if _copy

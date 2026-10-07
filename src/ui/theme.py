@@ -1438,6 +1438,19 @@ QFrame#rpInfoField QPushButton {
     letter-spacing: 1px;
     padding-top: 4px;
 }
+
+/* ---- Help "?" beside a field ----------------------------------- */
+QPushButton#fieldHelpBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton#fieldHelpBtn:hover {
+    background-color: #182232;
+}
 #rpFieldLabel {
     color: #6f8599;
     font-size: 11px;
@@ -3131,6 +3144,19 @@ QFrame#rpInfoField QPushButton {
     text-transform: uppercase;
     letter-spacing: 1px;
     padding-top: 4px;
+}
+
+/* ---- Help "?" beside a field (Light) --------------------------- */
+QPushButton#fieldHelpBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton#fieldHelpBtn:hover {
+    background-color: #e2e8f0;
 }
 #rpFieldLabel { color: #000000; font-size: 11px; padding: 6px 0 1px 0; }
 #rpValue {
