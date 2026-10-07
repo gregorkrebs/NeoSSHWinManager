@@ -42,6 +42,7 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
+from src.ui.node_network import NodeNetworkFill
 from src.ui.theme import (
     DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
     normalize_hex,
@@ -1368,7 +1369,8 @@ class MainWindow(FramelessMainWindow):
         v = QVBoxLayout(body)
         v.setContentsMargins(18, 18, 18, 18)
         v.setSpacing(12)
-        v.addStretch()
+        light = is_light(self._mgr.get_settings().theme)
+        v.addWidget(NodeNetworkFill(light, ("top",)), 1)
 
         copy = QWidget()
         copy.setObjectName("rightPanelPlaceholderCopy")
@@ -1393,7 +1395,7 @@ class MainWindow(FramelessMainWindow):
 
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        v.addStretch()
+        v.addWidget(NodeNetworkFill(light, ("bottom",)), 1)
         self._rp_layout.addWidget(body, stretch=1)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
@@ -1990,7 +1992,7 @@ class MainWindow(FramelessMainWindow):
             su_hint.setStyleSheet(f"color: {_lbl_muted}; font-size: 12px;")
             su_l.addWidget(su_hint)
             v.addWidget(su_card)
-            v.addStretch()
+            v.addWidget(NodeNetworkFill(_is_light), 1)
             self._fs_layout.addWidget(body)
             return
 
@@ -2056,7 +2058,7 @@ class MainWindow(FramelessMainWindow):
         pw_l.addWidget(save_btn)
 
         v.addWidget(pw_card)
-        v.addStretch()
+        v.addWidget(NodeNetworkFill(_is_light), 1)
 
         self._fs_layout.addWidget(body)
 
@@ -2238,7 +2240,7 @@ class MainWindow(FramelessMainWindow):
 
             # A single account: no user list, no "create user" form
             v.addWidget(mode_card)
-            v.addStretch()
+            v.addWidget(NodeNetworkFill(is_light(self._mgr.get_settings().theme)), 1)
             self._fs_layout.addWidget(body, stretch=1)
             return
 
@@ -2386,7 +2388,7 @@ class MainWindow(FramelessMainWindow):
         columns.addLayout(right_col, 5)
         v.addLayout(columns)
 
-        v.addStretch()
+        v.addWidget(NodeNetworkFill(is_light(self._mgr.get_settings().theme)), 1)
         self._fs_layout.addWidget(body, stretch=1)
 
     def _rebuild_users_panel(self):

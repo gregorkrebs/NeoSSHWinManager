@@ -18,6 +18,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   - In single-user mode, your profile shows how to create an account instead of the password change form, because there is no password to change.
   - If Windows Credential Manager is not available, the app asks you to create an account as before.
 - **A redesigned login screen.** A cleaner layout with the network of linked nodes from the About window, icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
+- **The network of linked nodes in the empty spaces.** The empty overview on the right ("Ready for the next step") and the free space below the cards in User Management and in your profile now show it too. Where the cards fill the page, it stays out of the way.
 - **Pick your language on the login screen.** A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
 - **The login screen looks like your app.** It uses the theme (dark, gray or light), the accent colour and the language of the user who signed in last.
 - **The login window appears a little sooner.** The main window is now loaded after you have signed in.
@@ -65,6 +66,7 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - The lockout countdown writes days as "d" instead of the German "T", and keeps running when the language is switched.
 - The network of linked nodes from the About banner moved to `src/ui/node_network.py` (`paint_node_network()`). The banner draws it from there, pixel for pixel as before; the login screen's backdrop draws two copies in the accent colour, offset against each other and running past the window edges beside the header.
 - New README screenshot of the login screen.
+- `NodeNetworkFill` (also in `node_network.py`) takes the place of the closing stretch in the empty overview, the users panel and the profile, so it gets exactly the free space below the content. It draws up to two networks in the accent colour with the login screen's opacity: one on the trailing side at the top, one mirrored on the leading side at the bottom, staggered rather than at the same height. They are at most 200 px wide, in the About banner's proportions, and are left out where they would be less than 70 px high. Right-to-left layouts swap the sides. `area_for_box()` returns the rect for `paint_node_network()` that places the node centres on a given box. Tests in `tests/test_node_network.py`.
 - New tests in `tests/test_login_dialog.py` cover the look of the last user, the installer fallback, the language switch, storing the picked language, the password toggle, the Caps Lock hint and the error box.
 
 #### Single-user mode by default
