@@ -1807,6 +1807,40 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #0077b6;
     background-color: #16162a;
 }
+
+/* ---- Stepper: number between round - and + buttons ---------- */
+QFrame#stepper {
+    background-color: #14141f;
+    border: 1px solid #1e1e30;
+    border-radius: 17px;
+}
+QFrame#stepper QSpinBox#stepperValue,
+QFrame#stepper QSpinBox#stepperValue:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #deebf7;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#stepperBtn {
+    background-color: #182232;
+    border: 1px solid #243243;
+    border-radius: 12px;
+    padding: 0;
+}
+QPushButton#stepperBtn:hover {
+    background-color: #0f2430;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:pressed {
+    background-color: #0077b6;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:disabled {
+    background-color: transparent;
+    border: 1px solid #1e1e30;
+}
 QLineEdit::placeholder {
     color: #3f4e5e;
 }
@@ -3435,6 +3469,40 @@ QLineEdit, QSpinBox, QComboBox {
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #0077b6;
     background-color: #f5faff;
+}
+
+/* ---- Stepper (Light) ---------------------------------------- */
+QFrame#stepper {
+    background-color: #ffffff;
+    border: 1px solid #c8d0dc;
+    border-radius: 17px;
+}
+QFrame#stepper QSpinBox#stepperValue,
+QFrame#stepper QSpinBox#stepperValue:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #1a2332;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#stepperBtn {
+    background-color: #edf2f7;
+    border: 1px solid #d5dde7;
+    border-radius: 12px;
+    padding: 0;
+}
+QPushButton#stepperBtn:hover {
+    background-color: #e0eef8;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:pressed {
+    background-color: #c7dfef;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:disabled {
+    background-color: transparent;
+    border: 1px solid #e4e8ef;
 }
 QLineEdit::placeholder { color: #9aacbe; }
 QComboBox::drop-down { border: none; width: 30px; }

@@ -132,6 +132,8 @@
   "settings.up_to_date": "У вас последняя версия.",
   "settings.update_check_failed": "Не удалось проверить обновления: {msg}",
   "settings.check_interval": "Интервал проверки (секунды):",
+  "stepper.decrease": "Уменьшить",
+  "stepper.increase": "Увеличить",
   "settings.auto_reconnect": "Подключать автоматически при запуске",
   "settings.auto_remount": "Автоматически переподключаться при потере связи",
   "settings.sshfs_disable_cache": "Отключить кэш каталогов (мгновенное обновление)",

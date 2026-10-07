@@ -132,6 +132,8 @@
   "settings.up_to_date": "You're up to date.",
   "settings.update_check_failed": "Update check failed: {msg}",
   "settings.check_interval": "Check interval (seconds):",
+  "stepper.decrease": "Decrease",
+  "stepper.increase": "Increase",
   "settings.auto_reconnect": "Auto-connect on start",
   "settings.auto_remount": "Auto-reconnect on connection loss",
   "settings.sshfs_disable_cache": "Disable directory cache (instant refresh)",

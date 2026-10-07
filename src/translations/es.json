@@ -132,6 +132,8 @@
   "settings.up_to_date": "Ya tienes la última versión.",
   "settings.update_check_failed": "Error al buscar actualizaciones: {msg}",
   "settings.check_interval": "Intervalo de comprobación (segundos):",
+  "stepper.decrease": "Disminuir",
+  "stepper.increase": "Aumentar",
   "settings.auto_reconnect": "Conectar automáticamente al iniciar",
   "settings.auto_remount": "Reconectar automáticamente al perder la conexión",
   "settings.sshfs_disable_cache": "Desactivar la caché de directorios (actualización inmediata)",

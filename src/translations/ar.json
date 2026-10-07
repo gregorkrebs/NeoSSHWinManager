@@ -132,6 +132,8 @@
   "settings.up_to_date": "لديك أحدث إصدار.",
   "settings.update_check_failed": "فشل البحث عن التحديثات: {msg}",
   "settings.check_interval": "فترة الفحص (بالثواني):",
+  "stepper.decrease": "تقليل",
+  "stepper.increase": "زيادة",
   "settings.auto_reconnect": "الاتصال تلقائياً عند بدء التشغيل",
   "settings.auto_remount": "إعادة الاتصال تلقائياً عند انقطاع الاتصال",
   "settings.sshfs_disable_cache": "تعطيل ذاكرة التخزين المؤقت للمجلدات (تحديث فوري)",

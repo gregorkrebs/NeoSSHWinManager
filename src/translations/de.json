@@ -132,6 +132,8 @@
   "settings.up_to_date": "Du bist auf dem neuesten Stand!",
   "settings.update_check_failed": "Fehler bei der Update-Prüfung: {msg}",
   "settings.check_interval": "Prüfintervall (Sekunden):",
+  "stepper.decrease": "Verringern",
+  "stepper.increase": "Erhöhen",
   "settings.auto_reconnect": "Beim Start automatisch verbinden",
   "settings.auto_remount": "Automatisch neu verbinden bei Verbindungsverlust",
   "settings.sshfs_disable_cache": "Verzeichnis-Cache deaktivieren (sofortiger Refresh)",

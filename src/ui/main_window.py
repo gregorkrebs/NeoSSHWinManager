@@ -48,6 +48,7 @@ from src.ui.theme import (
     normalize_hex,
 )
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
+from src.ui.widgets.stepper import Stepper
 from src.i18n import tr, current_language, available_languages, set_language, is_rtl, LANGUAGE_NAMES
 from src.channel import display_name
 from PyQt6.QtCore import QThread
@@ -3472,10 +3473,7 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(_section_hdr(tr("settings.section.mount")))
         v.addSpacing(4)
 
-        self._sf_interval = NoWheelSpinBox()
-        self._sf_interval.setRange(5, 300)
-        self._sf_interval.setValue(s.check_interval_seconds)
-        self._sf_interval.setFixedWidth(72)
+        self._sf_interval = Stepper(5, 300, s.check_interval_seconds, theme=s.theme or "dark")
         self._sf_auto_reconnect = QCheckBox(tr("settings.auto_reconnect"))
         self._sf_auto_reconnect.setChecked(getattr(s, "auto_reconnect", False))
         self._sf_auto_remount = QCheckBox(tr("settings.auto_remount"))

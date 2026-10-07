@@ -132,6 +132,8 @@
   "settings.up_to_date": "U hebt de nieuwste versie.",
   "settings.update_check_failed": "Controle op updates mislukt: {msg}",
   "settings.check_interval": "Controle-interval (seconden):",
+  "stepper.decrease": "Verlagen",
+  "stepper.increase": "Verhogen",
   "settings.auto_reconnect": "Automatisch verbinden bij starten",
   "settings.auto_remount": "Automatisch opnieuw verbinden bij verbindingsverlies",
   "settings.sshfs_disable_cache": "Mapcache uitschakelen (directe verversing)",
