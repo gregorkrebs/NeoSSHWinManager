@@ -12,6 +12,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### What changes for you
 
+- **Filter the connection list.** A magnifier above the list (or Ctrl+F) opens a filter field. It filters by name, host and user name as you type, with every character, and shows how many connections match. Several words narrow the list further. What you type stays there, across restarts too, until you change it or clear it with the × in the field; while a filter is set, the magnifier is highlighted.
 - **No account to set up at the first start.** A new installation starts right away in single-user mode: the app signs you in automatically. Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
   - If you would rather sign in with a password, for example because several people use the computer, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
   - An installation with one account can switch to single-user mode in the same place. The account is then renamed to "default".
@@ -88,6 +89,13 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - `accent_text_color()` finds the text colour on the accent with APCA (SAPC 0.0.98G): white while its lightness contrast is 65 or more, otherwise white or near-black (`#111111`), whichever has the higher WCAG contrast. The old rule (relative luminance above 0.36 gives dark text) put white text on orange `#f97316` (2.8:1) and on green `#00b62f` (2.7:1); now every tested accent gets at least 3:1.
 - A text colour of the user's own: setting `accent_text_color` (column `app_settings.accent_text_color`, "" = automatic), passed with the accent through `set_current_accent(accent, text_color)` and `build_stylesheet(theme, accent, text_color)`. `text_on_accent()` returns the colour in use for the current accent; the About banner, the "Active" pill, the file browser's selected rows and the primary buttons use it. `AccentColorDialog` has radio buttons for automatic (naming its pick), white, black and custom with a HEX field, a sample, `textColorChanged` for the live preview, and `pick()` returns (colour, text colour); "Standard" also resets the text to automatic, and Cancel restores both. The accent button in the settings shows an "A" in the text colour. The login screen takes the text colour of the user who signed in last.
 - Tests in `tests/test_theme_accent.py` cover the black sheet (untinted, darker than gray, every navy neutral mapped), `dark` showing black and `blue` the navy look, the palettes, the title bar storing the new settings, the automatic and the chosen text colour on the accent and the picker's text colour row; `tests/test_node_network.py` covers switching the network off.
+
+#### Connection filter
+
+- A new `magnifier.svg`, drawn for this button (a lens with a glint and a heavier grip), opens the filter field below the connection list's header; Ctrl+F does the same and is switched off on the file browser page like the other main window shortcuts, so the browser's own Ctrl+F stays unambiguous.
+- `src/connection_filter.py`: a connection matches when every word of the query appears, ignoring case, in its name, host, user or "user@host". `_apply_list_filters()` replaces `_apply_group_filter()` and applies the group filter and the text filter together on every keystroke; the field shows "3 of 8" (out of the connections in the selected group) or "No matches".
+- The filter text is stored per user in `app_settings.connection_filter_enc`/`connection_filter_iv`, encrypted with the user's key like the connections it may name, in columns of their own that saving the settings never overwrites (`get_connection_filter()`, `save_connection_filter()`). It is saved with every change and restored at the start, with the field open. It is cleared only by hand: the × in the field. A second click on the magnifier or Esc closes the field only while it is empty; Esc in a filled field just leaves it.
+- Tests in `tests/test_connection_filter.py` cover matching, the encrypted storage and that saving the settings keeps the filter.
 
 #### Single-user mode by default
 
