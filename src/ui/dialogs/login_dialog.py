@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame, QCheckBox, QTabWidget, QWidget,
     QScrollArea, QApplication, QComboBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
-from PyQt6.QtGui import QFont, QIcon, QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent, QRectF
+from PyQt6.QtGui import QFont, QIcon, QAction, QColor, QPainter
 import ctypes
 import os
 import tempfile
@@ -24,6 +24,7 @@ from src.ui.dialog_utils import match_parent_height, make_maximize_button
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, svg_file
+from src.ui.node_network import paint_node_network
 from src.ui.theme import current_accent, dark_tone, is_light, normalize_theme
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import (
@@ -36,6 +37,42 @@ def _caps_lock_on() -> bool:
         return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)  # VK_CAPITAL
     except Exception:
         return False
+
+
+class _LoginBackdrop(QFrame):
+    """The login screen's background: the accent glow from the stylesheet and
+    the network of linked nodes from the About banner beside the header."""
+
+    # (mirrored, top, gap above the card): one network on each side, offset
+    # against each other; the trailing one starts below the language menu.
+    _NETWORKS = ((True, 26, 54), (False, 62, 22))
+
+    def __init__(self, theme: str):
+        super().__init__()
+        self.setObjectName("loginRoot")
+        self._light = is_light(theme)
+        self._card: QWidget | None = None
+
+    def set_card(self, card: QWidget) -> None:
+        """The network stays above the form card."""
+        self._card = card
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        card_top = self._card.geometry().top() if self._card is not None else self.height() // 2
+        w = self.width()
+        color = QColor(current_accent())
+        alphas = dict(line_alpha=55, dot_alphas=(140, 90)) if self._light             else dict(line_alpha=70, dot_alphas=(175, 110))
+        p = QPainter(self)
+        for mirrored, top, gap in self._NETWORKS:
+            if card_top - gap - top < 80:
+                continue
+            # Area 0.88 × the width, placed so that the nodes cover the outer
+            # quarter and run a little past the window edge.
+            x0 = -0.053 * w if mirrored else 0.173 * w
+            area = QRectF(x0, top, 0.88 * w, card_top - gap - top)
+            paint_node_network(p, area, color, mirrored=mirrored, glow_alpha=0, **alphas)
+        p.end()
 
 
 class LoginDialog(FramelessDialog):
@@ -226,8 +263,7 @@ class LoginDialog(FramelessDialog):
     def _build_ui(self):
         self.setWindowTitle(tr("login.title"))
 
-        root = QFrame()
-        root.setObjectName("loginRoot")
+        root = _LoginBackdrop(self._theme)
         v = QVBoxLayout(root)
         v.setContentsMargins(28, 16, 28, 22)
         v.setSpacing(0)
@@ -267,6 +303,7 @@ class LoginDialog(FramelessDialog):
         else:
             self._build_login_form(form)
         v.addWidget(card)
+        root.set_card(card)
 
         v.addSpacing(16)
         ver_lbl = QLabel(f"v{self._version()}")
