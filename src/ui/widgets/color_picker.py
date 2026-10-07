@@ -2,9 +2,12 @@
 color_picker.py – Accent colour picker in the app's own style.
 
 A saturation/brightness field, a hue bar, a free HEX field, preset swatches
-and a "Standard" button that restores the default teal. While the user picks,
-``colorChanged`` fires (throttled) so the caller can preview the colour live;
-``pick()`` returns the chosen colour, or None when the dialog was cancelled.
+and a "Standard" button that restores the default teal. Below them, the text
+colour on the accent: automatic (see theme.accent_text_color), white, black
+or a custom one, with a sample. While the user picks, ``colorChanged``
+(throttled) and ``textColorChanged`` fire so the caller can preview live;
+``pick()`` returns (colour, text colour), or None when the dialog was
+cancelled. A text colour of "" means automatic.
 """
 
 from __future__ import annotations
@@ -16,12 +19,13 @@ from PyQt6.QtGui import (
     QColor, QLinearGradient, QPainter, QPainterPath, QPen, QRegularExpressionValidator,
 )
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton,
+    QVBoxLayout, QWidget,
 )
 
 from src.i18n import tr
 from src.ui.frameless_dialog import FramelessDialog
-from src.ui.theme import DEFAULT_ACCENT, normalize_hex
+from src.ui.theme import DEFAULT_ACCENT, accent_text_color, normalize_hex
 
 PRESETS = (
     DEFAULT_ACCENT,  # Türkis (default)
@@ -31,6 +35,9 @@ PRESETS = (
 
 # Live preview restyles the whole application; at most this often (ms).
 _PREVIEW_INTERVAL = 120
+
+# The fixed text colour choices; "" is automatic.
+_WHITE, _BLACK = "#ffffff", "#111111"
 
 
 def _hex(color: QColor) -> str:
@@ -194,20 +201,24 @@ class AccentColorDialog(FramelessDialog):
     """Pick an accent colour; see the module docstring."""
 
     colorChanged = pyqtSignal(str)
+    textColorChanged = pyqtSignal(str)
 
     @classmethod
     def pick(cls, parent, initial: str,
-             preview: Optional[Callable[[str], None]] = None) -> Optional[str]:
-        """Show the dialog; *preview* is called with every new colour while
-        picking. Returns the chosen colour, or None if cancelled."""
-        dlg = cls(initial, parent)
+             preview: Optional[Callable[[str, str], None]] = None,
+             initial_text: str = "") -> Optional[tuple[str, str]]:
+        """Show the dialog; *preview* is called with (colour, text colour)
+        at every change while picking. Returns (colour, text colour), or
+        None if cancelled."""
+        dlg = cls(initial, parent, initial_text)
         if preview is not None:
-            dlg.colorChanged.connect(preview)
+            dlg.colorChanged.connect(lambda color: preview(color, dlg.text_color()))
+            dlg.textColorChanged.connect(lambda text: preview(dlg.color(), text))
         if dlg.exec() == FramelessDialog.DialogCode.Accepted:
-            return dlg.color()
+            return dlg.color(), dlg.text_color()
         return None
 
-    def __init__(self, initial: str, parent=None) -> None:
+    def __init__(self, initial: str, parent=None, initial_text: str = "") -> None:
         super().__init__(parent)
         self.setModal(True)
         self.setWindowTitle(tr("colorpicker.title"))
@@ -215,11 +226,14 @@ class AccentColorDialog(FramelessDialog):
         self._initial = normalize_hex(initial) or DEFAULT_ACCENT
         self._color = self._initial
         self._emitted = self._initial
+        self._initial_text = normalize_hex(initial_text) or ""
+        self._text = self._initial_text
         self._throttle = QTimer(self)
         self._throttle.setSingleShot(True)
         self._throttle.setInterval(_PREVIEW_INTERVAL)
         self._throttle.timeout.connect(self._emit_now)
         self._build()
+        self._show_text(self._initial_text)
         self._show_color(self._initial)
 
     # ── UI ──────────────────────────────────────────────────────────────────
@@ -295,6 +309,43 @@ class AccentColorDialog(FramelessDialog):
         hex_row.addWidget(compare)
         root.addLayout(hex_row)
 
+        # Text colour on the accent
+        text_lbl = QLabel(tr("colorpicker.text.label"))
+        text_lbl.setObjectName("fieldLabel")
+        root.addWidget(text_lbl)
+        choices = QHBoxLayout()
+        choices.setSpacing(14)
+        self._text_group = QButtonGroup(self)
+        self._text_auto = QRadioButton(tr("colorpicker.text.auto"))
+        self._text_white = QRadioButton(tr("colorpicker.text.white"))
+        self._text_black = QRadioButton(tr("colorpicker.text.black"))
+        self._text_custom = QRadioButton(tr("colorpicker.text.custom"))
+        for i, rb in enumerate((self._text_auto, self._text_white, self._text_black, self._text_custom)):
+            rb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._text_group.addButton(rb, i)
+            choices.addWidget(rb)
+        choices.addStretch(1)
+        root.addLayout(choices)
+        self._text_group.idClicked.connect(self._on_text_choice)
+
+        sample_row = QHBoxLayout()
+        sample_row.setSpacing(10)
+        self._text_hex = QLineEdit()
+        self._text_hex.setFixedWidth(110)
+        self._text_hex.setMaxLength(7)
+        self._text_hex.setPlaceholderText(_WHITE)
+        self._text_hex.setValidator(QRegularExpressionValidator(
+            QRegularExpression(r"#?[0-9A-Fa-f]{0,6}"), self._text_hex))
+        self._text_hex.textEdited.connect(self._on_text_hex_edited)
+        sample_row.addWidget(self._text_hex)
+        self._sample = QLabel(tr("colorpicker.text.sample"))
+        self._sample.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._sample.setFixedHeight(32)
+        self._sample.setMinimumWidth(150)
+        sample_row.addWidget(self._sample)
+        sample_row.addStretch(1)
+        root.addLayout(sample_row)
+
         div = QFrame()
         div.setObjectName("divider")
         div.setFixedHeight(1)
@@ -305,7 +356,7 @@ class AccentColorDialog(FramelessDialog):
         self._reset_btn = QPushButton(tr("settings.accent.reset"))
         self._reset_btn.setObjectName("secondaryBtn")
         self._reset_btn.setToolTip(DEFAULT_ACCENT)
-        self._reset_btn.clicked.connect(lambda: self._set_from_outside(DEFAULT_ACCENT))
+        self._reset_btn.clicked.connect(self._reset)
         btns.addWidget(self._reset_btn)
         btns.addStretch(1)
         cancel = QPushButton(tr("dialog.cancel"))
@@ -327,6 +378,10 @@ class AccentColorDialog(FramelessDialog):
     def color(self) -> str:
         return self._color
 
+    def text_color(self) -> str:
+        """The chosen text colour on the accent; "" = automatic."""
+        return self._text
+
     def _show_color(self, color: str, *, hex_field: bool = True, fields: bool = True) -> None:
         """Make *color* current and reflect it in every part of the dialog."""
         self._color = color
@@ -344,7 +399,63 @@ class AccentColorDialog(FramelessDialog):
             f"background-color: {color}; border-top-right-radius: 8px;"
             " border-bottom-right-radius: 8px;")
         self._new_sw.setToolTip(color)
-        self._reset_btn.setEnabled(color != DEFAULT_ACCENT)
+        self._update_sample()
+
+    def _show_text(self, text: str) -> None:
+        """Make *text* ("" = automatic) the text colour and reflect it."""
+        self._text = text
+        button = {"": self._text_auto, _WHITE: self._text_white,
+                  _BLACK: self._text_black}.get(text, self._text_custom)
+        button.setChecked(True)
+        if button is self._text_custom:
+            self._text_hex.setText(text)
+        self._text_hex.setStyleSheet("")
+        self._update_sample()
+
+    def _update_sample(self) -> None:
+        auto = accent_text_color(self._color)
+        # "Automatic · White": which one automatic picks for this colour
+        self._text_auto.setText(tr("colorpicker.text.auto") + " · "
+                                + tr("colorpicker.text.white" if auto == _WHITE else "colorpicker.text.black"))
+        self._sample.setStyleSheet(
+            f"background-color: {self._color}; color: {self._text or auto};"
+            " border-radius: 10px; padding: 0 14px; font-weight: 600;")
+        self._reset_btn.setEnabled(self._color != DEFAULT_ACCENT or bool(self._text))
+
+    def _set_text(self, text: str) -> None:
+        if text != self._text:
+            self._show_text(text)
+            self.textColorChanged.emit(text)
+
+    def _on_text_choice(self, choice: int) -> None:
+        if choice < 3:
+            self._set_text(("", _WHITE, _BLACK)[choice])
+            return
+        # Custom: the colour in the field, else the one in use now.
+        text = normalize_hex(self._text_hex.text()) or self._text or accent_text_color(self._color)
+        self._text_hex.setText(text)
+        if text != self._text:
+            self._text = text
+            self._update_sample()
+            self.textColorChanged.emit(text)
+
+    def _on_text_hex_edited(self, text: str) -> None:
+        digits = text.lstrip("#")
+        if len(digits) == 6:
+            self._text_hex.setStyleSheet("")
+            self._text_custom.setChecked(True)
+            color = normalize_hex(digits)
+            if color != self._text:
+                self._text = color
+                self._update_sample()
+                self.textColorChanged.emit(color)
+        else:
+            self._text_hex.setStyleSheet("border: 1px solid #ef4444;" if digits else "")
+
+    def _reset(self) -> None:
+        """Standard: the default teal with automatic text."""
+        self._set_text("")
+        self._set_from_outside(DEFAULT_ACCENT)
 
     def _set_hex_invalid(self, invalid: bool) -> None:
         self._hex.setStyleSheet("border: 1px solid #ef4444;" if invalid else "")
@@ -399,6 +510,9 @@ class AccentColorDialog(FramelessDialog):
     def reject(self) -> None:
         # Undo the live preview before closing.
         self._throttle.stop()
+        if self._text != self._initial_text:
+            self._text = self._initial_text
+            self.textColorChanged.emit(self._initial_text)
         if self._emitted != self._initial:
             self._emitted = self._initial
             self.colorChanged.emit(self._initial)

@@ -464,6 +464,8 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN allow_shared_drive_letters INTEGER DEFAULT 0")
             if "auto_pick_free_drive_letter" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN auto_pick_free_drive_letter INTEGER DEFAULT 0")
+            if "accent_text_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_text_color TEXT DEFAULT ''")
             if "background_network" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN background_network INTEGER DEFAULT 1")
             # File browser settings: one encrypted JSON document (bookmarks

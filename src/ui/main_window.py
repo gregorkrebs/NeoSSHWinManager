@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QPen, QBrush, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal, QRectF
 import os
 import sys
 from PyQt6 import sip
@@ -44,8 +44,8 @@ from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
 from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
 from src.ui.theme import (
-    DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
-    normalize_hex,
+    DEFAULT_ACCENT, accent_tone, current_accent, current_accent_text, dark_tone, is_light,
+    normalize_hex, text_on_accent,
 )
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
 from src.ui.widgets.stepper import Stepper
@@ -274,7 +274,7 @@ class MainWindow(FramelessMainWindow):
             pass
         from src.ui.theme import set_current_accent
         _s = self._mgr.get_settings()
-        set_current_accent(getattr(_s, "accent_color", ""))
+        set_current_accent(getattr(_s, "accent_color", ""), getattr(_s, "accent_text_color", ""))
         set_background_enabled(getattr(_s, "background_network", True))
         # (theme, accent) the widgets were last painted in, see _apply_settings_object()
         self._applied_look = (_s.theme or "dark", current_accent(),
@@ -1984,7 +1984,7 @@ class MainWindow(FramelessMainWindow):
             if pill_text:
                 pill = QLabel(pill_text)
                 pill.setStyleSheet(
-                    f"background-color: {_pill_bg}; color: {accent_text_color(_pill_bg)}; "
+                    f"background-color: {_pill_bg}; color: {text_on_accent(_pill_bg)}; "
                     f"border-radius: 8px; padding: 2px 8px; "
                     f"font-size: 10px; font-weight: 700;"
                 )
@@ -3381,6 +3381,7 @@ class MainWindow(FramelessMainWindow):
 
         # Accent colour: swatch button opens the picker, "Standard" resets.
         self._sf_accent = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        self._sf_accent_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
         self._sf_accent_btn = QPushButton()
         self._sf_accent_btn.setObjectName("settingsActionBtn")
         self._sf_accent_btn.setFixedWidth(120)
@@ -3395,7 +3396,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_accent_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sf_accent_reset_btn.setToolTip(DEFAULT_ACCENT)
         self._sf_accent_reset_btn.clicked.connect(
-            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True))
+            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True, text=""))
         accent_box = QWidget()
         accent_hl = QHBoxLayout(accent_box)
         accent_hl.setContentsMargins(0, 0, 0, 0)
@@ -4071,6 +4072,7 @@ class MainWindow(FramelessMainWindow):
             "auto_pick_letter": self._safe_bool_checked("_sf_auto_pick_letter", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
             "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
+            "accent_text": getattr(self, "_sf_accent_text", ""),
             "network": self._safe_bool_checked("_sf_network", True),
             "lang": self._safe_current_data("_sf_lang", "en"),
             "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
@@ -4468,6 +4470,7 @@ class MainWindow(FramelessMainWindow):
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
             accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
+            accent_text_color=self._sf_accent_text,
             background_network=self._sf_network.isChecked(),
             allow_shared_drive_letters=self._sf_shared_letters.isChecked(),
             auto_pick_free_drive_letter=(self._sf_shared_letters.isChecked()
@@ -5389,11 +5392,12 @@ class MainWindow(FramelessMainWindow):
         self._apply_debug_mode()
         from src.ui.theme import build_stylesheet, set_current_accent
         theme = s.theme or "dark"
-        set_current_accent(getattr(s, "accent_color", ""))
+        set_current_accent(getattr(s, "accent_color", ""), getattr(s, "accent_text_color", ""))
         set_background_enabled(getattr(s, "background_network", True))
         self._rp_backdrop.update()
         self._fs_backdrop.update()
-        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
@@ -5422,49 +5426,70 @@ class MainWindow(FramelessMainWindow):
     # ── accent colour (settings panel) ────────────────────────────────────────
 
     def _sf_update_accent_ui(self):
-        """Show the pending accent on the swatch button."""
+        """Show the pending accent, with an "A" in its text colour, on the
+        swatch button."""
+        from src.ui.theme import accent_text_color
         color = self._sf_accent
-        pm = QPixmap(14, 14)
+        text = self._sf_accent_text or accent_text_color(color)
+        scale = max(1.0, self.devicePixelRatioF())
+        pm = QPixmap(round(16 * scale), round(16 * scale))
+        pm.setDevicePixelRatio(scale)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(QColor(128, 128, 128, 140), 1))
         p.setBrush(QColor(color))
-        p.drawRoundedRect(0, 0, 13, 13, 4, 4)
+        p.drawRoundedRect(QRectF(0.5, 0.5, 15, 15), 4, 4)
+        font = QFont(self.font())
+        font.setPixelSize(10)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(text))
+        p.drawText(QRectF(0, 0, 16, 16), Qt.AlignmentFlag.AlignCenter, "A")
         p.end()
+        self._sf_accent_btn.setIconSize(QSize(16, 16))
         self._sf_accent_btn.setIcon(QIcon(pm))
         self._sf_accent_btn.setText(color.upper())
-        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT)
+        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT or bool(self._sf_accent_text))
 
-    def _sf_preview_accent(self, color: str):
-        """Live preview: restyle the app in *color* without saving it."""
+    def _sf_preview_accent(self, color: str, text: str | None = None):
+        """Live preview: restyle the app in *color*, with *text* on it
+        (default: the pending text colour), without saving it."""
         from src.ui.theme import build_stylesheet, set_current_accent
-        set_current_accent(color)
+        set_current_accent(color, self._sf_accent_text if text is None else text)
         theme = self._mgr.get_settings().theme or "dark"
-        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
         self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
         self._set_sidebar_active("settings")
         if self._file_browser is not None:
             self._file_browser.set_theme(theme)
 
-    def _sf_set_accent(self, color: str, preview: bool):
+    def _sf_set_accent(self, color: str, preview: bool, text: str | None = None):
+        """*text*: the text colour on the accent ("" = automatic); None keeps it."""
         self._sf_accent = normalize_hex(color) or DEFAULT_ACCENT
+        if text is not None:
+            self._sf_accent_text = normalize_hex(text) or ""
         self._sf_update_accent_ui()
         if preview:
             self._sf_preview_accent(self._sf_accent)
 
     def _sf_pick_accent(self):
         from src.ui.widgets.color_picker import AccentColorDialog
-        # Cancel makes the dialog preview the colour it started with again.
-        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent)
+        # Cancel makes the dialog preview the colours it started with again.
+        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent,
+                                        self._sf_accent_text)
         if chosen is not None:
-            self._sf_set_accent(chosen, preview=False)
+            color, text = chosen
+            self._sf_set_accent(color, preview=False, text=text)
 
     def _sf_revert_accent_preview(self):
         """Settings discarded: go back to the saved accent if a preview changed it."""
-        saved = normalize_hex(getattr(self._mgr.get_settings(), "accent_color", "")) or DEFAULT_ACCENT
-        if current_accent() != saved:
-            self._sf_preview_accent(saved)
+        s = self._mgr.get_settings()
+        saved = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        saved_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
+        if (current_accent(), current_accent_text()) != (saved, saved_text):
+            self._sf_preview_accent(saved, saved_text)
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":

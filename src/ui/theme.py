@@ -158,10 +158,42 @@ def _luminance(color: str) -> float:
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
 
 
+def _apca_contrast(text: str, background: str) -> float:
+    """Lightness contrast |Lc| of *text* on *background* after APCA
+    (SAPC 0.0.98G), which tracks how readable text looks better than the
+    WCAG 2 ratio, above all on saturated colours."""
+    def y(color):
+        r, g, b = (c / 255 for c in _hex_rgb(color))
+        return 0.2126729 * r ** 2.4 + 0.7151522 * g ** 2.4 + 0.0721750 * b ** 2.4
+
+    def clamp(v):
+        return v if v > 0.022 else v + (0.022 - v) ** 1.414
+
+    yt, yb = clamp(y(text)), clamp(y(background))
+    if abs(yb - yt) < 0.0005:
+        return 0.0
+    if yb > yt:                                  # dark text on a light colour
+        sapc = (yb ** 0.56 - yt ** 0.57) * 1.14
+        return 0.0 if sapc < 0.1 else (sapc - 0.027) * 100
+    sapc = (yb ** 0.65 - yt ** 0.62) * 1.14      # light text on a dark colour
+    return 0.0 if sapc > -0.1 else -(sapc + 0.027) * 100
+
+
+def _wcag_contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 def accent_text_color(accent: str) -> str:
-    """Text colour that stays readable on a button filled with *accent*."""
+    """Text colour that stays readable on a button filled with *accent*,
+    found automatically: white while it reads comfortably there (an APCA
+    contrast of 65 or more, as on blue, violet, red or pink), otherwise
+    white or near-black, whichever has the higher contrast (bright accents
+    such as orange, a vivid green or yellow get dark text)."""
     accent = normalize_hex(accent) or DEFAULT_ACCENT
-    return "#111111" if _luminance(accent) > 0.36 else "#ffffff"
+    if _apca_contrast("#ffffff", accent) >= 65:
+        return "#ffffff"
+    return max(("#ffffff", "#111111"), key=lambda text: _wcag_contrast(text, accent))
 
 
 # Primary buttons are filled with the accent and carry light text; a light
@@ -175,12 +207,15 @@ QPushButton#rpActionBtn[btn_type="primary"] {
 """
 
 _current_accent = DEFAULT_ACCENT
+_current_accent_text = ""       # chosen text colour on the accent; "" = automatic
 
 
-def set_current_accent(accent) -> None:
-    """Set the accent used by get_stylesheet() and accent_tone()."""
-    global _current_accent
+def set_current_accent(accent, text_color="") -> None:
+    """Set the accent used by get_stylesheet() and accent_tone(), and the
+    text colour on it ("" or anything invalid: found automatically)."""
+    global _current_accent, _current_accent_text
     _current_accent = normalize_hex(accent) or DEFAULT_ACCENT
+    _current_accent_text = normalize_hex(text_color) or ""
     # The terminal (terminal_panel.load_session) reads its cursor and
     # selection colour from THEME_COLORS.
     for colors in THEME_COLORS.values():
@@ -191,6 +226,19 @@ def current_accent() -> str:
     return _current_accent
 
 
+def current_accent_text() -> str:
+    """The text colour chosen for the current accent; "" = automatic."""
+    return _current_accent_text
+
+
+def text_on_accent(accent: str | None = None) -> str:
+    """The colour of text on *accent* (default: the current accent): the
+    one the user chose for the current accent, else found automatically."""
+    if accent is None or normalize_hex(accent) == _current_accent:
+        return _current_accent_text or accent_text_color(_current_accent)
+    return accent_text_color(accent)
+
+
 def accent_tone(default_shade: str) -> str:
     """The current accent's version of a shade of the default teal,
     e.g. accent_tone("#00b4d8") for the bright cyan used on icons."""
@@ -198,14 +246,18 @@ def accent_tone(default_shade: str) -> str:
 
 
 @lru_cache(maxsize=16)
-def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT) -> str:
-    """Return the application stylesheet for *theme* in *accent*."""
+def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT, text_color: str = "") -> str:
+    """Return the application stylesheet for *theme* in *accent*, with
+    *text_color* on accent-filled buttons ("" = found automatically)."""
     theme = normalize_theme(theme)
     accent = normalize_hex(accent) or DEFAULT_ACCENT
     sheet = {"dark": BLACK_STYLESHEET, "blue": STYLESHEET, "gray": GRAY_STYLESHEET,
              "light": LIGHT_STYLESHEET}[theme]
     sheet = recolor_accent(sheet, accent)
-    if accent_text_color(accent) != "#ffffff":
+    chosen = normalize_hex(text_color)
+    if chosen:
+        sheet += _ON_ACCENT_RULE % chosen
+    elif accent_text_color(accent) != "#ffffff":
         sheet += _ON_ACCENT_RULE % accent_text_color(accent)
     return (
         sheet.replace("__CHECKMARK_URL__", _CHECKMARK_URL)
@@ -216,7 +268,7 @@ def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT) -> str:
 
 def get_stylesheet(theme: str = "dark") -> str:
     """Return the stylesheet for *theme* in the current accent."""
-    return build_stylesheet(normalize_theme(theme), _current_accent)
+    return build_stylesheet(normalize_theme(theme), _current_accent, _current_accent_text)
 
 
 STYLESHEET = """

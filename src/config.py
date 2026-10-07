@@ -118,6 +118,7 @@ class AppSettings:
     language: str = "en"
     theme: str = "dark"  # "dark" (black) | "blue" (classic) | "gray" | "light"
     accent_color: str = ""  # "#rrggbb"; empty = default teal (theme.DEFAULT_ACCENT)
+    accent_text_color: str = ""  # text on the accent, "#rrggbb"; empty = found automatically
     allow_passwordless_key_auth: bool = False
     security_level: int = 0  # 0=Strict, 1=Keys, 2=Passwords
     allow_insecure_password_auth: bool = False

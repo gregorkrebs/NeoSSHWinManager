@@ -84,6 +84,31 @@ class TestStylesheets:
         assert "color: #111111;" in build_stylesheet("dark", "#ffeb3b")
         assert "color: #111111;" not in build_stylesheet("dark", "#8b5cf6")
 
+    @pytest.mark.parametrize("accent, text", [
+        # saturated mid and dark colours keep white text …
+        ("#0077b6", "#ffffff"), ("#3b82f6", "#ffffff"), ("#8b5cf6", "#ffffff"),
+        ("#ec4899", "#ffffff"), ("#e53935", "#ffffff"), ("#16a34a", "#ffffff"),
+        # … bright ones, which had white text with a contrast below 3:1, get dark text
+        ("#f97316", "#111111"), ("#00b62f", "#111111"), ("#10b981", "#111111"),
+        ("#00b4d8", "#111111"), ("#eab308", "#111111"),
+    ])
+    def test_automatic_text_colour(self, accent, text):
+        assert theme.accent_text_color(accent) == text
+        # at least WCAG's 3:1 for bold UI text, on every accent
+        assert theme._wcag_contrast(text, accent) >= 3.0
+
+    def test_chosen_text_colour_wins(self):
+        sheet = build_stylesheet("dark", "#f97316", "#ffffff")
+        assert "color: #ffffff;" in sheet[-200:]          # the rule at the end of the sheet
+        assert "color: #ff0000;" in build_stylesheet("light", DEFAULT_ACCENT, "#ff0000")
+        assert build_stylesheet("dark", DEFAULT_ACCENT, "nonsense") == build_stylesheet("dark", DEFAULT_ACCENT)
+        theme.set_current_accent("#f97316", "#ffffff")
+        assert theme.text_on_accent() == "#ffffff" and theme.current_accent_text() == "#ffffff"
+        assert theme.text_on_accent("#ffeb3b") == "#111111"     # another accent: automatic
+        assert "color: #ffffff;" in theme.get_stylesheet("dark")[-200:]
+        theme.set_current_accent("#f97316")
+        assert theme.text_on_accent() == "#111111" and theme.current_accent_text() == ""
+
     def test_gray_sheet_has_no_tinted_neutrals(self):
         keep = set(theme._ACCENT_HEX) | {"#00d464", "#ef4444", "#f59e0b", "#ff8d8d"}
         for c in {c.lower() for c in _HEX.findall(theme.GRAY_STYLESHEET)} - keep:
@@ -216,6 +241,10 @@ def test_background_network_setting_roundtrip(tmp_path, monkeypatch):
     assert mgr.get_settings().background_network is True       # on by default
     mgr.save_settings(AppSettings(background_network=False))
     assert mgr.get_settings().background_network is False
+    assert mgr.get_settings().accent_text_color == ""          # automatic by default
+    mgr.save_settings(AppSettings(accent_color="#f97316", accent_text_color="#ffffff"))
+    s = mgr.get_settings()
+    assert (s.accent_color, s.accent_text_color) == ("#f97316", "#ffffff")
 
 
 # ── picker ───────────────────────────────────────────────────────────────────
@@ -263,3 +292,37 @@ def test_picker_field_sets_color(app):
     dlg._sv._pick(QPointF(200, 0))      # full saturation and brightness
     assert dlg.color() != DEFAULT_ACCENT
     assert dlg._hex.text() == dlg.color()
+
+
+def test_picker_text_colour(app):
+    from src.ui.widgets.color_picker import AccentColorDialog
+    dlg = AccentColorDialog("#f97316", initial_text="")
+    seen = []
+    dlg.textColorChanged.connect(seen.append)
+    assert dlg._text_auto.isChecked() and dlg.text_color() == ""
+    assert "color: #111111" in dlg._sample.styleSheet()          # automatic: dark on orange
+
+    dlg._text_white.click()
+    assert dlg.text_color() == "#ffffff" and seen == ["#ffffff"]
+    assert "color: #ffffff" in dlg._sample.styleSheet()
+
+    dlg._text_hex.setText("#ffe0b2")
+    dlg._text_hex.textEdited.emit("#ffe0b2")
+    assert dlg._text_custom.isChecked() and dlg.text_color() == "#ffe0b2"
+
+    dlg._text_auto.click()
+    assert dlg.text_color() == "" and seen[-1] == ""
+
+    # Cancel previews the starting text colour again.
+    dlg._text_black.click()
+    dlg.reject()
+    assert seen[-1] == ""
+
+
+def test_picker_reset_restores_automatic_text(app):
+    from src.ui.widgets.color_picker import AccentColorDialog
+    dlg = AccentColorDialog("#8b5cf6", initial_text="#111111")
+    assert dlg._text_black.isChecked() and dlg._reset_btn.isEnabled()
+    dlg._reset_btn.click()
+    assert dlg.color() == DEFAULT_ACCENT and dlg.text_color() == ""
+    assert not dlg._reset_btn.isEnabled()

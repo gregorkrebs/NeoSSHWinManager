@@ -52,16 +52,17 @@ LIGHT = Palette(
 
 def palette(theme: str, accent: str | None = None) -> Palette:
     """The palette of *theme* in *accent* (default: the app's current accent)."""
-    from src.ui.theme import DEFAULT_ACCENT, accent_text_color, current_accent, recolor_accent
+    from src.ui.theme import DEFAULT_ACCENT, current_accent, recolor_accent, text_on_accent
     base = {"light": LIGHT, "gray": GRAY, "blue": BLUE}.get(theme, DARK)
     accent = accent or current_accent()
-    if accent == DEFAULT_ACCENT:
+    on_accent = text_on_accent(accent)
+    if accent == DEFAULT_ACCENT and on_accent == base.selection_text:
         return base
     return replace(
         base,
         accent=recolor_accent(base.accent, accent),
         hover=recolor_accent(base.hover, accent),
-        selection_text=accent_text_color(accent),
+        selection_text=on_accent,
     )
 
 

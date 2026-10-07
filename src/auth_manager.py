@@ -447,7 +447,7 @@ class AuthManager:
         """
         with get_connection() as conn:
             row = conn.execute(
-                """SELECT s.theme, s.accent_color, s.language, s.background_network
+                """SELECT s.theme, s.accent_color, s.accent_text_color, s.language, s.background_network
                    FROM users u JOIN app_settings s ON s.user_id = u.id
                    ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
                    LIMIT 1"""
@@ -456,6 +456,7 @@ class AuthManager:
             return {
                 "theme": row["theme"] or "dark",
                 "accent": row["accent_color"] or "",
+                "accent_text": row["accent_text_color"] or "",
                 "language": row["language"] or "en",
                 "background_network": row["background_network"] != 0,
             }
@@ -464,6 +465,7 @@ class AuthManager:
         return {
             "theme": prefs.get("theme", "dark"),
             "accent": "",
+            "accent_text": "",
             "language": prefs.get("language", "en"),
             "background_network": True,
         }
@@ -1271,6 +1273,7 @@ class UserConnectionManager:
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
             sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
             accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
+            accent_text_color=(row["accent_text_color"] or "") if "accent_text_color" in row.keys() else "",
             allow_shared_drive_letters=bool(row["allow_shared_drive_letters"]) if "allow_shared_drive_letters" in row.keys() else False,
             auto_pick_free_drive_letter=bool(row["auto_pick_free_drive_letter"]) if "auto_pick_free_drive_letter" in row.keys() else False,
             background_network=bool(row["background_network"]) if "background_network" in row.keys() else True,
@@ -1285,10 +1288,10 @@ class UserConnectionManager:
                     use_putty, putty_path, terminal_client, auto_login, auto_reconnect, language, theme,
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
-                    sshfs_disable_cache, accent_color,
+                    sshfs_disable_cache, accent_color, accent_text_color,
                     allow_shared_drive_letters, auto_pick_free_drive_letter,
                     background_network, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1310,6 +1313,7 @@ class UserConnectionManager:
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
                      sshfs_disable_cache=excluded.sshfs_disable_cache,
                      accent_color=excluded.accent_color,
+                     accent_text_color=excluded.accent_text_color,
                      allow_shared_drive_letters=excluded.allow_shared_drive_letters,
                      auto_pick_free_drive_letter=excluded.auto_pick_free_drive_letter,
                      background_network=excluded.background_network,
@@ -1327,6 +1331,7 @@ class UserConnectionManager:
                  int(bool(getattr(s, "telemetry_prompt_shown", False))),
                  int(bool(getattr(s, "sshfs_disable_cache", False))),
                  getattr(s, "accent_color", "") or "",
+                 getattr(s, "accent_text_color", "") or "",
                  int(bool(getattr(s, "allow_shared_drive_letters", False))),
                  int(bool(getattr(s, "auto_pick_free_drive_letter", False))),
                  int(bool(getattr(s, "background_network", True))))
