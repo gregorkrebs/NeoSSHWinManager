@@ -311,6 +311,27 @@ class AuthManager:
         return user
 
     @classmethod
+    def sign_in_automatically(cls) -> Optional[AppUser]:
+        """The account the app starts with without a login dialog, if any.
+
+        Single-user mode signs in its account. On the very first start there
+        is no account yet: single-user mode is set up, so nobody has to
+        create an account before using the app; one with a password can be
+        created later in the user management. Returns None when the login
+        dialog is needed: password login is on, or Windows Credential
+        Manager is unavailable on the first start.
+        """
+        user = cls.authenticate_single_user()
+        if user is not None or cls.has_any_users():
+            return user
+        try:
+            return cls.initialize_single_user_mode()
+        except Exception as e:
+            reason = e.key if isinstance(e, SingleUserModeError) else e
+            logger.warning(f"Single-User-Modus beim ersten Start nicht eingerichtet ({reason}); Registrierung wird angezeigt.")
+            return None
+
+    @classmethod
     def enable_single_user_mode(cls) -> AppUser:
         """Switch the signed-in only account to automatic ``default`` login."""
         if not is_keyring_available():

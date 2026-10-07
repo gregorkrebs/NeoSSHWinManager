@@ -12,13 +12,14 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### What changes for you
 
-- **A redesigned login screen.** A cleaner layout with icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
+- **No account to set up at the first start.** A new installation starts right away in single-user mode: the app signs you in automatically. Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
+  - If you would rather sign in with a password, for example because several people use the computer, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
+  - An installation with one account can switch to single-user mode in the same place. The account is then renamed to "default".
+  - In single-user mode, your profile shows how to create an account instead of the password change form, because there is no password to change.
+  - If Windows Credential Manager is not available, the app asks you to create an account as before.
+- **A redesigned login screen.** A cleaner layout with the network of linked nodes from the About window, icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
 - **Pick your language on the login screen.** A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
 - **The login screen looks like your app.** It uses the theme (dark, gray or light), the accent colour and the language of the user who signed in last.
-- **Single-user mode: no password at startup.** If you are the only one using NEO SSH-Win Manager on your Windows account, the app can now sign you in automatically. Its password is then a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
-  - On a new installation, choose "Initial setup (single-user mode)" instead of creating an account.
-  - On an installation with one account, switch it on under User Management → "Application login mode". Your account is renamed to "default"; your connections and settings stay as they are.
-  - To sign in with a password again, choose a username and password in the same place. In single-user mode, your profile shows how to do that instead of the password change form, because there is no password to change.
 - **The login window appears a little sooner.** The main window is now loaded after you have signed in.
 - **The whole interface follows your language.** Some texts stayed in German (or English) whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
 - **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
@@ -62,8 +63,16 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - New column `users.last_login_at`, set by `AuthManager.record_login()` after every sign-in in `main.py`, including single-user mode. `AuthManager.login_screen_appearance()` returns theme, accent colour and language of the user who signed in last; accounts from before the column count as never signed in, so the oldest account decides until someone signs in. Before the first account exists, the installer's choices apply. `main.py` applies them before it shows the dialog, and `LoginDialog(theme=…)` passes the theme on to the dialog's title bar. Theme, accent colour and language are stored unencrypted, so no password is needed to read them.
 - The styles are in the dark and light stylesheets; the gray theme derives them as usual. `primaryBtn` and `secondaryBtn` have a `size="large"` variant. The language menu draws its chevron in the theme's icon colour, because the shared chevron uses `currentColor`, which renders black in a stylesheet `url()`.
 - The lockout countdown writes days as "d" instead of the German "T", and keeps running when the language is switched.
+- The network of linked nodes from the About banner moved to `src/ui/node_network.py` (`paint_node_network()`). The banner draws it from there, pixel for pixel as before; the login screen's backdrop draws two copies in the accent colour, offset against each other and running past the window edges beside the header.
 - New README screenshot of the login screen.
 - New tests in `tests/test_login_dialog.py` cover the look of the last user, the installer fallback, the language switch, storing the picked language, the password toggle, the Caps Lock hint and the error box.
+
+#### Single-user mode by default
+
+- `main.py` starts with `AuthManager.sign_in_automatically()`. It signs in single-user mode as before; when no account exists yet, it sets single-user mode up through `initialize_single_user_mode()`, so the first start shows no login dialog. If that fails (Windows Credential Manager unavailable, or the password cannot be stored), it logs why and the registration form appears as before. Installations with password login are not affected.
+- The new account takes the installer's language and theme, like any first account.
+- In the users panel and the profile, single-user mode now talks about creating an account: the button reads "Create account" instead of "Enable multi-user login", in all six languages.
+- New tests in `tests/test_single_user_mode.py` cover the first start with and without Credential Manager, a failed store and an installation with password login.
 
 #### Fixed: texts that bypassed the translations
 

@@ -366,8 +366,9 @@ def main():
     from src.ui.dialogs.login_dialog import LoginDialog
 
     # Single-user mode keeps the app password in Windows Credential Manager
-    # and therefore needs no interactive login.
-    single_user = AuthManager.authenticate_single_user()
+    # and therefore needs no interactive login. It is also how the app starts
+    # the very first time, so nobody has to create an account up front.
+    single_user = AuthManager.sign_in_automatically()
     if single_user:
         Session.login(single_user)
     else:
