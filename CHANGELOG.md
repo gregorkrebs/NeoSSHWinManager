@@ -23,6 +23,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - **The whole interface follows your language.** Some texts stayed in German (or English) whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
 - **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
 - Button texts with "&", such as "Create account & start", no longer lose the "&".
+- **No more small windows flashing up after the login.** While the main window was being built, a small empty window appeared and vanished again for every SFTP host in your list. The automatic reconnect of your drives had nothing to do with it.
 
 Single-user mode comes from the community fork [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user) by notstevy. Thank you!
 
@@ -75,6 +76,12 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - Errors from switching the login mode are raised as `SingleUserModeError` with a translation key instead of English messages. Unexpected errors show a translated sentence with the technical detail in brackets.
 - Adding a user whose name already exists showed SQLite's "UNIQUE constraint failed" text; it now says that the name is taken.
 - `tests/test_ui_translations.py` checks that all languages have the same keys, that every `tr()` key exists, that no live module passes a fixed text to a widget, and that the dialogs, title bar and message boxes show translated texts in English, Spanish and Russian. Three modules that nothing imports any more (`settings_dialog.py`, `add_edit_dialog.py`, `loading_overlay.py`) and the unused `UserManagementDialog` are left out of the text check; a test fails if one of them is used again.
+
+#### Fixed: windows flashing up after the login
+
+- `ConnectionCard._build_ui()` made the SSH button visible before adding it to the card's layout. A widget shown without a parent is a top-level window, so every SFTP card showed a 32×32 window until the layout adopted it a moment later; FTP cards hide the button and were not affected. `setVisible()` now comes after `addWidget()`.
+- Found by logging every window shown (`SetWinEventHook`) while the app started without a console, the way the built exe does, and by recording each widget shown as a window inside the app. The automatic reconnect started `sshfs.exe` and `label` with `CREATE_NO_WINDOW` and showed no window; after the fix, the login, the telemetry question and the main window are the only windows left.
+- `tests/test_no_flashing_windows.py` fails if building a connection card (SFTP, SFTP mounted, FTP) shows any window.
 
 </details>
 
