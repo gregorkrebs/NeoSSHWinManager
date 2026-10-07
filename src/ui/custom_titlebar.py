@@ -102,6 +102,9 @@ class CustomTitleBar(QWidget):
         self._drag_pos  = None   # set on left-press, cleared on release/move
         self.setFixedHeight(self.HEIGHT)
         self.setObjectName("customTitlebar")
+        # Paint the stylesheet background; without it the bar shows the
+        # window colour behind it instead of its own darker frame tone.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self._build(title, version, app_icon)
         self._apply_palette()
 

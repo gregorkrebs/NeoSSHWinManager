@@ -382,6 +382,8 @@ def main():
             Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
         )
         set_current_accent(look["accent"])
+        from src.ui.node_network import set_background_enabled
+        set_background_enabled(look["background_network"])
         app.setStyleSheet(get_stylesheet(look["theme"]))
         login_dlg = LoginDialog(theme=look["theme"])
         if login_dlg.exec() != LoginDialog.DialogCode.Accepted:

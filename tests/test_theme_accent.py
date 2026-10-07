@@ -1,5 +1,6 @@
 """
-tests/test_theme_accent.py – Gray theme, user-chosen accent colour, picker.
+tests/test_theme_accent.py – Gray and black themes, title bar, user-chosen
+accent colour, picker.
 """
 
 import colorsys
@@ -43,6 +44,7 @@ class TestNormalize:
         assert normalize_theme("purple") == "dark"
         assert normalize_theme(None) == "dark"
         assert theme.is_light("light") and not theme.is_light("gray")
+        assert not theme.is_light("blue")
 
 
 # ── stylesheets ──────────────────────────────────────────────────────────────
@@ -104,8 +106,36 @@ class TestStylesheets:
         assert theme.current_accent() == DEFAULT_ACCENT
 
     def test_dark_tone(self):
-        assert theme.dark_tone("dark", "#111822") == "#111822"
+        assert theme.dark_tone("blue", "#111822") == "#111822"
         assert theme.dark_tone("gray", "#111822") == "#252526"
+        assert theme.dark_tone("dark", "#111822") == "#121212"
+
+    def test_dark_is_black_and_blue_is_the_classic_look(self):
+        """Settings from before the black theme stored "dark" for the navy
+        look; they now get black. The navy look lives on as "blue"."""
+        assert theme.normalize_theme("dark") == "dark" and theme.normalize_theme("blue") == "blue"
+        assert "#0d1117" not in build_stylesheet("dark").lower()
+        assert "#0d1117" in build_stylesheet("blue").lower()
+        assert build_stylesheet("dark") == build_stylesheet("dark", DEFAULT_ACCENT)
+        assert theme.THEME_COLORS["dark"]["background"] == "#000000"
+        from src.config import AppSettings
+        assert AppSettings().theme == "dark"
+
+    def test_black_sheet_is_untinted_and_darker_than_gray(self):
+        keep = set(theme._ACCENT_HEX) | {"#00d464", "#ef4444", "#f59e0b", "#ff8d8d"}
+        for c in {c.lower() for c in _HEX.findall(theme.BLACK_STYLESHEET)} - keep:
+            r, g, b = (int(c[i:i + 2], 16) / 255 for i in (1, 3, 5))
+            assert r == g == b, c        # a classic dark mode: no tint at all
+        for dark in ("#0a0a0f", "#0d0d12", "#0e0e19", "#111822", "#14141f"):
+            assert theme._luminance(theme._BLACK_MAP[dark]) < theme._luminance(theme._GRAY_MAP[dark])
+        # the frame is black
+        assert theme._BLACK_MAP["#0a0a0f"] == theme._BLACK_MAP["#0e0e19"] == "#000000"
+
+    def test_every_dark_neutral_has_a_black_mapping(self):
+        keep = set(theme._ACCENT_HEX) | {"#00d464", "#ef4444", "#f59e0b", "#ff8d8d",
+                                         "#ffffff", "#f1f1f1"}
+        missing = {c.lower() for c in _HEX.findall(theme.STYLESHEET)} - keep - set(theme._BLACK_MAP)
+        assert not missing
 
 
 class TestPalettes:
@@ -113,14 +143,38 @@ class TestPalettes:
         from src.filebrowser.ui import style
         assert style.palette("dark") is style.DARK
         assert style.palette("gray") is style.GRAY
+        assert style.palette("blue") is style.BLUE
+        assert style.DARK.bg == "#000000"
         p = style.palette("light", "#ff7a00")
         assert p.accent == "#ff7a00" and "255, 122, 0" in p.hover
         theme.set_current_accent("#ff7a00")
         assert style.palette("gray").accent == "#ff7a00"
 
     def test_titlebar_palette(self):
-        from src.ui.titlebar_theme import GRAY_PALETTE, get_palette
+        from src.ui.titlebar_theme import BLUE_PALETTE, DARK_PALETTE, GRAY_PALETTE, get_palette
         assert get_palette("gray") is GRAY_PALETTE
+        assert get_palette("blue") is BLUE_PALETTE
+        assert get_palette("dark") is DARK_PALETTE and DARK_PALETTE.bg == "#000000"
+
+    @pytest.mark.parametrize("name", THEMES)
+    def test_title_bar_takes_the_darker_frame_tone(self, name):
+        """The title bar has the sidebar's colour, the darker tone of the
+        window frame, not the lighter window colour behind it."""
+        from src.ui.titlebar_theme import get_palette
+        sheet = build_stylesheet(name)
+        sidebar = re.search(r"#sidebar \{\s*background-color: (#[0-9a-fA-F]{6})", sheet).group(1)
+        window = re.search(r"#fwOuter \{\s*background-color: (#[0-9a-fA-F]{6})", sheet).group(1)
+        assert get_palette(name).bg.lower() == sidebar.lower()
+        assert theme._luminance(sidebar.lower()) <= theme._luminance(window.lower())
+
+    def test_title_bar_paints_its_own_background(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])  # noqa: F841 – keep it alive
+        from src.ui.custom_titlebar import CustomTitleBar
+        bar = CustomTitleBar("NEO SSH-Win Manager", theme="gray")
+        assert bar.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
@@ -144,6 +198,24 @@ def test_accent_color_roundtrip(tmp_path, monkeypatch):
     mgr.save_settings(AppSettings(theme="gray", accent_color="#ff7a00"))
     s = mgr.get_settings()
     assert (s.theme, s.accent_color) == ("gray", "#ff7a00")
+
+
+def test_background_network_setting_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from src.auth_manager import AppUser, UserConnectionManager
+    from src.config import AppSettings
+    from src.database import get_connection, init_db
+
+    init_db()
+    uid = str(uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO users (id, username, pw_hash, pw_salt, enc_key_enc, enc_key_iv)"
+            " VALUES (?, 'tester', 'x', 'x', 'x', 'x')", (uid,))
+    mgr = UserConnectionManager(AppUser(id=uid, username="tester", is_admin=False))
+    assert mgr.get_settings().background_network is True       # on by default
+    mgr.save_settings(AppSettings(background_network=False))
+    assert mgr.get_settings().background_network is False
 
 
 # ── picker ───────────────────────────────────────────────────────────────────

@@ -104,11 +104,17 @@ es.ThemeLabel=Apariencia:
 ru.ThemeLabel=Внешний вид:
 nl.ThemeLabel=Uiterlijk:
 
-en.ThemeDark=Dark
-de.ThemeDark=Dunkel
-es.ThemeDark=Oscuro
-ru.ThemeDark=Тёмная
-nl.ThemeDark=Donker
+en.ThemeDark=Black
+de.ThemeDark=Schwarz
+es.ThemeDark=Negro
+ru.ThemeDark=Чёрная
+nl.ThemeDark=Zwart
+
+en.ThemeBlue=Blue (classic)
+de.ThemeBlue=Blau (classic)
+es.ThemeBlue=Azul (clásico)
+ru.ThemeBlue=Синяя (классическая)
+nl.ThemeBlue=Blauw (klassiek)
 
 en.ThemeGray=Gray
 de.ThemeGray=Grau
@@ -294,6 +300,7 @@ begin
   ThemeCombo.Top := ThemeLabel.Top + ThemeLabel.Height + ScaleY(4);
   ThemeCombo.Width := AppPrefsPage.SurfaceWidth;
   ThemeCombo.Items.Add(CustomMessage('ThemeDark'));
+  ThemeCombo.Items.Add(CustomMessage('ThemeBlue'));
   ThemeCombo.Items.Add(CustomMessage('ThemeGray'));
   ThemeCombo.Items.Add(CustomMessage('ThemeLight'));
   ThemeCombo.ItemIndex := 0;
@@ -328,8 +335,9 @@ begin
     PrefsFile := PrefsDir + '\install_prefs.json';
 
     case ThemeCombo.ItemIndex of
-      1: ThemeCode := 'gray';
-      2: ThemeCode := 'light';
+      1: ThemeCode := 'blue';
+      2: ThemeCode := 'gray';
+      3: ThemeCode := 'light';
     else
       ThemeCode := 'dark';
     end;

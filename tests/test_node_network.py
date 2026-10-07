@@ -115,3 +115,36 @@ def test_too_small_to_draw(app):
     host.resize(60, 60)
     img = _painted(NodeFieldBackdrop(host, "users"))
     assert all(img.pixelColor(x, y).alpha() == 0 for y in range(60) for x in range(60))
+
+
+def test_a_deleted_quiet_widget_is_forgotten(app):
+    """The empty overview's text goes when a connection is opened; the
+    backdrop must not trip over it."""
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QLabel, QWidget
+    from src.ui.node_network import NodeFieldBackdrop
+    host = QWidget()
+    host.resize(800, 600)
+    text = QLabel("Ready for the next step", host)
+    host.show()
+    backdrop = NodeFieldBackdrop(host, "overview", quiet=text)
+    sip.delete(text)
+    assert _painted(backdrop) is not None
+    assert backdrop._quiet is None
+
+
+def test_switched_off_in_the_settings(app):
+    from PyQt6.QtWidgets import QWidget
+    from src.ui import node_network
+    host = QWidget()
+    host.resize(800, 600)
+    host.show()
+    backdrop = node_network.NodeFieldBackdrop(host, "users")
+    try:
+        node_network.set_background_enabled(False)
+        img = _painted(backdrop)
+        assert all(img.pixelColor(x, y).alpha() == 0 for y in range(0, 600, 4) for x in range(0, 800, 4))
+    finally:
+        node_network.set_background_enabled(True)
+    img = _painted(backdrop)
+    assert any(img.pixelColor(x, y).alpha() for y in range(0, 600, 4) for x in range(0, 800, 4))

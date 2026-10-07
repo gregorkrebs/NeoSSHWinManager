@@ -42,7 +42,7 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
-from src.ui.node_network import NodeFieldBackdrop
+from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
 from src.ui.theme import (
     DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
     normalize_hex,
@@ -86,8 +86,26 @@ try:
 except Exception:
     APP_VERSION = "?"
 
+# Height of the header rows on both sides of the splitter: 52 px
+# (#connectionsHeader and #rightPanelHeader in the stylesheet) plus their
+# 1 px bottom border.
+_HEADER_HEIGHT = 53
+
+
 class _PillHandle(QSplitterHandle):
-    """Splitter handle that paints a centred pill indicator."""
+    """Splitter handle that paints a centred pill indicator. A band at the
+    top carries the header row across, so the two headers read as one bar
+    instead of showing the window colour in the gap between them."""
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._band = QWidget(self)
+        self._band.setObjectName("splitterHeaderBand")
+        self._band.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._band.setGeometry(0, 0, self.width(), _HEADER_HEIGHT)
+
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -95,8 +113,10 @@ class _PillHandle(QSplitterHandle):
         pill_w, pill_h = 4, 36
         x = (w - pill_w) // 2
         y = (h - pill_h) // 2
+        pill = QColor(accent_tone("#00b4d8"))
+        pill.setAlpha(55)
         painter.setPen(QPen(QColor(0, 0, 0, 0)))
-        painter.setBrush(QBrush(QColor(0, 180, 216, 55)))
+        painter.setBrush(QBrush(pill))
         painter.drawRoundedRect(x, y, pill_w, pill_h, pill_w, pill_w)
         painter.end()
 
@@ -254,6 +274,7 @@ class MainWindow(FramelessMainWindow):
         from src.ui.theme import set_current_accent
         _s = self._mgr.get_settings()
         set_current_accent(getattr(_s, "accent_color", ""))
+        set_background_enabled(getattr(_s, "background_network", True))
         # (theme, accent) the widgets were last painted in, see _apply_settings_object()
         self._applied_look = (_s.theme or "dark", current_accent(),
                               bool(getattr(_s, "allow_shared_drive_letters", False)))
@@ -691,9 +712,11 @@ class MainWindow(FramelessMainWindow):
             self._sb_users_btn = self._sidebar_btn("users", self._on_user_management)
             v.addWidget(self._sb_users_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # Profile button for all users (password change, etc.)
+        # Profile button for all users (password change, etc.); not in
+        # single-user mode, where there is no password to change.
         self._sb_profile_btn = self._sidebar_btn("key", self._on_profile)
         v.addWidget(self._sb_profile_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._sync_profile_btn()
 
         # File browser (SFTP/FTP) for all hosts
         self._sb_files_btn = self._sidebar_btn(_SB_FILES_ICON, self._on_file_browser)
@@ -748,7 +771,10 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("connectionsHeader")
         header_h = QHBoxLayout(header)
-        header_h.setContentsMargins(18, 12, 18, 12)
+        # No vertical margins: the row is 52 px high and its 30-32 px
+        # controls are centred in it. With 12 px above and below they did
+        # not fit, sank onto the bottom border and cut off the badge.
+        header_h.setContentsMargins(18, 0, 18, 0)
         header_h.setSpacing(8)
 
         title_wrap = QWidget()
@@ -844,7 +870,7 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("rightPanelHeader")
         hh = QHBoxLayout(header)
-        hh.setContentsMargins(18, 12, 18, 12)
+        hh.setContentsMargins(18, 0, 18, 0)   # 32 px buttons centred in 52 px
         hh.setSpacing(8)
 
         title_wrap = QWidget()
@@ -988,6 +1014,10 @@ class MainWindow(FramelessMainWindow):
         self._rp_layout.setSpacing(0)
         self._rp_scroll.setWidget(self._rp_content)
         v.addWidget(self._rp_scroll, stretch=1)
+        # Behind the empty overview and a connection's details; stays put
+        # while the details scroll over it.
+        self._rp_backdrop = NodeFieldBackdrop(self._rp_scroll.viewport())
+        self._rp_backdrop.hide()
 
         # Terminal area (tab bar + stacked panels + end-session bar)
         # Hidden by default; shown only in _PANEL_TERMINAL mode.
@@ -1296,6 +1326,7 @@ class MainWindow(FramelessMainWindow):
 
     def _clear_right_panel_content(self):
         """Remove all widgets from the scrollable content area."""
+        self._rp_backdrop.hide()
         while self._rp_layout.count():
             item = self._rp_layout.takeAt(0)
             w = item.widget()
@@ -1400,8 +1431,8 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
         v.addStretch()
-        NodeFieldBackdrop(body, "overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._rp_layout.addWidget(body, stretch=1)
+        self._rp_backdrop.show_field("overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1624,6 +1655,8 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._rp_layout.addWidget(body)
+        # every connection gets a network of its own behind its details
+        self._rp_backdrop.show_field(f"host:{conn.id}", is_light(_theme))
 
     def _build_status_row(self, conn: Connection, is_mounted: bool, theme: str) -> QHBoxLayout:
         """Status pill + folder buttons, shared by the info panel and the edit form.
@@ -2400,8 +2433,15 @@ class MainWindow(FramelessMainWindow):
 
     def _rebuild_users_panel(self):
         """Rebuild the open users panel (_open_users_panel would close it)."""
+        self._sync_profile_btn()
         self._panel_mode = None
         self._open_users_panel()
+
+    def _sync_profile_btn(self):
+        """The profile only offers a password change, which single-user mode
+        does not have: hide its sidebar button there."""
+        from src.auth_manager import AuthManager
+        self._sb_profile_btn.setVisible(not AuthManager.single_user_mode_enabled())
 
     def _enable_single_user_mode(self):
         from src.auth_manager import AuthManager, SingleUserModeError
@@ -3331,6 +3371,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_theme = NoWheelComboBox()
         self._sf_theme.setFixedWidth(180)
         self._sf_theme.addItem(tr("settings.theme.dark"), "dark")
+        self._sf_theme.addItem(tr("settings.theme.blue"), "blue")
         self._sf_theme.addItem(tr("settings.theme.gray"), "gray")
         self._sf_theme.addItem(tr("settings.theme.light"), "light")
         idx = self._sf_theme.findData(getattr(s, 'theme', 'dark') or 'dark')
@@ -3362,10 +3403,15 @@ class MainWindow(FramelessMainWindow):
         accent_hl.addWidget(self._sf_accent_btn)
         self._sf_update_accent_ui()
 
+        self._sf_network = QCheckBox(tr("settings.background_network"))
+        self._sf_network.setChecked(getattr(s, "background_network", True))
+
         app_card, app_vl = _group_card()
         app_vl.addWidget(_row_combo(tr("settings.theme.label"), self._sf_theme))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.accent.label"), accent_box))
+        app_vl.addWidget(_inner_sep())
+        app_vl.addWidget(_row_check(self._sf_network, tr("settings.background_network.hint")))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.language.label"), self._sf_lang))
         app_vl.addWidget(_hint_row(tr("settings.language.restart")))
@@ -4027,6 +4073,7 @@ class MainWindow(FramelessMainWindow):
             "auto_pick_letter": self._safe_bool_checked("_sf_auto_pick_letter", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
             "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
+            "network": self._safe_bool_checked("_sf_network", True),
             "lang": self._safe_current_data("_sf_lang", "en"),
             "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
             "term_putty": self._safe_bool_checked("_sf_term_putty", False),
@@ -4423,6 +4470,7 @@ class MainWindow(FramelessMainWindow):
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
             accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
+            background_network=self._sf_network.isChecked(),
             allow_shared_drive_letters=self._sf_shared_letters.isChecked(),
             auto_pick_free_drive_letter=(self._sf_shared_letters.isChecked()
                                          and self._sf_auto_pick_letter.isChecked()),
@@ -4619,6 +4667,8 @@ class MainWindow(FramelessMainWindow):
             self._badge_lbl.setText(f"{active_str} · {mount_str}")
         else:
             self._badge_lbl.setText("")
+        # without connections the badge would be an empty pill
+        self._badge_lbl.setVisible(bool(total))
         self._mount_count_lbl.setText(
             tr("status.mounted_short", n=mounted) if mounted else tr("status.mounted_none")
         )
@@ -5342,6 +5392,9 @@ class MainWindow(FramelessMainWindow):
         from src.ui.theme import build_stylesheet, set_current_accent
         theme = s.theme or "dark"
         set_current_accent(getattr(s, "accent_color", ""))
+        set_background_enabled(getattr(s, "background_network", True))
+        self._rp_backdrop.update()
+        self._fs_backdrop.update()
         QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls

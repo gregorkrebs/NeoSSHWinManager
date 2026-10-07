@@ -15,6 +15,20 @@ from PyQt6.QtWidgets import QWidget
 
 from src.ui.theme import current_accent
 
+# Whether the networks in the background are shown at all (a setting; the
+# About banner keeps its network either way).
+_background_enabled = True
+
+
+def set_background_enabled(on: bool) -> None:
+    global _background_enabled
+    _background_enabled = bool(on)
+
+
+def background_enabled() -> bool:
+    return _background_enabled
+
+
 # Node positions as fractions of the area, and the links between them. The
 # network fills the trailing third of the area.
 NODES = ((0.73, 0.11), (0.85, 0.19), (0.97, 0.07), (0.985, 0.52),
@@ -291,9 +305,9 @@ class NodeFieldBackdrop(QWidget):
         self.lower()
         self.show()       # a child added to a shown host would stay hidden
 
-    def show_field(self, seed: str, light: bool) -> None:
-        """Show the field of page *seed*."""
-        self._seed, self._light, self._cache = seed, light, None
+    def show_field(self, seed: str, light: bool, quiet: QWidget | None = None) -> None:
+        """Show the field of page *seed*; *quiet* as in the constructor."""
+        self._seed, self._light, self._quiet, self._cache = seed, light, quiet, None
         self.setGeometry(self._host.rect())
         self.lower()
         self.show()
@@ -312,14 +326,18 @@ class NodeFieldBackdrop(QWidget):
 
     def _quiet_rect(self) -> QRectF | None:
         quiet = self._quiet
-        if quiet is None or not quiet.isVisible():
+        try:
+            if quiet is None or not quiet.isVisible():
+                return None
+        except RuntimeError:        # deleted with the page it belonged to
+            self._quiet = None
             return None
         top_left = self.mapFromGlobal(quiet.mapToGlobal(QPoint(0, 0)))
         return QRectF(top_left.x(), top_left.y(), quiet.width(), quiet.height()).adjusted(-24, -24, 24, 24)
 
     def paintEvent(self, event):  # noqa: N802
         w, h = self.width(), self.height()
-        if w < 80 or h < 80:
+        if w < 80 or h < 80 or not _background_enabled:
             return
         nodes, links, triangles = self._field()
         quiet = self._quiet_rect()

@@ -437,7 +437,8 @@ class AuthManager:
 
     @staticmethod
     def login_screen_appearance() -> dict:
-        """Theme, accent colour and language for the login screen.
+        """Theme, accent colour, language and background network for the
+        login screen.
 
         They are those of the user who signed in last (accounts from before
         last_login_at existed count as never signed in; then the oldest
@@ -446,7 +447,7 @@ class AuthManager:
         """
         with get_connection() as conn:
             row = conn.execute(
-                """SELECT s.theme, s.accent_color, s.language
+                """SELECT s.theme, s.accent_color, s.language, s.background_network
                    FROM users u JOIN app_settings s ON s.user_id = u.id
                    ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
                    LIMIT 1"""
@@ -456,6 +457,7 @@ class AuthManager:
                 "theme": row["theme"] or "dark",
                 "accent": row["accent_color"] or "",
                 "language": row["language"] or "en",
+                "background_network": row["background_network"] != 0,
             }
         from src.config import read_install_prefs
         prefs = read_install_prefs()
@@ -463,6 +465,7 @@ class AuthManager:
             "theme": prefs.get("theme", "dark"),
             "accent": "",
             "language": prefs.get("language", "en"),
+            "background_network": True,
         }
 
     @staticmethod
@@ -1270,6 +1273,7 @@ class UserConnectionManager:
             accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
             allow_shared_drive_letters=bool(row["allow_shared_drive_letters"]) if "allow_shared_drive_letters" in row.keys() else False,
             auto_pick_free_drive_letter=bool(row["auto_pick_free_drive_letter"]) if "auto_pick_free_drive_letter" in row.keys() else False,
+            background_network=bool(row["background_network"]) if "background_network" in row.keys() else True,
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -1283,8 +1287,8 @@ class UserConnectionManager:
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
                     sshfs_disable_cache, accent_color,
                     allow_shared_drive_letters, auto_pick_free_drive_letter,
-                    updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                    background_network, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1308,6 +1312,7 @@ class UserConnectionManager:
                      accent_color=excluded.accent_color,
                      allow_shared_drive_letters=excluded.allow_shared_drive_letters,
                      auto_pick_free_drive_letter=excluded.auto_pick_free_drive_letter,
+                     background_network=excluded.background_network,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
@@ -1323,7 +1328,8 @@ class UserConnectionManager:
                  int(bool(getattr(s, "sshfs_disable_cache", False))),
                  getattr(s, "accent_color", "") or "",
                  int(bool(getattr(s, "allow_shared_drive_letters", False))),
-                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))))
+                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))),
+                 int(bool(getattr(s, "background_network", True))))
             )
 
     # Backwards-compatible alias used by main.py
