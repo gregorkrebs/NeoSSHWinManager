@@ -42,7 +42,7 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
-from src.ui.node_network import NodeNetworkFill
+from src.ui.node_network import NodeFieldBackdrop
 from src.ui.theme import (
     DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
     normalize_hex,
@@ -1159,6 +1159,10 @@ class MainWindow(FramelessMainWindow):
         self._fs_layout.setSpacing(0)
         self._fs_scroll.setWidget(self._fs_content)
         v.addWidget(self._fs_scroll, stretch=1)
+        # Behind the user management and the profile; stays put while the
+        # cards scroll over it.
+        self._fs_backdrop = NodeFieldBackdrop(self._fs_scroll.viewport())
+        self._fs_backdrop.hide()
 
         self._fs_btn_bar = QWidget()
         self._fs_btn_bar.setObjectName("rpBtnBar")
@@ -1182,6 +1186,7 @@ class MainWindow(FramelessMainWindow):
         return panel
 
     def _clear_fs_content(self):
+        self._fs_backdrop.hide()
         while self._fs_layout.count():
             item = self._fs_layout.takeAt(0)
             w = item.widget()
@@ -1369,8 +1374,7 @@ class MainWindow(FramelessMainWindow):
         v = QVBoxLayout(body)
         v.setContentsMargins(18, 18, 18, 18)
         v.setSpacing(12)
-        light = is_light(self._mgr.get_settings().theme)
-        v.addWidget(NodeNetworkFill(light, ("top",)), 1)
+        v.addStretch()
 
         copy = QWidget()
         copy.setObjectName("rightPanelPlaceholderCopy")
@@ -1395,7 +1399,8 @@ class MainWindow(FramelessMainWindow):
 
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        v.addWidget(NodeNetworkFill(light, ("bottom",)), 1)
+        v.addStretch()
+        NodeFieldBackdrop(body, "overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._rp_layout.addWidget(body, stretch=1)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
@@ -1902,6 +1907,7 @@ class MainWindow(FramelessMainWindow):
 
         _theme = self._mgr.get_settings().theme or "dark"
         _is_light = (_theme == "light")
+        self._fs_backdrop.show_field("profile", _is_light)
         _inp_bg    = "#ffffff"  if _is_light else dark_tone(_theme, "#0d1117")
         _inp_bdr   = "#c0cad6" if _is_light else dark_tone(_theme, "#30363d")
         _inp_fg    = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
@@ -1992,7 +1998,7 @@ class MainWindow(FramelessMainWindow):
             su_hint.setStyleSheet(f"color: {_lbl_muted}; font-size: 12px;")
             su_l.addWidget(su_hint)
             v.addWidget(su_card)
-            v.addWidget(NodeNetworkFill(_is_light), 1)
+            v.addStretch()
             self._fs_layout.addWidget(body)
             return
 
@@ -2058,7 +2064,7 @@ class MainWindow(FramelessMainWindow):
         pw_l.addWidget(save_btn)
 
         v.addWidget(pw_card)
-        v.addWidget(NodeNetworkFill(_is_light), 1)
+        v.addStretch()
 
         self._fs_layout.addWidget(body)
 
@@ -2136,6 +2142,7 @@ class MainWindow(FramelessMainWindow):
         users = AuthManager.list_users()
         current_user = Session.current()
         current_id = current_user.id if current_user else None
+        self._fs_backdrop.show_field("users", is_light(self._mgr.get_settings().theme))
         current_username = current_user.username if current_user else ""
         with get_connection() as conn:
             rows = conn.execute(
@@ -2240,7 +2247,7 @@ class MainWindow(FramelessMainWindow):
 
             # A single account: no user list, no "create user" form
             v.addWidget(mode_card)
-            v.addWidget(NodeNetworkFill(is_light(self._mgr.get_settings().theme)), 1)
+            v.addStretch()
             self._fs_layout.addWidget(body, stretch=1)
             return
 
@@ -2388,7 +2395,7 @@ class MainWindow(FramelessMainWindow):
         columns.addLayout(right_col, 5)
         v.addLayout(columns)
 
-        v.addWidget(NodeNetworkFill(is_light(self._mgr.get_settings().theme)), 1)
+        v.addStretch()
         self._fs_layout.addWidget(body, stretch=1)
 
     def _rebuild_users_panel(self):
