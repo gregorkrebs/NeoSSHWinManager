@@ -428,6 +428,9 @@ def init_db() -> None:
             cols = [row[1] for row in cursor.fetchall()]
             if "enc_key_kdf" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN enc_key_kdf TEXT NOT NULL DEFAULT 'pbkdf2'")
+            # Zuletzt angemeldet: bestimmt Design und Sprache der Login-Maske
+            if "last_login_at" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
         except Exception:
             pass
 

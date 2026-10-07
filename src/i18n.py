@@ -88,6 +88,17 @@ def available_languages() -> tuple:
     return _SUPPORTED
 
 
+# Each language in its own name, for language pickers
+LANGUAGE_NAMES = {
+    "en": "English",
+    "de": "Deutsch",
+    "es": "Español",
+    "ru": "Русский",
+    "nl": "Nederlands",
+    "ar": "العربية",
+}
+
+
 def is_rtl(lang: str | None = None) -> bool:
     """True if the given (or current) language is written right-to-left."""
     return (_normalize_lang(lang) if lang else _current_lang) in _RTL

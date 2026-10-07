@@ -12,6 +12,9 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### What changes for you
 
+- **A redesigned login screen.** A cleaner layout with icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
+- **Pick your language on the login screen.** A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
+- **The login screen looks like your app.** It uses the theme (dark, gray or light), the accent colour and the language of the user who signed in last.
 - **Single-user mode: no password at startup.** If you are the only one using NEO SSH-Win Manager on your Windows account, the app can now sign you in automatically. Its password is then a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
   - On a new installation, choose "Initial setup (single-user mode)" instead of creating an account.
   - On an installation with one account, switch it on under User Management → "Application login mode". Your account is renamed to "default"; your connections and settings stay as they are.
@@ -50,6 +53,16 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - `Session` is now imported in `main()` before its first use. Before, the import inside the `USERNAME` block made `Session` a local name of `main()`, so starting without a `USERNAME` environment variable raised `UnboundLocalError`.
 - Not adopted, because nothing used them: `AuthManager.set_single_user_mode()` and the strings `login.enable_single`, `login.single_title`, `login.single_username` and `login.single_password`.
 - New tests in `tests/test_single_user_mode.py` cover the first setup, the automatic login, both switches with an existing connection, the rollback when Credential Manager cannot store the password, input checks and the import order in `main.py`.
+
+#### Login screen
+
+- `LoginDialog` is rebuilt: a frame with a soft glow in the accent colour, a card with the form, leading icons in the fields (`QLineEdit.addAction`, new `user.svg` and `eye-off.svg` in the style of the other icons), a show/hide action in password fields, and errors in a box with the `alert-triangle` icon instead of a "⚠" prefix. A Caps Lock hint (`GetKeyState(VK_CAPITAL)`) appears while a password field has the focus. The first-run form puts single-user mode below an "or" divider.
+- A language menu (names from the new `i18n.LANGUAGE_NAMES`, which the settings page now uses too) rebuilds the form in the picked language, keeps what was typed and switches the layout direction for Arabic. A successful login stores the picked language for that user (`AuthManager.set_user_language()`); a registration always stores the language shown.
+- New column `users.last_login_at`, set by `AuthManager.record_login()` after every sign-in in `main.py`, including single-user mode. `AuthManager.login_screen_appearance()` returns theme, accent colour and language of the user who signed in last; accounts from before the column count as never signed in, so the oldest account decides until someone signs in. Before the first account exists, the installer's choices apply. `main.py` applies them before it shows the dialog, and `LoginDialog(theme=…)` passes the theme on to the dialog's title bar. Theme, accent colour and language are stored unencrypted, so no password is needed to read them.
+- The styles are in the dark and light stylesheets; the gray theme derives them as usual. `primaryBtn` and `secondaryBtn` have a `size="large"` variant. The language menu draws its chevron in the theme's icon colour, because the shared chevron uses `currentColor`, which renders black in a stylesheet `url()`.
+- The lockout countdown writes days as "d" instead of the German "T", and keeps running when the language is switched.
+- New README screenshot of the login screen.
+- New tests in `tests/test_login_dialog.py` cover the look of the last user, the installer fallback, the language switch, storing the picked language, the password toggle, the Caps Lock hint and the error box.
 
 #### Fixed: texts that bypassed the translations
 

@@ -47,19 +47,9 @@ from src.ui.theme import (
     normalize_hex,
 )
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
-from src.i18n import tr, current_language, available_languages, set_language, is_rtl
+from src.i18n import tr, current_language, available_languages, set_language, is_rtl, LANGUAGE_NAMES
 from src.channel import display_name
 from PyQt6.QtCore import QThread
-
-
-_LANG_LABELS = {
-    "en": "English",
-    "de": "Deutsch",
-    "es": "Español",
-    "ru": "Русский",
-    "nl": "Nederlands",
-    "ar": "العربية",
-}
 
 
 def _apply_layout_direction() -> None:
@@ -3324,7 +3314,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_lang = NoWheelComboBox()
         self._sf_lang.setFixedWidth(180)
         for code in available_languages():
-            self._sf_lang.addItem(_LANG_LABELS.get(code, code), code)
+            self._sf_lang.addItem(LANGUAGE_NAMES.get(code, code), code)
         idx = self._sf_lang.findData(getattr(s, 'language', 'en') or 'en')
         if idx >= 0:
             self._sf_lang.setCurrentIndex(idx)

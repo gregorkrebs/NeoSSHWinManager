@@ -474,6 +474,112 @@ QPushButton#settingsActionBtn[btn_type="primary"]:hover {
     padding: 4px 10px;
 }
 
+/* ---- Login screen ----------------------------------------- */
+QFrame#loginRoot {
+    background: qradialgradient(cx:0.5, cy:0, radius:0.9, fx:0.5, fy:0,
+        stop:0 rgba(0, 119, 182, 0.26), stop:0.75 rgba(0, 119, 182, 0));
+}
+QFrame#loginCard {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 16px;
+}
+QLabel#loginHeadline {
+    color: #e6edf3;
+    font-size: 22px;
+    font-weight: 700;
+    background: transparent;
+}
+QLabel#loginSubline {
+    color: #8fa4b8;
+    font-size: 13px;
+    background: transparent;
+}
+QLabel#loginFieldLabel {
+    color: #9ab0c5;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+QLineEdit#loginInput {
+    background-color: #0d1117;
+    border: 1px solid #243243;
+    border-radius: 10px;
+    color: #e6edf3;
+    font-size: 14px;
+    padding: 0 6px;
+    min-height: 40px;
+}
+QLineEdit#loginInput:hover {
+    border: 1px solid #36506c;
+}
+QLineEdit#loginInput:focus {
+    border: 1px solid #0077b6;
+    background-color: #0f1720;
+}
+QLineEdit#loginInput:disabled {
+    color: #556070;
+    border: 1px solid #1a2330;
+}
+QComboBox#loginLangCombo {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid #243243;
+    border-radius: 15px;
+    color: #c1cfdd;
+    font-size: 12px;
+    padding: 0 6px 0 10px;
+    min-height: 30px;
+    max-height: 30px;
+}
+QComboBox#loginLangCombo:hover {
+    border: 1px solid #36506c;
+    color: #deebf7;
+}
+QComboBox#loginLangCombo::drop-down { width: 22px; border: none; background: transparent; }
+QComboBox#loginLangCombo::down-arrow { margin-right: 8px; width: 10px; height: 10px; }
+QPushButton#primaryBtn[size="large"] {
+    min-height: 42px;
+    max-height: 42px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+QPushButton#secondaryBtn[size="large"] {
+    min-height: 40px;
+    max-height: 40px;
+    border-radius: 12px;
+}
+QFrame#loginOrLine {
+    background-color: #1f2b3a;
+    min-height: 1px;
+    max-height: 1px;
+}
+QLabel#loginOrLabel {
+    color: #5a6d7e;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}
+QFrame#loginAlert {
+    background-color: rgba(239, 68, 68, 0.10);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 10px;
+}
+QLabel#loginAlertText {
+    color: #ff8d8d;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#loginCapsText {
+    color: #f59e0b;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#loginHint {
+    color: #5a6d7e;
+    font-size: 11px;
+    background: transparent;
+}
+
 QLabel#dialogLink {
     color: #7ddfff;
     font-size: 13px;
@@ -2087,6 +2193,112 @@ QPushButton#settingsActionBtn[btn_type="primary"]:hover {
     border: 1px solid rgba(0, 119, 182, 0.18);
     border-radius: 12px;
     padding: 4px 10px;
+}
+
+/* ---- Login screen ----------------------------------------- */
+QFrame#loginRoot {
+    background: qradialgradient(cx:0.5, cy:0, radius:0.9, fx:0.5, fy:0,
+        stop:0 rgba(0, 119, 182, 0.13), stop:0.75 rgba(0, 119, 182, 0));
+}
+QFrame#loginCard {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 16px;
+}
+QLabel#loginHeadline {
+    color: #1a2332;
+    font-size: 22px;
+    font-weight: 700;
+    background: transparent;
+}
+QLabel#loginSubline {
+    color: #617386;
+    font-size: 13px;
+    background: transparent;
+}
+QLabel#loginFieldLabel {
+    color: #4a5a6a;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+QLineEdit#loginInput {
+    background-color: #f7f9fb;
+    border: 1px solid #c8d0dc;
+    border-radius: 10px;
+    color: #1a2332;
+    font-size: 14px;
+    padding: 0 6px;
+    min-height: 40px;
+}
+QLineEdit#loginInput:hover {
+    border: 1px solid #aec6dd;
+}
+QLineEdit#loginInput:focus {
+    border: 1px solid #0077b6;
+    background-color: #ffffff;
+}
+QLineEdit#loginInput:disabled {
+    color: #9aacbe;
+    border: 1px solid #e2e8ef;
+}
+QComboBox#loginLangCombo {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 15px;
+    color: #2a3a4a;
+    font-size: 12px;
+    padding: 0 6px 0 10px;
+    min-height: 30px;
+    max-height: 30px;
+}
+QComboBox#loginLangCombo:hover {
+    border: 1px solid #aec6dd;
+    color: #1a2332;
+}
+QComboBox#loginLangCombo::drop-down { width: 22px; border: none; background: transparent; }
+QComboBox#loginLangCombo::down-arrow { margin-right: 8px; width: 10px; height: 10px; }
+QPushButton#primaryBtn[size="large"] {
+    min-height: 42px;
+    max-height: 42px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+QPushButton#secondaryBtn[size="large"] {
+    min-height: 40px;
+    max-height: 40px;
+    border-radius: 12px;
+}
+QFrame#loginOrLine {
+    background-color: #dde3ea;
+    min-height: 1px;
+    max-height: 1px;
+}
+QLabel#loginOrLabel {
+    color: #8a99a8;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}
+QFrame#loginAlert {
+    background-color: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 10px;
+}
+QLabel#loginAlertText {
+    color: #b91c1c;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#loginCapsText {
+    color: #b45309;
+    font-size: 11px;
+    background: transparent;
+}
+QLabel#loginHint {
+    color: #7a8a9a;
+    font-size: 11px;
+    background: transparent;
 }
 
 QLabel#dialogLink {

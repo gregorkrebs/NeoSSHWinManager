@@ -394,6 +394,56 @@ class AuthManager:
         Session.login(user)
         return user
 
+    # ------------------------------------------------------------------
+    # Login screen
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def record_login(user_id: str) -> None:
+        """Remember who signed in last; the login screen takes its look from them."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", (user_id,)
+            )
+
+    @staticmethod
+    def set_user_language(user_id: str, language: str) -> None:
+        """Store the language picked on the login screen for this user."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE app_settings SET language = ? WHERE user_id = ?", (language, user_id)
+            )
+
+    @staticmethod
+    def login_screen_appearance() -> dict:
+        """Theme, accent colour and language for the login screen.
+
+        They are those of the user who signed in last (accounts from before
+        last_login_at existed count as never signed in; then the oldest
+        account wins). Before the first account exists, the installer's
+        choices apply. None of these settings is encrypted.
+        """
+        with get_connection() as conn:
+            row = conn.execute(
+                """SELECT s.theme, s.accent_color, s.language
+                   FROM users u JOIN app_settings s ON s.user_id = u.id
+                   ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
+                   LIMIT 1"""
+            ).fetchone()
+        if row:
+            return {
+                "theme": row["theme"] or "dark",
+                "accent": row["accent_color"] or "",
+                "language": row["language"] or "en",
+            }
+        from src.config import read_install_prefs
+        prefs = read_install_prefs()
+        return {
+            "theme": prefs.get("theme", "dark"),
+            "accent": "",
+            "language": prefs.get("language", "en"),
+        }
+
     @staticmethod
     def has_any_users() -> bool:
         with get_connection() as conn:

@@ -45,7 +45,7 @@ Manage multiple SSH connections, mount them with one click, switch languages per
 - **SSH certificate authentication.**
 - **Live remote system info panel** (OS, CPU, RAM, drives, uptime, load, temperature) for Linux and Windows servers.
 - **Multi-user accounts** with encrypted credential storage (SQLite + cryptography), or a **single-user mode** that signs you in automatically with the app password kept in Windows Credential Manager.
-- **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left).
+- **Per-user language** (English, German, Spanish, Russian, Dutch, Arabic — easily extensible; Arabic mirrors the UI right-to-left), selectable right on the login screen. The login screen also takes the theme and accent colour of the user who signed in last.
 - **System tray** with quick mount toggles, minimize to tray.
 - **Auto drive-letter detection** (free letters only) and ghost-drive cleanup.
 - "Start with Windows" and "Auto-reconnect on connection loss" options.
@@ -86,8 +86,8 @@ Manage multiple SSH connections, mount them with one click, switch languages per
   </tr>
   <tr>
     <td align="center">
-      <img src="assets/screenshots/login.png" alt="Per-user login" width="380"/><br/>
-      <sub><b>Per-user login</b></sub>
+      <img src="assets/screenshots/login.png" alt="Login screen with language picker" width="380"/><br/>
+      <sub><b>Login with language picker</b></sub>
     </td>
     <td align="center">
       <img src="assets/screenshots/user_management.png" alt="User management" width="380"/><br/>
