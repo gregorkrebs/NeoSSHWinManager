@@ -1,9 +1,12 @@
 """
 theme.py - Global stylesheets for SSH Win Manager.
 
-Three themes share two hand-written sheets: "dark" (STYLESHEET), "light"
-(LIGHT_STYLESHEET) and "gray", which is derived from the dark sheet by mapping
-its navy-tinted neutrals onto VS Code's gray palette (see _to_gray).
+Four themes share two hand-written sheets. "blue" (STYLESHEET, shown as
+"Blue (classic)") is the original navy look; "dark" (shown as "Black"), a
+classic dark mode, and "gray" are derived from it by mapping its navy-tinted
+neutrals onto plain blacks (see _to_black) or VS Code's gray palette (see
+_to_gray); "light" has a sheet of its own (LIGHT_STYLESHEET). Up to 1.6.1,
+"dark" was the navy look: settings that stored "dark" now show black.
 
 The accent is the default teal DEFAULT_ACCENT plus a family of shades around
 it. A user-chosen accent is applied by moving every one of those shades onto
@@ -21,11 +24,17 @@ _ICON_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
 _CHECKMARK_URL = str(_ICON_DIR / "check.svg").replace("\\", "/")
 _CHEVRON_URL = str(_ICON_DIR / "chevron-down.svg").replace("\\", "/")
 
-THEMES = ("dark", "gray", "light")
+THEMES = ("dark", "blue", "gray", "light")
 DEFAULT_ACCENT = "#0077b6"
 
 THEME_COLORS = {
     "dark": {
+        "background": "#000000",
+        "surface": "#0a0a0a",
+        "text": "#cccccc",
+        "accent": DEFAULT_ACCENT
+    },
+    "blue": {
         "background": "#0d0d12",
         "surface": "#0D1117",
         "text": "#c8d6e5",
@@ -52,7 +61,7 @@ def normalize_theme(theme) -> str:
 
 
 def is_light(theme) -> bool:
-    """True for the light theme; "dark" and "gray" are both dark themes."""
+    """True for the light theme; "dark", "blue" and "gray" are dark themes."""
     return theme == "light"
 
 
@@ -149,10 +158,42 @@ def _luminance(color: str) -> float:
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
 
 
+def _apca_contrast(text: str, background: str) -> float:
+    """Lightness contrast |Lc| of *text* on *background* after APCA
+    (SAPC 0.0.98G), which tracks how readable text looks better than the
+    WCAG 2 ratio, above all on saturated colours."""
+    def y(color):
+        r, g, b = (c / 255 for c in _hex_rgb(color))
+        return 0.2126729 * r ** 2.4 + 0.7151522 * g ** 2.4 + 0.0721750 * b ** 2.4
+
+    def clamp(v):
+        return v if v > 0.022 else v + (0.022 - v) ** 1.414
+
+    yt, yb = clamp(y(text)), clamp(y(background))
+    if abs(yb - yt) < 0.0005:
+        return 0.0
+    if yb > yt:                                  # dark text on a light colour
+        sapc = (yb ** 0.56 - yt ** 0.57) * 1.14
+        return 0.0 if sapc < 0.1 else (sapc - 0.027) * 100
+    sapc = (yb ** 0.65 - yt ** 0.62) * 1.14      # light text on a dark colour
+    return 0.0 if sapc > -0.1 else -(sapc + 0.027) * 100
+
+
+def _wcag_contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 def accent_text_color(accent: str) -> str:
-    """Text colour that stays readable on a button filled with *accent*."""
+    """Text colour that stays readable on a button filled with *accent*,
+    found automatically: white while it reads comfortably there (an APCA
+    contrast of 65 or more, as on blue, violet, red or pink), otherwise
+    white or near-black, whichever has the higher contrast (bright accents
+    such as orange, a vivid green or yellow get dark text)."""
     accent = normalize_hex(accent) or DEFAULT_ACCENT
-    return "#111111" if _luminance(accent) > 0.36 else "#ffffff"
+    if _apca_contrast("#ffffff", accent) >= 65:
+        return "#ffffff"
+    return max(("#ffffff", "#111111"), key=lambda text: _wcag_contrast(text, accent))
 
 
 # Primary buttons are filled with the accent and carry light text; a light
@@ -166,12 +207,15 @@ QPushButton#rpActionBtn[btn_type="primary"] {
 """
 
 _current_accent = DEFAULT_ACCENT
+_current_accent_text = ""       # chosen text colour on the accent; "" = automatic
 
 
-def set_current_accent(accent) -> None:
-    """Set the accent used by get_stylesheet() and accent_tone()."""
-    global _current_accent
+def set_current_accent(accent, text_color="") -> None:
+    """Set the accent used by get_stylesheet() and accent_tone(), and the
+    text colour on it ("" or anything invalid: found automatically)."""
+    global _current_accent, _current_accent_text
     _current_accent = normalize_hex(accent) or DEFAULT_ACCENT
+    _current_accent_text = normalize_hex(text_color) or ""
     # The terminal (terminal_panel.load_session) reads its cursor and
     # selection colour from THEME_COLORS.
     for colors in THEME_COLORS.values():
@@ -182,6 +226,19 @@ def current_accent() -> str:
     return _current_accent
 
 
+def current_accent_text() -> str:
+    """The text colour chosen for the current accent; "" = automatic."""
+    return _current_accent_text
+
+
+def text_on_accent(accent: str | None = None) -> str:
+    """The colour of text on *accent* (default: the current accent): the
+    one the user chose for the current accent, else found automatically."""
+    if accent is None or normalize_hex(accent) == _current_accent:
+        return _current_accent_text or accent_text_color(_current_accent)
+    return accent_text_color(accent)
+
+
 def accent_tone(default_shade: str) -> str:
     """The current accent's version of a shade of the default teal,
     e.g. accent_tone("#00b4d8") for the bright cyan used on icons."""
@@ -189,13 +246,18 @@ def accent_tone(default_shade: str) -> str:
 
 
 @lru_cache(maxsize=16)
-def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT) -> str:
-    """Return the application stylesheet for *theme* in *accent*."""
+def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT, text_color: str = "") -> str:
+    """Return the application stylesheet for *theme* in *accent*, with
+    *text_color* on accent-filled buttons ("" = found automatically)."""
     theme = normalize_theme(theme)
     accent = normalize_hex(accent) or DEFAULT_ACCENT
-    sheet = {"dark": STYLESHEET, "gray": GRAY_STYLESHEET, "light": LIGHT_STYLESHEET}[theme]
+    sheet = {"dark": BLACK_STYLESHEET, "blue": STYLESHEET, "gray": GRAY_STYLESHEET,
+             "light": LIGHT_STYLESHEET}[theme]
     sheet = recolor_accent(sheet, accent)
-    if accent_text_color(accent) != "#ffffff":
+    chosen = normalize_hex(text_color)
+    if chosen:
+        sheet += _ON_ACCENT_RULE % chosen
+    elif accent_text_color(accent) != "#ffffff":
         sheet += _ON_ACCENT_RULE % accent_text_color(accent)
     return (
         sheet.replace("__CHECKMARK_URL__", _CHECKMARK_URL)
@@ -206,7 +268,7 @@ def build_stylesheet(theme: str = "dark", accent: str = DEFAULT_ACCENT) -> str:
 
 def get_stylesheet(theme: str = "dark") -> str:
     """Return the stylesheet for *theme* in the current accent."""
-    return build_stylesheet(normalize_theme(theme), _current_accent)
+    return build_stylesheet(normalize_theme(theme), _current_accent, _current_accent_text)
 
 
 STYLESHEET = """
@@ -215,8 +277,9 @@ STYLESHEET = """
    ============================================================ */
 
 /* ---- Custom Titlebar (dark) ------------------------------- */
+/* The darker tone of the window frame, like the sidebar below it. */
 #customTitlebar {
-    background-color: #0d0d12;
+    background-color: #0a0a0f;
     border-bottom: 1px solid #1a1a2e;
 }
 #customTitlebarTitle {
@@ -1061,7 +1124,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
 #connectionsHeader {
     background-color: #0E0E19;
-    border-bottom: 1px solid #1c2633;
+    border-bottom: 1px solid #1f2b3a;
     min-height: 52px;
     max-height: 52px;
 }
@@ -1097,6 +1160,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 /* ---- Splitter handle ---------------------------------------- */
 #bodySplitter::handle {
     background: transparent;
+}
+/* Carries the header row across the gap between the two panels. */
+#splitterHeaderBand {
+    background-color: #0E0E19;
+    border-bottom: 1px solid #1f2b3a;
 }
 #bodySplitter::handle:hover {
     background: transparent;
@@ -1147,8 +1215,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     color: #8fa4b8;
     font-size: 13px;
     padding: 0;
-    min-height: 45px;
-    max-height: 45px;
+    min-height: 72px;
+}
+
+QPushButton#tipNextBtn {
+    background: transparent;
+    border: none;
+    color: #00b4d8;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+QPushButton#tipNextBtn:hover {
+    background-color: #0d2137;
+    color: #38d4f8;
 }
 
 #rightPanelPlaceholder,
@@ -1233,6 +1314,30 @@ QPushButton#headerActionBtn {
 QPushButton#headerActionBtn:hover {
     background-color: #182232;
     border: 1px solid #31465d;
+}
+
+/* ---- Connection filter ---------------------------------------- */
+QLineEdit#connectionsFilterInput {
+    background-color: #111822;
+    border: 1px solid #1f2b3a;
+    border-radius: 17px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 6px;
+    color: #deebf7;
+    font-size: 13px;
+}
+QLineEdit#connectionsFilterInput:focus {
+    background-color: #111822;
+    border: 1px solid #0077b6;
+}
+#connectionsFilterCount {
+    color: #8fa4b8;
+    font-size: 12px;
+}
+QPushButton#headerActionBtn[active="true"] {
+    background-color: #0f2430;
+    border: 1px solid #0077b6;
 }
 
 /* ---- Groups Filter Dropdown ---------------------------- */
@@ -1345,6 +1450,19 @@ QFrame#rpInfoField QPushButton {
     text-transform: uppercase;
     letter-spacing: 1px;
     padding-top: 4px;
+}
+
+/* ---- Help "?" beside a field ----------------------------------- */
+QPushButton#fieldHelpBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton#fieldHelpBtn:hover {
+    background-color: #182232;
 }
 #rpFieldLabel {
     color: #6f8599;
@@ -1791,6 +1909,40 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #0077b6;
     background-color: #16162a;
 }
+
+/* ---- Stepper: number between round - and + buttons ---------- */
+QFrame#stepper {
+    background-color: #14141f;
+    border: 1px solid #1e1e30;
+    border-radius: 17px;
+}
+QFrame#stepper QSpinBox#stepperValue,
+QFrame#stepper QSpinBox#stepperValue:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #deebf7;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#stepperBtn {
+    background-color: #182232;
+    border: 1px solid #243243;
+    border-radius: 12px;
+    padding: 0;
+}
+QPushButton#stepperBtn:hover {
+    background-color: #0f2430;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:pressed {
+    background-color: #0077b6;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:disabled {
+    background-color: transparent;
+    border: 1px solid #1e1e30;
+}
 QLineEdit::placeholder {
     color: #3f4e5e;
 }
@@ -1963,8 +2115,8 @@ LIGHT_STYLESHEET = """
 
 /* ---- Custom Titlebar (light) ------------------------------ */
 #customTitlebar {
-    background-color: #f0f2f5;
-    border-bottom: 1px solid #d4d8df;
+    background-color: #e4e8ef;
+    border-bottom: 1px solid #c8d0dc;
 }
 #customTitlebarTitle {
     color: #1a2332;
@@ -2768,6 +2920,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 #bodySplitter::handle:hover {
     background-color: #0077b6;
 }
+#splitterHeaderBand {
+    background-color: #edf2f7;
+    border-bottom: 1px solid #d5dde7;
+}
 
 #rightPanel {
     background-color: #f3f6fa;
@@ -2797,8 +2953,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     color: #617386;
     font-size: 13px;
     padding: 0;
-    min-height: 45px;
-    max-height: 45px;
+    min-height: 72px;
+}
+
+QPushButton#tipNextBtn {
+    background: transparent;
+    border: none;
+    color: #0077b6;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+QPushButton#tipNextBtn:hover {
+    background-color: #e8f6fb;
+    color: #005a8a;
 }
 
 #rightPanelPlaceholder,
@@ -2881,6 +3050,30 @@ QPushButton#headerActionBtn {
 QPushButton#headerActionBtn:hover {
     background-color: #edf5fb;
     border: 1px solid #aec6dd;
+}
+
+/* ---- Connection filter (Light) -------------------------------- */
+QLineEdit#connectionsFilterInput {
+    background-color: #ffffff;
+    border: 1px solid #d5dde7;
+    border-radius: 17px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0 6px;
+    color: #1a2332;
+    font-size: 13px;
+}
+QLineEdit#connectionsFilterInput:focus {
+    background-color: #ffffff;
+    border: 1px solid #0077b6;
+}
+#connectionsFilterCount {
+    color: #5a6a7a;
+    font-size: 12px;
+}
+QPushButton#headerActionBtn[active="true"] {
+    background-color: #e0eef8;
+    border: 1px solid #0077b6;
 }
 
 /* ---- Groups Filter Dropdown (Light) -------------------- */
@@ -2977,6 +3170,19 @@ QFrame#rpInfoField QPushButton {
     text-transform: uppercase;
     letter-spacing: 1px;
     padding-top: 4px;
+}
+
+/* ---- Help "?" beside a field (Light) --------------------------- */
+QPushButton#fieldHelpBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton#fieldHelpBtn:hover {
+    background-color: #e2e8f0;
 }
 #rpFieldLabel { color: #000000; font-size: 11px; padding: 6px 0 1px 0; }
 #rpValue {
@@ -3416,6 +3622,40 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border: 1px solid #0077b6;
     background-color: #f5faff;
 }
+
+/* ---- Stepper (Light) ---------------------------------------- */
+QFrame#stepper {
+    background-color: #ffffff;
+    border: 1px solid #c8d0dc;
+    border-radius: 17px;
+}
+QFrame#stepper QSpinBox#stepperValue,
+QFrame#stepper QSpinBox#stepperValue:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #1a2332;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#stepperBtn {
+    background-color: #edf2f7;
+    border: 1px solid #d5dde7;
+    border-radius: 12px;
+    padding: 0;
+}
+QPushButton#stepperBtn:hover {
+    background-color: #e0eef8;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:pressed {
+    background-color: #c7dfef;
+    border: 1px solid #0077b6;
+}
+QPushButton#stepperBtn:disabled {
+    background-color: transparent;
+    border: 1px solid #e4e8ef;
+}
 QLineEdit::placeholder { color: #9aacbe; }
 QComboBox::drop-down { border: none; width: 30px; }
 QComboBox::down-arrow {
@@ -3652,7 +3892,88 @@ def _to_gray(sheet: str) -> str:
 GRAY_STYLESHEET = _to_gray(STYLESHEET)
 
 
+# ── Black theme (id "dark") ────────────────────────────────────────────────
+# A classic dark mode: the navy sheet on plain, untinted blacks and grays,
+# darker than the gray theme. The frame (title bar, sidebar, headers, status
+# bar) is black, the content a shade above it. Accent shades, accent tints
+# and the semantic colours stay as in the dark sheet.
+
+_BLACK_MAP = {
+    # window, sidebar, headers, status bar
+    "#0a0a0f": "#000000", "#0d0d12": "#0a0a0a", "#0a0f15": "#000000",
+    "#0d1117": "#0a0a0a", "#0f1218": "#0a0a0a", "#0e0e19": "#000000",
+    "#0f0f1a": "#0a0a0a",
+    # cards, panels, menus
+    "#0d1720": "#161616", "#0f1720": "#121212", "#13131e": "#121212",
+    "#111820": "#121212", "#111822": "#121212", "#101925": "#181818",
+    "#161b22": "#151515",
+    # inputs and buttons
+    "#14141f": "#1a1a1a", "#141d28": "#1a1a1a", "#16162a": "#1a1a1a",
+    # hover and selection fills
+    "#16202c": "#1c1c1c", "#182232": "#262626", "#192433": "#2a2a2a",
+    "#1a1a2e": "#1c1c1c", "#1a2330": "#1c1c1c", "#1e1e2e": "#1c1c1c",
+    # borders
+    "#1c2633": "#1c1c1c", "#1a2738": "#222222", "#1e1e30": "#262626",
+    "#21262d": "#262626", "#1f2b3a": "#262626", "#243243": "#303030",
+    "#2a2a4a": "#303030", "#2f4358": "#3d3d3d", "#31465d": "#424242",
+    "#3a5068": "#525252", "#36506c": "#525252",
+    # muted / disabled text and icons
+    "#2a3a4a": "#4a4a4a", "#3a3a4a": "#5a5a5a", "#3a4a5a": "#5a5a5a",
+    "#3f4e5e": "#6e6e6e", "#556070": "#858585", "#5a6d7e": "#8b8b8b",
+    "#607489": "#8b8b8b", "#6a7a8a": "#969696", "#6f8599": "#969696",
+    "#8b949e": "#9d9d9d", "#8fa4b8": "#9d9d9d", "#9ab0c5": "#b0b0b0",
+    "#aab4c4": "#b5b5b5",
+    # text
+    "#c1cfdd": "#c5c5c5", "#c8d6e5": "#d0d0d0", "#d8e4f0": "#d8d8d8",
+    "#e4eaf0": "#e2e2e2", "#deebf7": "#e2e2e2", "#e6edf3": "#e2e2e2",
+    "#edf4fb": "#ececec",
+}
+_BLACK_RGBA = {
+    (8, 12, 18): (0, 0, 0),             # loading overlays
+    (17, 24, 34): (18, 18, 18),         # loading cards
+    (170, 180, 196): (170, 170, 170),   # scrollbar handle
+    (106, 122, 138): (128, 128, 128),   # "+n" group pill
+    (96, 116, 137): (110, 110, 110),    # connections badge border
+}
+
+
+def _neutral_black(color: str) -> str:
+    """Fallback for a dark-sheet colour missing from _BLACK_MAP."""
+    h, l, s = _hls(_hex_rgb(color))
+    if s > 0.5:                 # a real colour, not a tinted neutral
+        return color
+    if l < 0.2:                 # backgrounds sink towards black
+        l *= 0.55
+    v = round(l * 255)
+    return "#%02x%02x%02x" % (v, v, v)
+
+
+def _to_black(sheet: str) -> str:
+    def sub(m):
+        if m.group(1) is None:
+            c = m.group(0).lower()
+            if c in _BLACK_MAP:
+                return _BLACK_MAP[c]
+            if c in _ACCENT_SET:
+                return m.group(0)
+            return _neutral_black(c)
+        rgb = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if rgb in _BLACK_RGBA:
+            return "rgba(%d, %d, %d," % _BLACK_RGBA[rgb]
+        return m.group(0)
+
+    return _COLOR_RE.sub(sub, sheet)
+
+
+BLACK_STYLESHEET = _to_black(STYLESHEET)
+
+
 def dark_tone(theme: str, color: str) -> str:
-    """A colour picked for the dark theme as *theme* shows it: the gray theme
-    maps it onto its grays. For widgets that paint colours outside the QSS."""
-    return _to_gray(color) if theme == "gray" else color
+    """A colour picked for the navy sheet as *theme* shows it: the black
+    ("dark") and gray themes map it onto their neutrals. For widgets that
+    paint colours outside the QSS."""
+    if theme == "gray":
+        return _to_gray(color)
+    if theme == "blue":
+        return color
+    return _to_black(color)

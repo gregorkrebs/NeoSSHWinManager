@@ -24,7 +24,7 @@ from src.ui.dialog_utils import match_parent_height, make_maximize_button
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, svg_file
-from src.ui.node_network import paint_node_network
+from src.ui.node_network import background_enabled, paint_node_network
 from src.ui.theme import current_accent, dark_tone, is_light, normalize_theme
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import (
@@ -59,6 +59,8 @@ class _LoginBackdrop(QFrame):
 
     def paintEvent(self, event):  # noqa: N802
         super().paintEvent(event)
+        if not background_enabled():
+            return
         card_top = self._card.geometry().top() if self._card is not None else self.height() // 2
         w = self.width()
         color = QColor(current_accent())

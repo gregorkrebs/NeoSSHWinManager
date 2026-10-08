@@ -25,7 +25,7 @@ from src.ui.dialog_utils import dialog_icon, tint_dialog_icon
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap
 from src.ui.node_network import paint_node_network
-from src.ui.theme import accent_text_color, accent_tone, current_accent, is_light
+from src.ui.theme import accent_tone, current_accent, is_light, text_on_accent
 from src.ui.widgets.no_wheel import NoWheelScrollArea
 from src.i18n import current_language, tr
 
@@ -169,7 +169,7 @@ class _Banner(QFrame):
         self.apply_colors()
 
     def apply_colors(self) -> None:
-        on = QColor(accent_text_color(current_accent()))
+        on = QColor(text_on_accent())
         r, g, b = on.red(), on.green(), on.blue()
         self._name.setStyleSheet(
             f"color: rgb({r},{g},{b}); font-size: 21px; font-weight: 700; background: transparent;")
@@ -205,7 +205,7 @@ class _Banner(QFrame):
         # The text sits on the leading side, so the network goes to the other.
         rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
         paint_node_network(p, QRectF(0, 0, rect.width(), rect.height()),
-                           QColor(accent_text_color(current_accent())), mirrored=rtl)
+                           QColor(text_on_accent()), mirrored=rtl)
         p.end()
 
 

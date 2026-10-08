@@ -437,7 +437,8 @@ class AuthManager:
 
     @staticmethod
     def login_screen_appearance() -> dict:
-        """Theme, accent colour and language for the login screen.
+        """Theme, accent colour, language and background network for the
+        login screen.
 
         They are those of the user who signed in last (accounts from before
         last_login_at existed count as never signed in; then the oldest
@@ -446,7 +447,7 @@ class AuthManager:
         """
         with get_connection() as conn:
             row = conn.execute(
-                """SELECT s.theme, s.accent_color, s.language
+                """SELECT s.theme, s.accent_color, s.accent_text_color, s.language, s.background_network
                    FROM users u JOIN app_settings s ON s.user_id = u.id
                    ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
                    LIMIT 1"""
@@ -455,14 +456,18 @@ class AuthManager:
             return {
                 "theme": row["theme"] or "dark",
                 "accent": row["accent_color"] or "",
+                "accent_text": row["accent_text_color"] or "",
                 "language": row["language"] or "en",
+                "background_network": row["background_network"] != 0,
             }
         from src.config import read_install_prefs
         prefs = read_install_prefs()
         return {
             "theme": prefs.get("theme", "dark"),
             "accent": "",
+            "accent_text": "",
             "language": prefs.get("language", "en"),
+            "background_network": True,
         }
 
     @staticmethod
@@ -1268,8 +1273,10 @@ class UserConnectionManager:
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
             sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
             accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
+            accent_text_color=(row["accent_text_color"] or "") if "accent_text_color" in row.keys() else "",
             allow_shared_drive_letters=bool(row["allow_shared_drive_letters"]) if "allow_shared_drive_letters" in row.keys() else False,
             auto_pick_free_drive_letter=bool(row["auto_pick_free_drive_letter"]) if "auto_pick_free_drive_letter" in row.keys() else False,
+            background_network=bool(row["background_network"]) if "background_network" in row.keys() else True,
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -1281,10 +1288,10 @@ class UserConnectionManager:
                     use_putty, putty_path, terminal_client, auto_login, auto_reconnect, language, theme,
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
-                    sshfs_disable_cache, accent_color,
+                    sshfs_disable_cache, accent_color, accent_text_color,
                     allow_shared_drive_letters, auto_pick_free_drive_letter,
-                    updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                    background_network, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1306,8 +1313,10 @@ class UserConnectionManager:
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
                      sshfs_disable_cache=excluded.sshfs_disable_cache,
                      accent_color=excluded.accent_color,
+                     accent_text_color=excluded.accent_text_color,
                      allow_shared_drive_letters=excluded.allow_shared_drive_letters,
                      auto_pick_free_drive_letter=excluded.auto_pick_free_drive_letter,
+                     background_network=excluded.background_network,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
@@ -1322,8 +1331,10 @@ class UserConnectionManager:
                  int(bool(getattr(s, "telemetry_prompt_shown", False))),
                  int(bool(getattr(s, "sshfs_disable_cache", False))),
                  getattr(s, "accent_color", "") or "",
+                 getattr(s, "accent_text_color", "") or "",
                  int(bool(getattr(s, "allow_shared_drive_letters", False))),
-                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))))
+                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))),
+                 int(bool(getattr(s, "background_network", True))))
             )
 
     # Backwards-compatible alias used by main.py
@@ -1347,6 +1358,31 @@ class UserConnectionManager:
             logger.warning("File browser settings unreadable, using defaults")
             return {}
         return data if isinstance(data, dict) else {}
+
+    # The connection list's text filter stays until the user changes it,
+    # across restarts too. It may name hosts, so it is encrypted like them,
+    # and it has columns of its own, which saving the settings never touches.
+    def get_connection_filter(self) -> str:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT connection_filter_enc, connection_filter_iv FROM app_settings WHERE user_id = ?",
+                (self._user.id,),
+            ).fetchone()
+        if not row:
+            return ""
+        return self._decrypt_pw(row["connection_filter_enc"] or "", row["connection_filter_iv"] or "")
+
+    def save_connection_filter(self, text: str) -> None:
+        enc, iv = self._encrypt_pw(text)
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO app_settings (user_id, connection_filter_enc, connection_filter_iv)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     connection_filter_enc=excluded.connection_filter_enc,
+                     connection_filter_iv=excluded.connection_filter_iv""",
+                (self._user.id, enc, iv),
+            )
 
     def save_sftp_browser_settings(self, data: dict) -> None:
         enc, iv = self._encrypt_pw(json.dumps(data, separators=(",", ":")))

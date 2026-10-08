@@ -28,7 +28,7 @@ class Palette:
     error: str
 
 
-DARK = Palette(
+BLUE = Palette(
     bg="#0d0d12", surface="#0D1117", raised="#121a24", text="#c8d6e5", text_dim="#6a7a8a",
     accent="#0077b6", border="#1a2535", alt_row="#0a0e14", hover="rgba(0,119,182,0.12)",
     selection_text="#ffffff", icon="#aab4c4", ok="#00d464", warn="#f59e0b", error="#ef4444",
@@ -36,6 +36,11 @@ DARK = Palette(
 GRAY = Palette(
     bg="#181818", surface="#1f1f1f", raised="#252526", text="#cccccc", text_dim="#9d9d9d",
     accent="#0077b6", border="#2b2b2b", alt_row="#1c1c1c", hover="rgba(0,119,182,0.12)",
+    selection_text="#ffffff", icon="#b5b5b5", ok="#00d464", warn="#f59e0b", error="#ef4444",
+)
+DARK = Palette(       # the black "dark" theme
+    bg="#000000", surface="#0a0a0a", raised="#121212", text="#d0d0d0", text_dim="#9d9d9d",
+    accent="#0077b6", border="#222222", alt_row="#0f0f0f", hover="rgba(0,119,182,0.14)",
     selection_text="#ffffff", icon="#b5b5b5", ok="#00d464", warn="#f59e0b", error="#ef4444",
 )
 LIGHT = Palette(
@@ -47,16 +52,17 @@ LIGHT = Palette(
 
 def palette(theme: str, accent: str | None = None) -> Palette:
     """The palette of *theme* in *accent* (default: the app's current accent)."""
-    from src.ui.theme import DEFAULT_ACCENT, accent_text_color, current_accent, recolor_accent
-    base = {"light": LIGHT, "gray": GRAY}.get(theme, DARK)
+    from src.ui.theme import DEFAULT_ACCENT, current_accent, recolor_accent, text_on_accent
+    base = {"light": LIGHT, "gray": GRAY, "blue": BLUE}.get(theme, DARK)
     accent = accent or current_accent()
-    if accent == DEFAULT_ACCENT:
+    on_accent = text_on_accent(accent)
+    if accent == DEFAULT_ACCENT and on_accent == base.selection_text:
         return base
     return replace(
         base,
         accent=recolor_accent(base.accent, accent),
         hover=recolor_accent(base.hover, accent),
-        selection_text=accent_text_color(accent),
+        selection_text=on_accent,
     )
 
 

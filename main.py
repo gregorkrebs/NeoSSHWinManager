@@ -381,7 +381,9 @@ def main():
         app.setLayoutDirection(
             Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
         )
-        set_current_accent(look["accent"])
+        set_current_accent(look["accent"], look["accent_text"])
+        from src.ui.node_network import set_background_enabled
+        set_background_enabled(look["background_network"])
         app.setStyleSheet(get_stylesheet(look["theme"]))
         login_dlg = LoginDialog(theme=look["theme"])
         if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
@@ -404,7 +406,8 @@ def main():
             Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
         )
         from src.ui.theme import set_current_accent
-        set_current_accent(getattr(user_settings, "accent_color", ""))
+        set_current_accent(getattr(user_settings, "accent_color", ""),
+                           getattr(user_settings, "accent_text_color", ""))
         app.setStyleSheet(get_stylesheet(user_settings.theme))
         
         # Telemetry Opt-In / Send

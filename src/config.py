@@ -116,8 +116,9 @@ class AppSettings:
     auto_login: bool = False
     auto_reconnect_mounts: bool = True
     language: str = "en"
-    theme: str = "dark"  # "dark" | "gray" | "light"
+    theme: str = "dark"  # "dark" (black) | "blue" (classic) | "gray" | "light"
     accent_color: str = ""  # "#rrggbb"; empty = default teal (theme.DEFAULT_ACCENT)
+    accent_text_color: str = ""  # text on the accent, "#rrggbb"; empty = found automatically
     allow_passwordless_key_auth: bool = False
     security_level: int = 0  # 0=Strict, 1=Keys, 2=Passwords
     allow_insecure_password_auth: bool = False
@@ -129,6 +130,9 @@ class AppSettings:
     # Letter taken at mount time: mount on a random free one instead of asking.
     # Only effective together with allow_shared_drive_letters.
     auto_pick_free_drive_letter: bool = False
+    # The network of linked nodes behind the empty overview, the details,
+    # the user management, the profile and the login screen.
+    background_network: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)

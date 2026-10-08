@@ -63,18 +63,27 @@ def test_appearance_follows_the_last_login(env):
     _settings(bob.id, theme="gray", accent_color="", language="es")
 
     # Nobody has signed in since last_login_at exists: the oldest account wins.
-    assert AuthManager.login_screen_appearance() == {"theme": "light", "accent": "#8b5cf6", "language": "de"}
+    assert AuthManager.login_screen_appearance() == {
+        "theme": "light", "accent": "#8b5cf6", "accent_text": "", "language": "de",
+        "background_network": True}
 
     AuthManager.record_login(bob.id)
-    assert AuthManager.login_screen_appearance() == {"theme": "gray", "accent": "", "language": "es"}
+    _settings(bob.id, background_network=0)
+    assert AuthManager.login_screen_appearance() == {
+        "theme": "gray", "accent": "", "accent_text": "", "language": "es",
+        "background_network": False}
 
 
 def test_appearance_before_the_first_account(env):
     from src.auth_manager import AuthManager
-    assert AuthManager.login_screen_appearance() == {"theme": "dark", "accent": "", "language": "en"}
+    assert AuthManager.login_screen_appearance() == {
+        "theme": "dark", "accent": "", "accent_text": "", "language": "en",
+        "background_network": True}
     (env / "SSHWinManager" / "install_prefs.json").write_text(
         json.dumps({"language": "nl", "theme": "light"}), encoding="utf-8")
-    assert AuthManager.login_screen_appearance() == {"theme": "light", "accent": "", "language": "nl"}
+    assert AuthManager.login_screen_appearance() == {
+        "theme": "light", "accent": "", "accent_text": "", "language": "nl",
+        "background_network": True}
 
 
 # ── the dialog ───────────────────────────────────────────────────────────────

@@ -333,15 +333,6 @@ def init_db() -> None:
                 UNIQUE(user_id, conn_id)
             );
 
-            CREATE TABLE IF NOT EXISTS pro_licenses (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                machine_id   TEXT NOT NULL UNIQUE,
-                pro_key_hash TEXT NOT NULL,
-                hmac_token   TEXT NOT NULL,
-                activated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                last_checked TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
             CREATE TABLE IF NOT EXISTS cli_history (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -464,12 +455,22 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN allow_shared_drive_letters INTEGER DEFAULT 0")
             if "auto_pick_free_drive_letter" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN auto_pick_free_drive_letter INTEGER DEFAULT 0")
+            if "accent_text_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_text_color TEXT DEFAULT ''")
+            if "background_network" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN background_network INTEGER DEFAULT 1")
             # File browser settings: one encrypted JSON document (bookmarks
             # hold remote paths, which are encrypted like connection metadata).
             if "sftp_browser_enc" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_enc TEXT DEFAULT ''")
             if "sftp_browser_iv" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_iv TEXT DEFAULT ''")
+            # Text filter of the connection list, encrypted like the
+            # connections it names.
+            if "connection_filter_enc" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_enc TEXT DEFAULT ''")
+            if "connection_filter_iv" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_iv TEXT DEFAULT ''")
         except Exception:
             pass
 
@@ -480,6 +481,12 @@ def init_db() -> None:
             cols = [row[1] for row in cursor.fetchall()]
             if "drive_letter" not in cols:
                 conn.execute("ALTER TABLE active_mounts ADD COLUMN drive_letter TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Migration: the Pro licence is gone, so is its table
+        try:
+            conn.execute("DROP TABLE IF EXISTS pro_licenses")
         except Exception:
             pass
 

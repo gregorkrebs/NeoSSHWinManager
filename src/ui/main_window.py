@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QPen, QBrush, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal, QRectF, QEvent
 import os
 import sys
 from PyQt6 import sip
@@ -42,11 +42,15 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
+from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
+from src.help_links import CONNECTION_FORM, open_help
+from src.tips import TipContext, pick_tip
 from src.ui.theme import (
-    DEFAULT_ACCENT, accent_text_color, accent_tone, current_accent, dark_tone, is_light,
-    normalize_hex,
+    DEFAULT_ACCENT, accent_tone, current_accent, current_accent_text, dark_tone, is_light,
+    normalize_hex, text_on_accent,
 )
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
+from src.ui.widgets.stepper import Stepper
 from src.i18n import tr, current_language, available_languages, set_language, is_rtl, LANGUAGE_NAMES
 from src.channel import display_name
 from PyQt6.QtCore import QThread
@@ -85,8 +89,26 @@ try:
 except Exception:
     APP_VERSION = "?"
 
+# Height of the header rows on both sides of the splitter: 52 px
+# (#connectionsHeader and #rightPanelHeader in the stylesheet) plus their
+# 1 px bottom border.
+_HEADER_HEIGHT = 53
+
+
 class _PillHandle(QSplitterHandle):
-    """Splitter handle that paints a centred pill indicator."""
+    """Splitter handle that paints a centred pill indicator. A band at the
+    top carries the header row across, so the two headers read as one bar
+    instead of showing the window colour in the gap between them."""
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._band = QWidget(self)
+        self._band.setObjectName("splitterHeaderBand")
+        self._band.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._band.setGeometry(0, 0, self.width(), _HEADER_HEIGHT)
+
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -94,10 +116,30 @@ class _PillHandle(QSplitterHandle):
         pill_w, pill_h = 4, 36
         x = (w - pill_w) // 2
         y = (h - pill_h) // 2
+        pill = QColor(accent_tone("#00b4d8"))
+        pill.setAlpha(55)
         painter.setPen(QPen(QColor(0, 0, 0, 0)))
-        painter.setBrush(QBrush(QColor(0, 180, 216, 55)))
+        painter.setBrush(QBrush(pill))
         painter.drawRoundedRect(x, y, pill_w, pill_h, pill_w, pill_w)
         painter.end()
+
+
+class _FilterLineEdit(QLineEdit):
+    """The connection filter field. Esc belongs to it rather than to the
+    window's Esc shortcut, and is reported through escape_pressed."""
+    escape_pressed = pyqtSignal()
+
+    def event(self, e):  # noqa: D401
+        if e.type() == QEvent.Type.ShortcutOverride and e.key() == Qt.Key.Key_Escape:
+            e.accept()
+            return True
+        return super().event(e)
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            return
+        super().keyPressEvent(e)
 
 
 class _PillSplitter(QSplitter):
@@ -252,7 +294,8 @@ class MainWindow(FramelessMainWindow):
             pass
         from src.ui.theme import set_current_accent
         _s = self._mgr.get_settings()
-        set_current_accent(getattr(_s, "accent_color", ""))
+        set_current_accent(getattr(_s, "accent_color", ""), getattr(_s, "accent_text_color", ""))
+        set_background_enabled(getattr(_s, "background_network", True))
         # (theme, accent) the widgets were last painted in, see _apply_settings_object()
         self._applied_look = (_s.theme or "dark", current_accent(),
                               bool(getattr(_s, "allow_shared_drive_letters", False)))
@@ -272,6 +315,7 @@ class MainWindow(FramelessMainWindow):
         self._leave_guard_active = False
         self._saving_in_progress = False
         self._shortcuts: list[QShortcut] = []
+        self._tip_history: list[str] = []      # ids of the tips shown, oldest first
         self._explicit_quit = False
         
         # Debug mode settings
@@ -690,9 +734,11 @@ class MainWindow(FramelessMainWindow):
             self._sb_users_btn = self._sidebar_btn("users", self._on_user_management)
             v.addWidget(self._sb_users_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # Profile button for all users (password change, etc.)
+        # Profile button for all users (password change, etc.); not in
+        # single-user mode, where there is no password to change.
         self._sb_profile_btn = self._sidebar_btn("key", self._on_profile)
         v.addWidget(self._sb_profile_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._sync_profile_btn()
 
         # File browser (SFTP/FTP) for all hosts
         self._sb_files_btn = self._sidebar_btn(_SB_FILES_ICON, self._on_file_browser)
@@ -747,7 +793,10 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("connectionsHeader")
         header_h = QHBoxLayout(header)
-        header_h.setContentsMargins(18, 12, 18, 12)
+        # No vertical margins: the row is 52 px high and its 30-32 px
+        # controls are centred in it. With 12 px above and below they did
+        # not fit, sank onto the bottom border and cut off the badge.
+        header_h.setContentsMargins(18, 0, 18, 0)
         header_h.setSpacing(8)
 
         title_wrap = QWidget()
@@ -763,6 +812,17 @@ class MainWindow(FramelessMainWindow):
 
         header_h.addWidget(title_wrap)
         header_h.addStretch()
+
+        # Magnifier: opens the filter field below the header
+        self._search_btn = QPushButton()
+        self._search_btn.setObjectName("headerActionBtn")
+        self._search_btn.setFixedSize(QSize(30, 30))
+        self._search_btn.setIconSize(QSize(16, 16))
+        self._search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._search_btn.setToolTip(tr("search.tooltip"))
+        self._search_btn.setAccessibleName(tr("search.tooltip"))
+        self._search_btn.clicked.connect(self._toggle_search)
+        header_h.addWidget(self._search_btn)
 
         self._add_btn = QPushButton()
         self._add_btn.setObjectName("headerAddBtn")
@@ -810,6 +870,7 @@ class MainWindow(FramelessMainWindow):
         header_h.addWidget(self._badge_lbl)
 
         v.addWidget(header)
+        v.addWidget(self._build_filter_bar())
 
         scroll = QScrollArea()
         scroll.setObjectName("connectionScroll")
@@ -843,7 +904,7 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("rightPanelHeader")
         hh = QHBoxLayout(header)
-        hh.setContentsMargins(18, 12, 18, 12)
+        hh.setContentsMargins(18, 0, 18, 0)   # 32 px buttons centred in 52 px
         hh.setSpacing(8)
 
         title_wrap = QWidget()
@@ -859,6 +920,19 @@ class MainWindow(FramelessMainWindow):
 
         hh.addWidget(title_wrap)
         hh.addStretch()
+
+        # Help (shown with the connection form): the docs at the form
+        self._rp_help_btn = QPushButton()
+        self._rp_help_btn.setObjectName("rpHeaderBtn")
+        self._rp_help_btn.setFixedSize(QSize(32, 32))
+        self._rp_help_btn.setIcon(svg_icon("circle-help", "#aab4c4", 16))
+        self._rp_help_btn.setIconSize(QSize(16, 16))
+        self._rp_help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_help_btn.setToolTip(tr("help.form_tooltip"))
+        self._rp_help_btn.setAccessibleName(tr("help.form_tooltip"))
+        self._rp_help_btn.clicked.connect(lambda: open_help("connections", CONNECTION_FORM))
+        self._rp_help_btn.hide()
+        hh.addWidget(self._rp_help_btn)
 
         # Info button (shown in info mode - opens system info panel)
         self._rp_info_btn = QPushButton("i")
@@ -987,6 +1061,10 @@ class MainWindow(FramelessMainWindow):
         self._rp_layout.setSpacing(0)
         self._rp_scroll.setWidget(self._rp_content)
         v.addWidget(self._rp_scroll, stretch=1)
+        # Behind the empty overview and a connection's details; stays put
+        # while the details scroll over it.
+        self._rp_backdrop = NodeFieldBackdrop(self._rp_scroll.viewport())
+        self._rp_backdrop.hide()
 
         # Terminal area (tab bar + stacked panels + end-session bar)
         # Hidden by default; shown only in _PANEL_TERMINAL mode.
@@ -1158,6 +1236,10 @@ class MainWindow(FramelessMainWindow):
         self._fs_layout.setSpacing(0)
         self._fs_scroll.setWidget(self._fs_content)
         v.addWidget(self._fs_scroll, stretch=1)
+        # Behind the user management and the profile; stays put while the
+        # cards scroll over it.
+        self._fs_backdrop = NodeFieldBackdrop(self._fs_scroll.viewport())
+        self._fs_backdrop.hide()
 
         self._fs_btn_bar = QWidget()
         self._fs_btn_bar.setObjectName("rpBtnBar")
@@ -1181,6 +1263,7 @@ class MainWindow(FramelessMainWindow):
         return panel
 
     def _clear_fs_content(self):
+        self._fs_backdrop.hide()
         while self._fs_layout.count():
             item = self._fs_layout.takeAt(0)
             w = item.widget()
@@ -1252,7 +1335,7 @@ class MainWindow(FramelessMainWindow):
         self._update_status()
         self._tray.update_connections_menu(connections, mounted)
         self._refresh_groups_combo()  # Gruppen-Filter aktualisieren
-        self._apply_group_filter()
+        self._apply_list_filters()
         # Restore terminal-active indicators on rebuilt cards
         for conn_id in list(self._terminal_conn_tabs.keys()):
             self._update_card_terminal_indicator(conn_id)
@@ -1282,6 +1365,7 @@ class MainWindow(FramelessMainWindow):
         layout.addWidget(card)
         container._card = card
         container._conn_id = conn.id
+        container._conn = conn
         return container
 
     # ------------------------------------------------------------------
@@ -1290,6 +1374,7 @@ class MainWindow(FramelessMainWindow):
 
     def _clear_right_panel_content(self):
         """Remove all widgets from the scrollable content area."""
+        self._rp_backdrop.hide()
         while self._rp_layout.count():
             item = self._rp_layout.takeAt(0)
             w = item.widget()
@@ -1343,6 +1428,7 @@ class MainWindow(FramelessMainWindow):
     def _set_right_panel_header(self, kicker: str = "", title: str = ""):
         self._right_panel_title.setText(title)
         self._right_panel_title.setVisible(bool(title))
+        self._rp_help_btn.setVisible(False)     # the connection form shows it again
 
     def _show_right_panel_placeholder(self):
         """Render the default empty-state panel instead of collapsing the area."""
@@ -1377,26 +1463,65 @@ class MainWindow(FramelessMainWindow):
         copy_layout.setContentsMargins(0, 0, 0, 0)
         copy_layout.setSpacing(10)
 
-        title = QLabel(tr("panel.placeholder.title"))
+        # A tip that fits the user's setup ("Did you know?"), a new one each
+        # time the overview comes back, and more on request.
+        title = QLabel()
         title.setObjectName("rightPanelPlaceholderTitle")
         title.setWordWrap(True)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(title)
 
-        msg = QLabel(tr("panel.placeholder.body"))
+        msg = QLabel()
         msg.setObjectName("rightPanelPlaceholderBody")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
         msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         msg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(msg)
+
+        next_btn = QPushButton(tr("tip.next"))
+        next_btn.setObjectName("tipNextBtn")
+        next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_layout.addWidget(next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        def show_tip():
+            tip = pick_tip(self._tip_context(), self._tip_history)
+            self._tip_history = (self._tip_history + [tip.id])[-20:]
+            title.setText(tr(tip.title_key))
+            msg.setText(tr(tip.key))
+
+        show_tip()
+        next_btn.clicked.connect(show_tip)
 
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
         v.addStretch()
         self._rp_layout.addWidget(body, stretch=1)
+        self._rp_backdrop.show_field("overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
+
+    def _tip_context(self) -> TipContext:
+        """What the tips in the empty overview depend on (see src/tips.py)."""
+        settings = self._mgr.get_settings()
+        try:
+            from src.auth_manager import AuthManager
+            single = AuthManager.single_user_mode_enabled()
+            admin = Session.is_admin()
+            return TipContext.collect(
+                settings,
+                self._mgr.get_connections(),
+                self._mgr.get_templates(),
+                self._mgr.get_active_mounts(),
+                single_user=single,
+                # only asked when it matters: it probes the Credential Manager
+                can_go_single=admin and not single and AuthManager.can_enable_single_user_mode(),
+                is_admin=admin,
+            )
+        except Exception as exc:        # a tip is never worth a broken overview
+            logger.warning(f"Tip context unavailable: {exc}")
+            return TipContext(settings=settings)
 
     def _close_right_panel(self):
         """Reset the right panel to its placeholder state and deselect."""
@@ -1617,6 +1742,8 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._rp_layout.addWidget(body)
+        # every connection gets a network of its own behind its details
+        self._rp_backdrop.show_field(f"host:{conn.id}", is_light(_theme))
 
     def _build_status_row(self, conn: Connection, is_mounted: bool, theme: str) -> QHBoxLayout:
         """Status pill + folder buttons, shared by the info panel and the edit form.
@@ -1813,6 +1940,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(conn)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1848,6 +1976,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(None)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1900,6 +2029,7 @@ class MainWindow(FramelessMainWindow):
 
         _theme = self._mgr.get_settings().theme or "dark"
         _is_light = (_theme == "light")
+        self._fs_backdrop.show_field("profile", _is_light)
         _inp_bg    = "#ffffff"  if _is_light else dark_tone(_theme, "#0d1117")
         _inp_bdr   = "#c0cad6" if _is_light else dark_tone(_theme, "#30363d")
         _inp_fg    = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
@@ -1942,7 +2072,7 @@ class MainWindow(FramelessMainWindow):
             if pill_text:
                 pill = QLabel(pill_text)
                 pill.setStyleSheet(
-                    f"background-color: {_pill_bg}; color: {accent_text_color(_pill_bg)}; "
+                    f"background-color: {_pill_bg}; color: {text_on_accent(_pill_bg)}; "
                     f"border-radius: 8px; padding: 2px 8px; "
                     f"font-size: 10px; font-weight: 700;"
                 )
@@ -2134,6 +2264,7 @@ class MainWindow(FramelessMainWindow):
         users = AuthManager.list_users()
         current_user = Session.current()
         current_id = current_user.id if current_user else None
+        self._fs_backdrop.show_field("users", is_light(self._mgr.get_settings().theme))
         current_username = current_user.username if current_user else ""
         with get_connection() as conn:
             rows = conn.execute(
@@ -2391,8 +2522,15 @@ class MainWindow(FramelessMainWindow):
 
     def _rebuild_users_panel(self):
         """Rebuild the open users panel (_open_users_panel would close it)."""
+        self._sync_profile_btn()
         self._panel_mode = None
         self._open_users_panel()
+
+    def _sync_profile_btn(self):
+        """The profile only offers a password change, which single-user mode
+        does not have: hide its sidebar button there."""
+        from src.auth_manager import AuthManager
+        self._sb_profile_btn.setVisible(not AuthManager.single_user_mode_enabled())
 
     def _enable_single_user_mode(self):
         from src.auth_manager import AuthManager, SingleUserModeError
@@ -2500,6 +2638,32 @@ class MainWindow(FramelessMainWindow):
         lbl.setObjectName("fieldLabel")
         return lbl
 
+    def _field_help_btn(self, anchor: str, page: str = "connections") -> QPushButton:
+        """A small "?" that opens the docs at *page*#*anchor*."""
+        theme = self._mgr.get_settings().theme or "dark"
+        btn = QPushButton()
+        btn.setObjectName("fieldHelpBtn")
+        btn.setFixedSize(QSize(16, 16))
+        btn.setIcon(svg_icon("circle-help", "#6a7a8a" if is_light(theme) else dark_tone(theme, "#8fa4b8"), 12))
+        btn.setIconSize(QSize(12, 12))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setToolTip(tr("help.field_tooltip"))
+        btn.setAccessibleName(tr("help.field_tooltip"))
+        btn.clicked.connect(lambda: open_help(page, anchor))
+        return btn
+
+    def _section_with_help(self, text: str, anchor: str) -> QWidget:
+        """A section label with a help "?" beside it."""
+        w = QWidget()
+        hl = QHBoxLayout(w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self._section_label(text))
+        hl.addWidget(self._field_help_btn(anchor), 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addStretch()
+        return w
+
     def _pill_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("connectionsBadge")
@@ -2521,7 +2685,9 @@ class MainWindow(FramelessMainWindow):
 
         is_edit = conn is not None
 
-        def _ef_field(label_text, input_widget):
+        def _ef_field(label_text, input_widget, help_anchor=None):
+            """A field frame; *help_anchor*: a "?" beside the label that opens
+            the docs at that field."""
             container = QFrame()
             container.setObjectName("rpInfoField")
             container.setFixedHeight(54)
@@ -2530,17 +2696,26 @@ class MainWindow(FramelessMainWindow):
             vl.setSpacing(4)
             lbl = QLabel(label_text.upper())
             lbl.setObjectName("rpFieldLabelCaps")
-            vl.addWidget(lbl)
+            if help_anchor:
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(4)
+                row.addWidget(lbl)
+                row.addWidget(self._field_help_btn(help_anchor))
+                row.addStretch()
+                vl.addLayout(row)
+            else:
+                vl.addWidget(lbl)
             vl.addWidget(input_widget)
             return container
 
-        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1):
+        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1, help1=None, help2=None):
             wrapper = QWidget()
             hl = QHBoxLayout(wrapper)
             hl.setContentsMargins(0, 0, 0, 0)
             hl.setSpacing(8)
-            hl.addWidget(_ef_field(label1, widget1), stretch=s1)
-            hl.addWidget(_ef_field(label2, widget2), stretch=s2)
+            hl.addWidget(_ef_field(label1, widget1, help1), stretch=s1)
+            hl.addWidget(_ef_field(label2, widget2, help2), stretch=s2)
             return wrapper
 
         body = QWidget()
@@ -2589,7 +2764,7 @@ class MainWindow(FramelessMainWindow):
             _templates = self._mgr.get_templates()
             if _templates:
                 self._ef_templates = _templates
-                v.addWidget(self._section_label(tr("addedit.section.template")))
+                v.addWidget(self._section_with_help(tr("addedit.section.template"), "field-template"))
                 self._ef_template_btn = QPushButton(tr("addedit.template.none"))
                 self._ef_template_btn.setObjectName("secondaryBtn")
                 self._ef_template_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2604,7 +2779,7 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.general")))
         self._ef_name = QLineEdit(conn.name if is_edit else "")
         self._ef_name.setPlaceholderText(tr("addedit.placeholder.name"))
-        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name))
+        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name, "field-name"))
 
         # Protocol: decides which transport the file browser uses and whether
         # the SSH-only fields below (key, drive letter, CLI, PuTTY) apply.
@@ -2616,7 +2791,7 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_protocol.findData(conn.protocol)
             if idx >= 0:
                 self._ef_protocol.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol))
+        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol, "field-protocol"))
 
         self._ef_host = QLineEdit(conn.host if is_edit else "")
         self._ef_host.setPlaceholderText("192.168.1.1")
@@ -2624,11 +2799,12 @@ class MainWindow(FramelessMainWindow):
         self._ef_port.setRange(1, 65535)
         self._ef_port.setValue(conn.port if is_edit else 22)
         v.addWidget(_ef_field_pair(tr("addedit.label.host"), self._ef_host,
-                                   tr("addedit.label.port"), self._ef_port, 2, 1))
+                                   tr("addedit.label.port"), self._ef_port, 2, 1,
+                                   "field-host", "field-port"))
 
         self._ef_user = QLineEdit(conn.user if is_edit else "")
         self._ef_user.setPlaceholderText("root")
-        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user))
+        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user, "field-user"))
 
         # Auth
         v.addSpacing(4)
@@ -2641,13 +2817,13 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_auth.findData(conn.auth_method)
             if idx >= 0:
                 self._ef_auth.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth))
+        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth, "field-auth-method"))
 
         self._ef_pw = QLineEdit(conn.password if is_edit else "")
         self._ef_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self._ef_pw.setPlaceholderText("••••••••")
         self._ef_pw.setStyleSheet("font-size: 8px; letter-spacing: 2px;")
-        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw))
+        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw, "field-password"))
 
         key_container = QWidget()
         key_hl = QHBoxLayout(key_container)
@@ -2661,7 +2837,7 @@ class MainWindow(FramelessMainWindow):
         self._ef_key_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ef_key_browse_btn.clicked.connect(self._ef_browse_key)
         key_hl.addWidget(self._ef_key_browse_btn)
-        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container)
+        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container, "field-key")
         v.addWidget(self._ef_key_field)
 
         # FTP options — only meaningful for FTP/FTPS, hidden for SFTP
@@ -2669,7 +2845,7 @@ class MainWindow(FramelessMainWindow):
         ftp_v = QVBoxLayout(self._ef_ftp_widget)
         ftp_v.setContentsMargins(0, 4, 0, 0)
         ftp_v.setSpacing(6)
-        ftp_v.addWidget(self._section_label(tr("addedit.section.ftp")))
+        ftp_v.addWidget(self._section_with_help(tr("addedit.section.ftp"), "field-ftp-options"))
 
         self._ef_ftp_plain_warning = QLabel(tr("addedit.ftp.plain_warning"))
         self._ef_ftp_plain_warning.setWordWrap(True)
@@ -2741,14 +2917,18 @@ class MainWindow(FramelessMainWindow):
         path_hl = QHBoxLayout(path_row)
         path_hl.setContentsMargins(0, 0, 0, 0)
         path_hl.setSpacing(8)
-        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive)
-        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path), stretch=3)
+        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive, "field-drive-letter")
+        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path, "field-remote-path"), stretch=3)
         path_hl.addWidget(self._ef_drive_field, stretch=1)
         v.addWidget(path_row)
+        # Where the files are is the question asked most: a tip right here.
+        path_hint = self._field_label(tr("addedit.path.hint"))
+        path_hint.setWordWrap(True)
+        v.addWidget(path_hint)
 
         # CLI
         v.addSpacing(4)
-        self._ef_cli_section = self._section_label(tr("addedit.section.cli"))
+        self._ef_cli_section = self._section_with_help(tr("addedit.section.cli"), "field-cli-access")
         v.addWidget(self._ef_cli_section)
         self._ef_cli_cb = QCheckBox(tr("addedit.cli.enable"))
         self._ef_cli_cb.setChecked(conn.cli_access_enabled if is_edit else False)
@@ -2811,7 +2991,7 @@ class MainWindow(FramelessMainWindow):
             putty_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             putty_browse_btn.clicked.connect(self._ef_browse_putty_key)
             putty_hl.addWidget(putty_browse_btn)
-            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container))
+            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container, "field-putty-key"))
             putty_v.addWidget(self._field_label(tr("addedit.putty_key.hint")))
             v.addWidget(self._ef_putty_widget)
 
@@ -2820,12 +3000,12 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.groups")))
         self._ef_groups = QLineEdit(conn.groups if is_edit else "")
         self._ef_groups.setPlaceholderText(tr("addedit.placeholder.groups"))
-        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups))
+        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups, "field-groups"))
         v.addWidget(self._field_label(tr("addedit.groups.hint")))
 
         # Template Option (nur im Add-Modus oder bei Bearbeitung sichtbar)
         v.addSpacing(4)
-        v.addWidget(self._section_label(tr("addedit.section.template_options")))
+        v.addWidget(self._section_with_help(tr("addedit.section.template_options"), "field-save-as-template"))
         # Editing a host: the box saves a template COPY; the host stays as it is.
         _copy = is_edit and not conn.is_template
         self._ef_template_cb = QCheckBox(tr("addedit.template.save_copy") if _copy
@@ -3190,6 +3370,7 @@ class MainWindow(FramelessMainWindow):
             ("Ctrl+S", self._shortcut_save),
             ("Esc", self._shortcut_escape),
             ("Ctrl+N", self._shortcut_add),
+            ("Ctrl+F", self._open_search),
             ("Ctrl+E", self._shortcut_edit),
             ("Delete", self._shortcut_delete),
         ]
@@ -3322,6 +3503,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_theme = NoWheelComboBox()
         self._sf_theme.setFixedWidth(180)
         self._sf_theme.addItem(tr("settings.theme.dark"), "dark")
+        self._sf_theme.addItem(tr("settings.theme.blue"), "blue")
         self._sf_theme.addItem(tr("settings.theme.gray"), "gray")
         self._sf_theme.addItem(tr("settings.theme.light"), "light")
         idx = self._sf_theme.findData(getattr(s, 'theme', 'dark') or 'dark')
@@ -3330,6 +3512,7 @@ class MainWindow(FramelessMainWindow):
 
         # Accent colour: swatch button opens the picker, "Standard" resets.
         self._sf_accent = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        self._sf_accent_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
         self._sf_accent_btn = QPushButton()
         self._sf_accent_btn.setObjectName("settingsActionBtn")
         self._sf_accent_btn.setFixedWidth(120)
@@ -3344,7 +3527,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_accent_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sf_accent_reset_btn.setToolTip(DEFAULT_ACCENT)
         self._sf_accent_reset_btn.clicked.connect(
-            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True))
+            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True, text=""))
         accent_box = QWidget()
         accent_hl = QHBoxLayout(accent_box)
         accent_hl.setContentsMargins(0, 0, 0, 0)
@@ -3353,10 +3536,15 @@ class MainWindow(FramelessMainWindow):
         accent_hl.addWidget(self._sf_accent_btn)
         self._sf_update_accent_ui()
 
+        self._sf_network = QCheckBox(tr("settings.background_network"))
+        self._sf_network.setChecked(getattr(s, "background_network", True))
+
         app_card, app_vl = _group_card()
         app_vl.addWidget(_row_combo(tr("settings.theme.label"), self._sf_theme))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.accent.label"), accent_box))
+        app_vl.addWidget(_inner_sep())
+        app_vl.addWidget(_row_check(self._sf_network, tr("settings.background_network.hint")))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.language.label"), self._sf_lang))
         app_vl.addWidget(_hint_row(tr("settings.language.restart")))
@@ -3417,10 +3605,7 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(_section_hdr(tr("settings.section.mount")))
         v.addSpacing(4)
 
-        self._sf_interval = NoWheelSpinBox()
-        self._sf_interval.setRange(5, 300)
-        self._sf_interval.setValue(s.check_interval_seconds)
-        self._sf_interval.setFixedWidth(72)
+        self._sf_interval = Stepper(5, 300, s.check_interval_seconds, theme=s.theme or "dark")
         self._sf_auto_reconnect = QCheckBox(tr("settings.auto_reconnect"))
         self._sf_auto_reconnect.setChecked(getattr(s, "auto_reconnect", False))
         self._sf_auto_remount = QCheckBox(tr("settings.auto_remount"))
@@ -3608,64 +3793,8 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(dev_card)
         v.addSpacing(14)
 
-        from src.pro_manager import SHOW_PRO_UI
-        if SHOW_PRO_UI:
-            self._build_pro_settings(v, _section_hdr, _group_card)
-
         v.addStretch()
         self._fs_layout.addWidget(body)
-
-    def _build_pro_settings(self, v, _section_hdr, _group_card):
-        """The Pro licence section of the settings (hidden while SHOW_PRO_UI is off)."""
-        # ── PRO LICENSE ───────────────────────────────────────────────────
-        v.addWidget(_section_hdr(tr("settings.section.pro")))
-        v.addSpacing(4)
-
-        from src.pro_manager import is_pro_active as _is_pro_active
-        _pro_active = _is_pro_active()
-
-        self._sf_pro_status_lbl = QLabel(
-            tr("settings.pro.active") if _pro_active else tr("settings.pro.inactive")
-        )
-        self._sf_pro_status_lbl.setObjectName("rpSectionLabel" if _pro_active else "hintLabel")
-        self._sf_pro_status_lbl.setWordWrap(True)
-
-        self._sf_pro_key = QLineEdit()
-        self._sf_pro_key.setPlaceholderText("NEO-XXXX-XXXX-XXXX")
-        self._sf_pro_key.setVisible(not _pro_active)
-
-        self._sf_pro_activate_btn = QPushButton(tr("settings.pro.activate"))
-        self._sf_pro_activate_btn.setObjectName("primaryBtn")
-        self._sf_pro_activate_btn.setFixedWidth(120)
-        self._sf_pro_activate_btn.setMinimumHeight(32)
-        self._sf_pro_activate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sf_pro_activate_btn.setVisible(not _pro_active)
-        self._sf_pro_activate_btn.clicked.connect(self._sf_activate_pro)
-
-        pro_card, pro_vl = _group_card()
-        _pro_status_row = QWidget()
-        _pro_status_row.setObjectName("settingsRow")
-        _pro_inner = QVBoxLayout(_pro_status_row)
-        _pro_inner.setContentsMargins(16, 11, 16, 11)
-        _pro_inner.setSpacing(6)
-        _pro_inner.addWidget(self._sf_pro_status_lbl)
-        if not _pro_active:
-            _key_row_w = QWidget()
-            _key_row_hl = QHBoxLayout(_key_row_w)
-            _key_row_hl.setContentsMargins(0, 0, 0, 0)
-            _key_row_hl.setSpacing(8)
-            _key_row_hl.addWidget(self._sf_pro_key, stretch=1)
-            _key_row_hl.addWidget(self._sf_pro_activate_btn)
-            _pro_inner.addWidget(_key_row_w)
-            _donate_lbl = QLabel(
-                f'<a href="https://neosshwinmanager.org/pro" style="color:{current_accent()};">'
-                f'{tr("settings.pro.learn_more")}</a>'
-            )
-            _donate_lbl.setObjectName("hintLabel")
-            _donate_lbl.setOpenExternalLinks(True)
-            _pro_inner.addWidget(_donate_lbl)
-        pro_vl.addWidget(_pro_status_row)
-        v.addWidget(pro_card)
 
     def _sf_check_updates(self):
         """Manual update check from settings screen."""
@@ -3720,24 +3849,6 @@ class MainWindow(FramelessMainWindow):
 
     def _on_sf_security_changed(self, index: int):
         self._sf_sec_warning.setVisible(index >= 1)
-
-    def _sf_activate_pro(self):
-        from src.pro_manager import activate_pro
-        key = getattr(self._sf_pro_key, "text", lambda: "")().strip().upper()
-        if not key:
-            self._show_inline_message("PRO", tr("settings.pro.key_required"), is_error=True)
-            return
-        self._sf_pro_activate_btn.setEnabled(False)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activating"))
-        QApplication.processEvents()
-        result = activate_pro(key)
-        self._sf_pro_activate_btn.setEnabled(True)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activate"))
-        if result["success"]:
-            StyledMessageBox.information(self, "PRO", tr("settings.pro.activation_success"))
-            self._open_settings_panel()
-        else:
-            self._show_inline_message("PRO", result.get("error", ""), is_error=True)
 
     def _sf_terminal_client_toggled(self, _button=None, _checked=None):
         is_putty = self._sf_term_putty.isChecked()
@@ -4018,6 +4129,8 @@ class MainWindow(FramelessMainWindow):
             "auto_pick_letter": self._safe_bool_checked("_sf_auto_pick_letter", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
             "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
+            "accent_text": getattr(self, "_sf_accent_text", ""),
+            "network": self._safe_bool_checked("_sf_network", True),
             "lang": self._safe_current_data("_sf_lang", "en"),
             "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
             "term_putty": self._safe_bool_checked("_sf_term_putty", False),
@@ -4414,6 +4527,8 @@ class MainWindow(FramelessMainWindow):
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
             accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
+            accent_text_color=self._sf_accent_text,
+            background_network=self._sf_network.isChecked(),
             allow_shared_drive_letters=self._sf_shared_letters.isChecked(),
             auto_pick_free_drive_letter=(self._sf_shared_letters.isChecked()
                                          and self._sf_auto_pick_letter.isChecked()),
@@ -4610,6 +4725,8 @@ class MainWindow(FramelessMainWindow):
             self._badge_lbl.setText(f"{active_str} · {mount_str}")
         else:
             self._badge_lbl.setText("")
+        # without connections the badge would be an empty pill
+        self._badge_lbl.setVisible(bool(total))
         self._mount_count_lbl.setText(
             tr("status.mounted_short", n=mounted) if mounted else tr("status.mounted_none")
         )
@@ -4919,7 +5036,7 @@ class MainWindow(FramelessMainWindow):
                 return
             self._set_status(tr("status.connect_failed", name=name))
         self._update_status()
-        self._apply_group_filter()
+        self._apply_list_filters()
 
     def _show_key_fallback_dialog(self, conn) -> bool:
         """Zeigt Dialog an, der fragt ob mit Passwort statt Key verbunden werden soll.
@@ -4995,7 +5112,7 @@ class MainWindow(FramelessMainWindow):
         finally:
             try:
                 self._update_status()
-                self._apply_group_filter()
+                self._apply_list_filters()
             except Exception:
                 pass
 
@@ -5332,12 +5449,17 @@ class MainWindow(FramelessMainWindow):
         self._apply_debug_mode()
         from src.ui.theme import build_stylesheet, set_current_accent
         theme = s.theme or "dark"
-        set_current_accent(getattr(s, "accent_color", ""))
-        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
+        set_current_accent(getattr(s, "accent_color", ""), getattr(s, "accent_text_color", ""))
+        set_background_enabled(getattr(s, "background_network", True))
+        self._rp_backdrop.update()
+        self._fs_backdrop.update()
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
         self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        self._update_filter_ui()
         # Connection cards paint their icons in the theme/accent they were
         # built with, and show duplicate-letter warnings only while letters
         # may not be shared; rebuild them when any of that changed.
@@ -5362,49 +5484,70 @@ class MainWindow(FramelessMainWindow):
     # ── accent colour (settings panel) ────────────────────────────────────────
 
     def _sf_update_accent_ui(self):
-        """Show the pending accent on the swatch button."""
+        """Show the pending accent, with an "A" in its text colour, on the
+        swatch button."""
+        from src.ui.theme import accent_text_color
         color = self._sf_accent
-        pm = QPixmap(14, 14)
+        text = self._sf_accent_text or accent_text_color(color)
+        scale = max(1.0, self.devicePixelRatioF())
+        pm = QPixmap(round(16 * scale), round(16 * scale))
+        pm.setDevicePixelRatio(scale)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(QColor(128, 128, 128, 140), 1))
         p.setBrush(QColor(color))
-        p.drawRoundedRect(0, 0, 13, 13, 4, 4)
+        p.drawRoundedRect(QRectF(0.5, 0.5, 15, 15), 4, 4)
+        font = QFont(self.font())
+        font.setPixelSize(10)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(text))
+        p.drawText(QRectF(0, 0, 16, 16), Qt.AlignmentFlag.AlignCenter, "A")
         p.end()
+        self._sf_accent_btn.setIconSize(QSize(16, 16))
         self._sf_accent_btn.setIcon(QIcon(pm))
         self._sf_accent_btn.setText(color.upper())
-        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT)
+        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT or bool(self._sf_accent_text))
 
-    def _sf_preview_accent(self, color: str):
-        """Live preview: restyle the app in *color* without saving it."""
+    def _sf_preview_accent(self, color: str, text: str | None = None):
+        """Live preview: restyle the app in *color*, with *text* on it
+        (default: the pending text colour), without saving it."""
         from src.ui.theme import build_stylesheet, set_current_accent
-        set_current_accent(color)
+        set_current_accent(color, self._sf_accent_text if text is None else text)
         theme = self._mgr.get_settings().theme or "dark"
-        QApplication.instance().setStyleSheet(build_stylesheet(theme, current_accent()))
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
         self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
         self._set_sidebar_active("settings")
         if self._file_browser is not None:
             self._file_browser.set_theme(theme)
 
-    def _sf_set_accent(self, color: str, preview: bool):
+    def _sf_set_accent(self, color: str, preview: bool, text: str | None = None):
+        """*text*: the text colour on the accent ("" = automatic); None keeps it."""
         self._sf_accent = normalize_hex(color) or DEFAULT_ACCENT
+        if text is not None:
+            self._sf_accent_text = normalize_hex(text) or ""
         self._sf_update_accent_ui()
         if preview:
             self._sf_preview_accent(self._sf_accent)
 
     def _sf_pick_accent(self):
         from src.ui.widgets.color_picker import AccentColorDialog
-        # Cancel makes the dialog preview the colour it started with again.
-        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent)
+        # Cancel makes the dialog preview the colours it started with again.
+        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent,
+                                        self._sf_accent_text)
         if chosen is not None:
-            self._sf_set_accent(chosen, preview=False)
+            color, text = chosen
+            self._sf_set_accent(color, preview=False, text=text)
 
     def _sf_revert_accent_preview(self):
         """Settings discarded: go back to the saved accent if a preview changed it."""
-        saved = normalize_hex(getattr(self._mgr.get_settings(), "accent_color", "")) or DEFAULT_ACCENT
-        if current_accent() != saved:
-            self._sf_preview_accent(saved)
+        s = self._mgr.get_settings()
+        saved = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        saved_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
+        if (current_accent(), current_accent_text()) != (saved, saved_text):
+            self._sf_preview_accent(saved, saved_text)
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":
@@ -5629,26 +5772,123 @@ class MainWindow(FramelessMainWindow):
 
     def _on_group_filter_changed(self, index: int):
         """Handle group filter selection change."""
-        self._apply_group_filter()
+        self._apply_list_filters()
 
-    def _apply_group_filter(self):
-        """Show/hide connection containers based on the active filter selection."""
+    def _apply_list_filters(self):
+        """Show the connections that pass both the group filter and the
+        text filter (name, host or user, see connection_filter)."""
+        from src.connection_filter import matches
         selected = self._groups_combo.currentData()
+        query = self._filter_input.text()
+        in_group = shown = 0
         for conn_id, container in self._containers.items():
             card = self._cards.get(conn_id)
+            conn = getattr(container, "_conn", None) or self._mgr.get_by_id(conn_id)
             if selected == "__all__":
-                container.setVisible(True)
+                ok = True
             elif selected == "__mounted__":
-                container.setVisible(bool(card and card.is_mounted))
+                ok = bool(card and card.is_mounted)
             elif selected == "__unmounted__":
-                container.setVisible(bool(card and not card.is_mounted))
+                ok = bool(card and not card.is_mounted)
+            elif conn:
+                conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
+                ok = selected in conn_groups
             else:
-                conn = self._mgr.get_by_id(conn_id)
-                if conn:
-                    conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
-                    container.setVisible(selected in conn_groups)
-                else:
-                    container.setVisible(False)
+                ok = False
+            in_group += ok
+            ok = ok and conn is not None and matches(conn, query)
+            shown += ok
+            container.setVisible(ok)
+        self._update_filter_ui(shown, in_group)
+
+    # ── text filter ───────────────────────────────────────────────────────────
+
+    def _build_filter_bar(self) -> QWidget:
+        """The filter field below the header. It filters the list with every
+        character typed, and what is typed stays, across restarts too, until
+        it is changed or cleared by hand."""
+        bar = QWidget()
+        bar.setObjectName("connectionsFilterBar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 0)
+        h.setSpacing(10)
+        self._filter_input = _FilterLineEdit()
+        self._filter_input.setObjectName("connectionsFilterInput")
+        self._filter_input.setPlaceholderText(tr("search.placeholder"))
+        self._filter_input.setAccessibleName(tr("search.tooltip"))
+        self._filter_icon_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.LeadingPosition)
+        self._filter_clear_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.TrailingPosition)
+        self._filter_clear_action.setToolTip(tr("search.clear"))
+        self._filter_clear_action.triggered.connect(self._clear_filter)
+        self._filter_input.setText(self._mgr.get_connection_filter())
+        self._filter_input.textChanged.connect(self._on_filter_changed)
+        self._filter_input.escape_pressed.connect(self._on_filter_escape)
+        h.addWidget(self._filter_input, 1)
+        self._filter_count = QLabel("")
+        self._filter_count.setObjectName("connectionsFilterCount")
+        h.addWidget(self._filter_count)
+        self._filter_bar = bar
+        if not self._filter_input.text():
+            bar.hide()      # never show() here: the bar has no parent yet
+        self._update_filter_ui()
+        return bar
+
+    def _toggle_search(self):
+        """Magnifier: open the field; close it again only while it is empty,
+        because a filter stays until it is cleared by hand."""
+        if self._filter_bar.isHidden() or self._filter_input.text():
+            self._open_search()
+        else:
+            self._filter_bar.hide()
+
+    def _open_search(self):
+        if self._main_stack.currentIndex() != 0:
+            self._nav_home()
+            if self._main_stack.currentIndex() != 0:   # the user stayed on a form
+                return
+        self._filter_bar.show()
+        self._filter_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._filter_input.selectAll()
+
+    def _on_filter_changed(self, text: str):
+        self._mgr.save_connection_filter(text)
+        self._apply_list_filters()
+
+    def _on_filter_escape(self):
+        """Esc closes an empty field; a filter stays, only the focus leaves."""
+        if self._filter_input.text():
+            self._filter_input.clearFocus()
+        else:
+            self._filter_bar.hide()
+
+    def _clear_filter(self):
+        self._filter_input.clear()
+        self._filter_input.setFocus()
+
+    def _update_filter_ui(self, shown: int | None = None, total: int | None = None):
+        """Icons in the theme's colours (the accent while a filter is set),
+        the clear button and the "3 of 8" count."""
+        theme = self._mgr.get_settings().theme or "dark"
+        text = self._filter_input.text()
+        active = bool(text.strip())
+        idle = "#4a5a6a" if is_light(theme) else dark_tone(theme, "#aab4c4")
+        self._search_btn.setIcon(svg_icon("magnifier", current_accent() if active else idle, 16))
+        if self._search_btn.property("active") != ("true" if active else "false"):
+            self._search_btn.setProperty("active", "true" if active else "false")
+            self._search_btn.style().unpolish(self._search_btn)
+            self._search_btn.style().polish(self._search_btn)
+        self._filter_icon_action.setIcon(svg_icon("magnifier", current_accent() if active else idle, 15))
+        self._filter_clear_action.setIcon(svg_icon("x", idle, 14))
+        self._filter_clear_action.setVisible(bool(text))
+        if shown is not None:
+            if not active:
+                self._filter_count.setText("")
+            elif shown:
+                self._filter_count.setText(tr("search.count", shown=shown, total=total))
+            else:
+                self._filter_count.setText(tr("search.none"))
 
     def _refresh_groups_combo(self):
         """Refresh the groups filter combo with available groups."""
@@ -5845,11 +6085,6 @@ class MainWindow(FramelessMainWindow):
             if active_key:
                 self._switch_terminal_tab(conn_id, active_key)
         else:
-            # First session for this conn — check the free session limit
-            if self._terminal_limit_reached():
-                self._show_pro_session_limit_dialog()
-                self._close_right_panel()
-                return
             self._create_terminal_session(conn_id, initial_input=initial_input)
 
         self._right_panel_widget.setVisible(True)
@@ -6002,27 +6237,8 @@ class MainWindow(FramelessMainWindow):
         self._add_terminal_session(self._panel_conn_id)
 
     def _add_terminal_session(self, conn_id: str, initial_input: str | None = None) -> None:
-        """Another session for conn_id, within the free session limit."""
-        if self._terminal_limit_reached():
-            self._show_pro_session_limit_dialog()
-            return
+        """Another session for conn_id."""
         self._create_terminal_session(conn_id, initial_input=initial_input)
-
-    def _terminal_limit_reached(self) -> bool:
-        """True when the free session limit is on, reached, and Pro is not active."""
-        from src import pro_manager
-        limit = pro_manager.FREE_TERMINAL_SESSION_LIMIT
-        if limit is None:
-            return False
-        total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
-        return total >= limit and not pro_manager.is_pro_active()
-
-    def _show_pro_session_limit_dialog(self):
-        StyledMessageBox.information(
-            self,
-            tr("pro.session_limit.title"),
-            tr("pro.session_limit.body"),
-        )
 
     def _on_end_terminal_session(self):
         """'Session beenden' button: terminate active tab; if last → close terminal panel."""
