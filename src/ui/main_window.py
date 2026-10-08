@@ -44,6 +44,7 @@ from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
 from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
 from src.help_links import CONNECTION_FORM, open_help
+from src.tips import TipContext, pick_tip
 from src.ui.theme import (
     DEFAULT_ACCENT, accent_tone, current_accent, current_accent_text, dark_tone, is_light,
     normalize_hex, text_on_accent,
@@ -314,6 +315,7 @@ class MainWindow(FramelessMainWindow):
         self._leave_guard_active = False
         self._saving_in_progress = False
         self._shortcuts: list[QShortcut] = []
+        self._tip_history: list[str] = []      # ids of the tips shown, oldest first
         self._explicit_quit = False
         
         # Debug mode settings
@@ -1461,19 +1463,36 @@ class MainWindow(FramelessMainWindow):
         copy_layout.setContentsMargins(0, 0, 0, 0)
         copy_layout.setSpacing(10)
 
-        title = QLabel(tr("panel.placeholder.title"))
+        # A tip that fits the user's setup ("Did you know?"), a new one each
+        # time the overview comes back, and more on request.
+        title = QLabel()
         title.setObjectName("rightPanelPlaceholderTitle")
         title.setWordWrap(True)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(title)
 
-        msg = QLabel(tr("panel.placeholder.body"))
+        msg = QLabel()
         msg.setObjectName("rightPanelPlaceholderBody")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
         msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         msg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(msg)
+
+        next_btn = QPushButton(tr("tip.next"))
+        next_btn.setObjectName("tipNextBtn")
+        next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_layout.addWidget(next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        def show_tip():
+            tip = pick_tip(self._tip_context(), self._tip_history)
+            self._tip_history = (self._tip_history + [tip.id])[-20:]
+            title.setText(tr(tip.title_key))
+            msg.setText(tr(tip.key))
+
+        show_tip()
+        next_btn.clicked.connect(show_tip)
 
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -1482,6 +1501,27 @@ class MainWindow(FramelessMainWindow):
         self._rp_backdrop.show_field("overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
+
+    def _tip_context(self) -> TipContext:
+        """What the tips in the empty overview depend on (see src/tips.py)."""
+        settings = self._mgr.get_settings()
+        try:
+            from src.auth_manager import AuthManager
+            single = AuthManager.single_user_mode_enabled()
+            admin = Session.is_admin()
+            return TipContext.collect(
+                settings,
+                self._mgr.get_connections(),
+                self._mgr.get_templates(),
+                self._mgr.get_active_mounts(),
+                single_user=single,
+                # only asked when it matters: it probes the Credential Manager
+                can_go_single=admin and not single and AuthManager.can_enable_single_user_mode(),
+                is_admin=admin,
+            )
+        except Exception as exc:        # a tip is never worth a broken overview
+            logger.warning(f"Tip context unavailable: {exc}")
+            return TipContext(settings=settings)
 
     def _close_right_panel(self):
         """Reset the right panel to its placeholder state and deselect."""
@@ -3753,64 +3793,8 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(dev_card)
         v.addSpacing(14)
 
-        from src.pro_manager import SHOW_PRO_UI
-        if SHOW_PRO_UI:
-            self._build_pro_settings(v, _section_hdr, _group_card)
-
         v.addStretch()
         self._fs_layout.addWidget(body)
-
-    def _build_pro_settings(self, v, _section_hdr, _group_card):
-        """The Pro licence section of the settings (hidden while SHOW_PRO_UI is off)."""
-        # ── PRO LICENSE ───────────────────────────────────────────────────
-        v.addWidget(_section_hdr(tr("settings.section.pro")))
-        v.addSpacing(4)
-
-        from src.pro_manager import is_pro_active as _is_pro_active
-        _pro_active = _is_pro_active()
-
-        self._sf_pro_status_lbl = QLabel(
-            tr("settings.pro.active") if _pro_active else tr("settings.pro.inactive")
-        )
-        self._sf_pro_status_lbl.setObjectName("rpSectionLabel" if _pro_active else "hintLabel")
-        self._sf_pro_status_lbl.setWordWrap(True)
-
-        self._sf_pro_key = QLineEdit()
-        self._sf_pro_key.setPlaceholderText("NEO-XXXX-XXXX-XXXX")
-        self._sf_pro_key.setVisible(not _pro_active)
-
-        self._sf_pro_activate_btn = QPushButton(tr("settings.pro.activate"))
-        self._sf_pro_activate_btn.setObjectName("primaryBtn")
-        self._sf_pro_activate_btn.setFixedWidth(120)
-        self._sf_pro_activate_btn.setMinimumHeight(32)
-        self._sf_pro_activate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sf_pro_activate_btn.setVisible(not _pro_active)
-        self._sf_pro_activate_btn.clicked.connect(self._sf_activate_pro)
-
-        pro_card, pro_vl = _group_card()
-        _pro_status_row = QWidget()
-        _pro_status_row.setObjectName("settingsRow")
-        _pro_inner = QVBoxLayout(_pro_status_row)
-        _pro_inner.setContentsMargins(16, 11, 16, 11)
-        _pro_inner.setSpacing(6)
-        _pro_inner.addWidget(self._sf_pro_status_lbl)
-        if not _pro_active:
-            _key_row_w = QWidget()
-            _key_row_hl = QHBoxLayout(_key_row_w)
-            _key_row_hl.setContentsMargins(0, 0, 0, 0)
-            _key_row_hl.setSpacing(8)
-            _key_row_hl.addWidget(self._sf_pro_key, stretch=1)
-            _key_row_hl.addWidget(self._sf_pro_activate_btn)
-            _pro_inner.addWidget(_key_row_w)
-            _donate_lbl = QLabel(
-                f'<a href="https://neosshwinmanager.org/pro" style="color:{current_accent()};">'
-                f'{tr("settings.pro.learn_more")}</a>'
-            )
-            _donate_lbl.setObjectName("hintLabel")
-            _donate_lbl.setOpenExternalLinks(True)
-            _pro_inner.addWidget(_donate_lbl)
-        pro_vl.addWidget(_pro_status_row)
-        v.addWidget(pro_card)
 
     def _sf_check_updates(self):
         """Manual update check from settings screen."""
@@ -3865,24 +3849,6 @@ class MainWindow(FramelessMainWindow):
 
     def _on_sf_security_changed(self, index: int):
         self._sf_sec_warning.setVisible(index >= 1)
-
-    def _sf_activate_pro(self):
-        from src.pro_manager import activate_pro
-        key = getattr(self._sf_pro_key, "text", lambda: "")().strip().upper()
-        if not key:
-            self._show_inline_message("PRO", tr("settings.pro.key_required"), is_error=True)
-            return
-        self._sf_pro_activate_btn.setEnabled(False)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activating"))
-        QApplication.processEvents()
-        result = activate_pro(key)
-        self._sf_pro_activate_btn.setEnabled(True)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activate"))
-        if result["success"]:
-            StyledMessageBox.information(self, "PRO", tr("settings.pro.activation_success"))
-            self._open_settings_panel()
-        else:
-            self._show_inline_message("PRO", result.get("error", ""), is_error=True)
 
     def _sf_terminal_client_toggled(self, _button=None, _checked=None):
         is_putty = self._sf_term_putty.isChecked()
@@ -6119,11 +6085,6 @@ class MainWindow(FramelessMainWindow):
             if active_key:
                 self._switch_terminal_tab(conn_id, active_key)
         else:
-            # First session for this conn — check the free session limit
-            if self._terminal_limit_reached():
-                self._show_pro_session_limit_dialog()
-                self._close_right_panel()
-                return
             self._create_terminal_session(conn_id, initial_input=initial_input)
 
         self._right_panel_widget.setVisible(True)
@@ -6276,27 +6237,8 @@ class MainWindow(FramelessMainWindow):
         self._add_terminal_session(self._panel_conn_id)
 
     def _add_terminal_session(self, conn_id: str, initial_input: str | None = None) -> None:
-        """Another session for conn_id, within the free session limit."""
-        if self._terminal_limit_reached():
-            self._show_pro_session_limit_dialog()
-            return
+        """Another session for conn_id."""
         self._create_terminal_session(conn_id, initial_input=initial_input)
-
-    def _terminal_limit_reached(self) -> bool:
-        """True when the free session limit is on, reached, and Pro is not active."""
-        from src import pro_manager
-        limit = pro_manager.FREE_TERMINAL_SESSION_LIMIT
-        if limit is None:
-            return False
-        total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
-        return total >= limit and not pro_manager.is_pro_active()
-
-    def _show_pro_session_limit_dialog(self):
-        StyledMessageBox.information(
-            self,
-            tr("pro.session_limit.title"),
-            tr("pro.session_limit.body"),
-        )
 
     def _on_end_terminal_session(self):
         """'Session beenden' button: terminate active tab; if last → close terminal panel."""

@@ -333,15 +333,6 @@ def init_db() -> None:
                 UNIQUE(user_id, conn_id)
             );
 
-            CREATE TABLE IF NOT EXISTS pro_licenses (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                machine_id   TEXT NOT NULL UNIQUE,
-                pro_key_hash TEXT NOT NULL,
-                hmac_token   TEXT NOT NULL,
-                activated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                last_checked TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
             CREATE TABLE IF NOT EXISTS cli_history (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -490,6 +481,12 @@ def init_db() -> None:
             cols = [row[1] for row in cursor.fetchall()]
             if "drive_letter" not in cols:
                 conn.execute("ALTER TABLE active_mounts ADD COLUMN drive_letter TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Migration: the Pro licence is gone, so is its table
+        try:
+            conn.execute("DROP TABLE IF EXISTS pro_licenses")
         except Exception:
             pass
 

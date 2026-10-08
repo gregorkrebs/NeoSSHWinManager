@@ -14,6 +14,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - **Filter the connection list.** A magnifier above the list (or Ctrl+F) opens a filter field. It filters by name, host and user name as you type, with every character, and shows how many connections match. Several words narrow the list further. What you type stays there, across restarts too, until you change it or clear it with the × in the field; while a filter is set, the magnifier is highlighted.
 - **Help in the connection form.** A ? at the top of the form and beside every field opens the online documentation at the explanation of that field. Below the remote path, a tip says that it is usually your home directory on the server and that the command pwd shows it after an SSH login.
+- **Tips in the empty overview.** Where "Ready for the next step" used to stand, the overview now shows a tip ("Did you know?"): 60 short notes on features, shortcuts and settings, and a few jokes, in all six languages. A tip only shows up when it fits your setup: single-user mode is suggested only when you are the only account and sign in with a password, the FTP tips only appear with FTP hosts, and the hint at a setting disappears once you have switched it on. A new tip comes each time the overview returns, and "Next tip" shows another one.
 - **No account to set up at the first start.** A new installation starts right away in single-user mode: the app signs you in automatically. Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
   - If you would rather sign in with a password, for example because several people use the computer, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
   - An installation with one account can switch to single-user mode in the same place. The account is then renamed to "default".
@@ -32,6 +33,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - **The login window appears a little sooner.** The main window is now loaded after you have signed in.
 - **The whole interface follows your language.** Some texts stayed in German (or English) whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
 - **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
+- **The Pro licence is gone for good.** NEO SSH-Win Manager is free and open source, with every feature for everyone. The app no longer contains a licence check, and it no longer contacts the licence server.
 - Button texts with "&", such as "Create account & start", no longer lose the "&".
 - **No more small windows flashing up after the login.** While the main window was being built, a small empty window appeared and vanished again for every SFTP host in your list. The automatic reconnect of your drives had nothing to do with it.
 
@@ -103,6 +105,14 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - The filter text is stored per user in `app_settings.connection_filter_enc`/`connection_filter_iv`, encrypted with the user's key like the connections it may name, in columns of their own that saving the settings never overwrites (`get_connection_filter()`, `save_connection_filter()`). It is saved with every change and restored at the start, with the field open. It is cleared only by hand: the × in the field. A second click on the magnifier or Esc closes the field only while it is empty; Esc in a filled field just leaves it.
 - Tests in `tests/test_connection_filter.py` cover matching, the encrypted storage and that saving the settings keeps the filter.
 
+#### Tips in the empty overview
+
+- `src/tips.py` holds the tips: each is a translation key (`tip.<id>`) and a condition on a `TipContext`, which holds the user's settings, the number of connections and of SFTP connections, mounted drives, groups, templates, plain FTP hosts, password or key login, CLI access, single-user mode, whether single-user mode could be switched on, and admin rights. `TipContext.collect()` derives it from the connections; the main window builds it in `_tip_context()` and asks `AuthManager.can_enable_single_user_mode()`, which probes Credential Manager, only for an admin with password login.
+- The tips share the heading `tip.title`; every joke has one of its own (`tip.<id>.title`, see `Tip.title_key`).
+- `pick_tip()` picks at random among the tips that apply and avoids the last 20 shown; while there is no connection, the tip on adding one comes first. The texts `panel.placeholder.title` and `panel.placeholder.body` are gone.
+- The overview's body text has a minimum height instead of a fixed 45 px, so longer tips are not cut off. New style `#tipNextBtn` in the dark and light sheets, in the accent colour.
+- Tests in `tests/test_tips.py` cover the translations (every tip in every language, no texts left without a tip), the conditions (single-user mode, settings that are already on, the chosen terminal, no connections, FTP hosts) and that tips do not repeat.
+
 #### Single-user mode by default
 
 - `main.py` starts with `AuthManager.sign_in_automatically()`. It signs in single-user mode as before; when no account exists yet, it sets single-user mode up through `initialize_single_user_mode()`, so the first start shows no login dialog. If that fails (Windows Credential Manager unavailable, or the password cannot be stored), it logs why and the registration form appears as before. Installations with password login are not affected.
@@ -127,6 +137,13 @@ The identifiers are the same as in the fork (table `application_mode`, Credentia
 - `ConnectionCard._build_ui()` made the SSH button visible before adding it to the card's layout. A widget shown without a parent is a top-level window, so every SFTP card showed a 32×32 window until the layout adopted it a moment later; FTP cards hide the button and were not affected. `setVisible()` now comes after `addWidget()`.
 - Found by logging every window shown (`SetWinEventHook`) while the app started without a console, the way the built exe does, and by recording each widget shown as a window inside the app. The automatic reconnect started `sshfs.exe` and `label` with `CREATE_NO_WINDOW` and showed no window; after the fix, the login, the telemetry question and the main window are the only windows left.
 - `tests/test_no_flashing_windows.py` fails if building a connection card (SFTP, SFTP mounted, FTP) shows any window.
+
+#### Removed: Pro licence
+
+- `src/pro_manager.py` is deleted: the licence activation against `neo_pro_validate.php`, the local HMAC check, the machine ID read via `wmic` and the switches `SHOW_PRO_UI` and `FREE_TERMINAL_SESSION_LIMIT`.
+- The hidden licence section of the settings (`_build_pro_settings`, `_sf_activate_pro`) and the terminal session limit (`_terminal_limit_reached`, `_show_pro_session_limit_dialog`) are removed from `src/ui/main_window.py`. `_add_terminal_session()` now opens the session directly.
+- The `pro_licenses` table is no longer created, and a migration drops it from existing databases together with any stored licence token.
+- The translation keys `settings.section.pro`, `settings.pro.*` and `pro.session_limit.*` are removed from all six languages.
 
 </details>
 

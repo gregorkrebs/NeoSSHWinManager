@@ -35,7 +35,7 @@ TEXT_CALLS = {
 }
 TEXT_KWARGS = {"yes_text", "no_text"}
 # Language-neutral literals: product name, sample values, placeholders
-ALLOWED = {"NEO SSH-Win Manager", "root", "NEO-XXXX-XXXX-XXXX", "web, prod, linux", "SHA-256:"}
+ALLOWED = {"NEO SSH-Win Manager", "root", "web, prod, linux", "SHA-256:"}
 
 
 def _translations(lang):

@@ -1215,8 +1215,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     color: #8fa4b8;
     font-size: 13px;
     padding: 0;
-    min-height: 45px;
-    max-height: 45px;
+    min-height: 72px;
+}
+
+QPushButton#tipNextBtn {
+    background: transparent;
+    border: none;
+    color: #00b4d8;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+QPushButton#tipNextBtn:hover {
+    background-color: #0d2137;
+    color: #38d4f8;
 }
 
 #rightPanelPlaceholder,
@@ -2940,8 +2953,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     color: #617386;
     font-size: 13px;
     padding: 0;
-    min-height: 45px;
-    max-height: 45px;
+    min-height: 72px;
+}
+
+QPushButton#tipNextBtn {
+    background: transparent;
+    border: none;
+    color: #0077b6;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+QPushButton#tipNextBtn:hover {
+    background-color: #e8f6fb;
+    color: #005a8a;
 }
 
 #rightPanelPlaceholder,
