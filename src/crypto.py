@@ -323,7 +323,14 @@ def is_available() -> bool:
 
 def is_keyring_available() -> bool:
     """Check if keyring (Windows Credential Manager) is available."""
-    return _KEYRING_AVAILABLE
+    if not _KEYRING_AVAILABLE:
+        return False
+    try:
+        # Importing keyring is not enough: a backend may be unavailable.
+        keyring.get_keyring().get_password(_KEYRING_SERVICE, "__availability_probe__")
+        return True
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------

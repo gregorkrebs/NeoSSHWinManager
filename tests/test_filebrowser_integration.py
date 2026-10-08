@@ -220,6 +220,25 @@ def test_cancel_removes_the_partial_file_it_created(fs, qapp, tmp_path, remote_r
     assert not (remote_root / "c.bin").exists()
 
 
+def test_retry_starts_a_cancelled_job_over(fs, qapp, tmp_path, remote_root):
+    data = _write(tmp_path / "again.bin", 400_000, 6)
+    q = _queue(fs, limit_up_kib=60)
+    q.upload([str(tmp_path / "again.bin")], "/")
+    _wait(q, qapp, until=lambda: any(j.done > 60_000 for j in q.jobs.values()))
+    q.cancel_all()
+    _wait(q, qapp)
+    job = next(iter(q.jobs.values()))
+    assert job.state == CANCELLED
+    q.settings.limit_up_kib = 0
+    q.apply_settings()
+    q.retry([job.id])
+    _wait(q, qapp)
+    assert job.state == DONE, job.error
+    assert (remote_root / "again.bin").read_bytes() == data
+    q.remove([job.id])
+    assert not q.jobs
+
+
 def test_rate_limit_is_respected(fs, qapp, tmp_path):
     _write(tmp_path / "r.bin", 300 * 1024, 5)
     q = _queue(fs, limit_up_kib=100)

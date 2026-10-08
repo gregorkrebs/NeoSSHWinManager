@@ -68,11 +68,15 @@ if len(sys.argv) > 2 and sys.argv[1] == "--repair-permissions":
 # Für CLI-Zugriff existiert NeoSSHWinManager-cli.exe (console-subsystem).
 if any(arg in sys.argv for arg in ("--connect-cli", "-connectssh")):
     import ctypes
+    sys.path.insert(0, os.path.dirname(__file__))
+    from src.config import read_install_prefs
+    from src.i18n import set_language, tr as _tr
+    # No user is signed in yet: use the language chosen in the installer.
+    set_language(read_install_prefs().get("language", "en"))
     ctypes.windll.user32.MessageBoxW(
         None,
-        "Für CLI-Zugriff bitte NeoSSHWinManager-cli.exe verwenden.\n\n"
-        "Beispiel:\n  NeoSSHWinManager-cli.exe --connect-cli <key>",
-        "SSH Win Manager – falscher Einstiegspunkt",
+        _tr("cli.wrong_entry.body"),
+        _tr("cli.wrong_entry.title"),
         0x30,  # MB_ICONWARNING
     )
     sys.exit(2)
@@ -135,10 +139,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QIcon
 
 from src.ui.theme import STYLESHEET, get_stylesheet
-from src.ui.main_window import MainWindow
 from src.database import init_db
-from src.ui.dialogs.login_dialog import LoginDialog
-from src.auth_manager import Session
 from src.i18n import tr
 from src.channel import display_name
 
@@ -197,7 +198,7 @@ def _install_global_exception_handlers():
                 box.setIcon(QMessageBox.Icon.Critical)
                 box.setWindowTitle(tr("app.unexpected_error.title"))
                 box.setText(tr("app.unexpected_error.body"))
-                copy_btn = box.addButton("Details kopieren", QMessageBox.ButtonRole.ActionRole)
+                copy_btn = box.addButton(tr("app.unexpected_error.copy"), QMessageBox.ButtonRole.ActionRole)
                 copy_btn.setIcon(svg_icon("copy", "#ffffff", 14))
                 copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(err_text))
                 box.addButton(QMessageBox.StandardButton.Ok)
@@ -303,7 +304,7 @@ def main():
 
     # Apply global stylesheet
     from src.ui.theme import THEME_COLORS
-    app.setStyleSheet(get_stylesheet("dark").replace("__SURFACE__", THEME_COLORS["dark"]["surface"]))
+    app.setStyleSheet(get_stylesheet("dark"))
 
     # Setze Palette für native Popups
     from PyQt6.QtGui import QPalette, QColor
@@ -359,12 +360,38 @@ def main():
                 logger.debug(f"Auto-Login deaktiviert für '{windows_user}'")
 
     # ── 4. Login / Registration ──────────────────────────────────
-    login_dlg = LoginDialog()
-    if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
-        sys.exit(0)
+    # AuthManager loads the persisted login attempts on import, so it is
+    # imported only now, after the permission repair and init_db().
+    from src.auth_manager import AuthManager, Session
+    from src.ui.dialogs.login_dialog import LoginDialog
+
+    # Single-user mode keeps the app password in Windows Credential Manager
+    # and therefore needs no interactive login. It is also how the app starts
+    # the very first time, so nobody has to create an account up front.
+    single_user = AuthManager.sign_in_automatically()
+    if single_user:
+        Session.login(single_user)
+    else:
+        # The login screen looks like the app did for whoever signed in last:
+        # same theme, accent colour and language.
+        look = AuthManager.login_screen_appearance()
+        from src.i18n import set_language, is_rtl
+        from src.ui.theme import set_current_accent
+        set_language(look["language"])
+        app.setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
+        )
+        set_current_accent(look["accent"], look["accent_text"])
+        from src.ui.node_network import set_background_enabled
+        set_background_enabled(look["background_network"])
+        app.setStyleSheet(get_stylesheet(look["theme"]))
+        login_dlg = LoginDialog(theme=look["theme"])
+        if login_dlg.exec() != LoginDialog.DialogCode.Accepted:
+            sys.exit(0)
 
     if not Session.is_logged_in():
         sys.exit(0)
+    AuthManager.record_login(Session.current().id)
 
     # Apply user's preferred language
     user_settings = None
@@ -378,6 +405,9 @@ def main():
         app.setLayoutDirection(
             Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
         )
+        from src.ui.theme import set_current_accent
+        set_current_accent(getattr(user_settings, "accent_color", ""),
+                           getattr(user_settings, "accent_text_color", ""))
         app.setStyleSheet(get_stylesheet(user_settings.theme))
         
         # Telemetry Opt-In / Send
@@ -459,6 +489,9 @@ def main():
 
     try:
         # Create and show main window (maximiert mit Titelleiste)
+        # The large UI module is imported only after the login, so the
+        # login dialog appears sooner.
+        from src.ui.main_window import MainWindow
         window = MainWindow()
         window.showMaximized()
 

@@ -253,6 +253,14 @@ def init_db() -> None:
 
     with get_connection() as conn:
         conn.executescript("""
+            -- App-weiter Anmeldemodus: single_user=1 → automatische Anmeldung
+            -- mit dem Passwort aus der Windows-Anmeldeinformationsverwaltung
+            CREATE TABLE IF NOT EXISTS application_mode (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                single_user INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO application_mode (id, single_user) VALUES (1, 0);
+
             CREATE TABLE IF NOT EXISTS users (
                 id          TEXT PRIMARY KEY,
                 username    TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -307,7 +315,7 @@ def init_db() -> None:
                 auto_login               INTEGER DEFAULT 0,  -- Windows Auto-Login
                 auto_reconnect           INTEGER DEFAULT 1,  -- Beim Start automatisch reconnecten
                 language                 TEXT    DEFAULT 'en',  -- UI Sprache (en, de, es, ru, nl, ar)
-                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, light)
+                theme                    TEXT    DEFAULT 'dark',  -- UI Theme (dark, gray, light)
                 security_level           INTEGER DEFAULT 0,  -- 0=Strict, 1=Key-Auth, 2=Insecure-PW
                 allow_passwordless_key_auth INTEGER DEFAULT 0,
                 allow_insecure_password_auth INTEGER DEFAULT 0,
@@ -323,15 +331,6 @@ def init_db() -> None:
                 conn_id     TEXT NOT NULL,
                 mounted_at  TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(user_id, conn_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS pro_licenses (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                machine_id   TEXT NOT NULL UNIQUE,
-                pro_key_hash TEXT NOT NULL,
-                hmac_token   TEXT NOT NULL,
-                activated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                last_checked TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS cli_history (
@@ -420,6 +419,9 @@ def init_db() -> None:
             cols = [row[1] for row in cursor.fetchall()]
             if "enc_key_kdf" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN enc_key_kdf TEXT NOT NULL DEFAULT 'pbkdf2'")
+            # Zuletzt angemeldet: bestimmt Design und Sprache der Login-Maske
+            if "last_login_at" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
         except Exception:
             pass
 
@@ -447,12 +449,44 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN terminal_client TEXT DEFAULT 'xterm'")
             if "sshfs_disable_cache" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sshfs_disable_cache INTEGER DEFAULT 0")
+            if "accent_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_color TEXT DEFAULT ''")
+            if "allow_shared_drive_letters" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN allow_shared_drive_letters INTEGER DEFAULT 0")
+            if "auto_pick_free_drive_letter" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN auto_pick_free_drive_letter INTEGER DEFAULT 0")
+            if "accent_text_color" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN accent_text_color TEXT DEFAULT ''")
+            if "background_network" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN background_network INTEGER DEFAULT 1")
             # File browser settings: one encrypted JSON document (bookmarks
             # hold remote paths, which are encrypted like connection metadata).
             if "sftp_browser_enc" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_enc TEXT DEFAULT ''")
             if "sftp_browser_iv" not in cols:
                 conn.execute("ALTER TABLE app_settings ADD COLUMN sftp_browser_iv TEXT DEFAULT ''")
+            # Text filter of the connection list, encrypted like the
+            # connections it names.
+            if "connection_filter_enc" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_enc TEXT DEFAULT ''")
+            if "connection_filter_iv" not in cols:
+                conn.execute("ALTER TABLE app_settings ADD COLUMN connection_filter_iv TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Migration: the letter a host was actually mounted on (may differ
+        # from its configured one when another letter was picked at mount time)
+        try:
+            cursor = conn.execute("PRAGMA table_info(active_mounts)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "drive_letter" not in cols:
+                conn.execute("ALTER TABLE active_mounts ADD COLUMN drive_letter TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Migration: the Pro licence is gone, so is its table
+        try:
+            conn.execute("DROP TABLE IF EXISTS pro_licenses")
         except Exception:
             pass
 

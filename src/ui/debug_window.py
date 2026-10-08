@@ -26,7 +26,7 @@ class DebugWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("debugSurface")
-        self.setWindowTitle("SSH Win Manager – Debug Log")
+        self.setWindowTitle(tr("debug.title"))
         self.setMinimumSize(700, 480)
         self.resize(860, 560)
         self.setModal(False)
@@ -70,7 +70,7 @@ class DebugWindow(QDialog):
         title_row.setSpacing(8)
         dot = QLabel("●")
         dot.setObjectName("statusDot")
-        title = QLabel("Live Debug Log")
+        title = QLabel(tr("debug.live_log"))
         title.setObjectName("debugTitle")
         title_row.addWidget(dot)
         title_row.addWidget(title)

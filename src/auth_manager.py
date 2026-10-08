@@ -14,12 +14,14 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.database import get_connection
 from src.crypto import (
     hash_password, verify_password, generate_enc_key,
-    encrypt_key, decrypt_key, encrypt, decrypt, is_available
+    encrypt_key, decrypt_key, encrypt, decrypt, is_available,
+    is_keyring_available, store_key_in_credential_manager,
+    retrieve_key_from_credential_manager, delete_key_from_credential_manager
 )
 from src.config import Connection, AppSettings, CliHistoryEntry
 from src.app_logger import logger
@@ -145,6 +147,22 @@ class LoginLockedError(Exception):
         )
 
 
+class SingleUserModeError(RuntimeError):
+    """A login mode switch was refused. *key* is the translation key of the
+    message the UI shows."""
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(key)
+
+    @staticmethod
+    def text_for(exc: Exception) -> str:
+        """User-facing, translated message for an error from a mode switch."""
+        from src.i18n import tr
+        if isinstance(exc, SingleUserModeError):
+            return tr(exc.key)
+        return f"{tr('login.mode_failed')} ({exc})"
+
+
 # ------------------------------------------------------------------
 # Datenmodelle
 # ------------------------------------------------------------------
@@ -212,6 +230,245 @@ class Session:
 # ------------------------------------------------------------------
 
 class AuthManager:
+
+    # ------------------------------------------------------------------
+    # Single-user mode
+    #
+    # The only account gets a random password that lives in Windows
+    # Credential Manager, so the app signs in without a login dialog.
+    # The account id and its encryption key stay the same when switching
+    # between the modes; only the key wrapping changes.
+    # ------------------------------------------------------------------
+
+    _SINGLE_CREDENTIAL = "single_user_password"
+    _SINGLE_USERNAME = "default"
+
+    @staticmethod
+    def single_user_mode_enabled() -> bool:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT single_user FROM application_mode WHERE id=1"
+            ).fetchone()
+        return bool(row and row["single_user"])
+
+    @staticmethod
+    def can_enable_single_user_mode() -> bool:
+        if not is_keyring_available():
+            return False
+        with get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] <= 1
+
+    @staticmethod
+    def _set_single_user_mode(enabled: bool) -> None:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE application_mode SET single_user=? WHERE id=1",
+                (int(enabled),),
+            )
+
+    @classmethod
+    def authenticate_single_user(cls) -> Optional[AppUser]:
+        """Sign in the account whose password is stored in Credential Manager.
+
+        Returns None when single-user mode is off or the stored password is
+        unavailable; the caller then shows the normal login dialog.
+        """
+        if not cls.single_user_mode_enabled():
+            return None
+        if not is_keyring_available():
+            logger.warning("Single-User-Modus aktiv, aber die Windows-Anmeldeinformationsverwaltung ist nicht verfügbar.")
+            return None
+        password = retrieve_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+        if not password:
+            logger.warning("Single-User-Modus aktiv, aber das gespeicherte App-Passwort fehlt.")
+            return None
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT username FROM users ORDER BY created_at LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return cls.authenticate(row["username"], password)
+        except LoginLockedError:
+            return None
+
+    @classmethod
+    def initialize_single_user_mode(cls) -> AppUser:
+        """First start: create the hidden ``default`` administrator."""
+        if not is_keyring_available():
+            raise SingleUserModeError("login.single_unavailable_keyring")
+        if cls.has_any_users():
+            raise SingleUserModeError("login.single_unavailable_users")
+        import secrets
+        password = secrets.token_urlsafe(32)
+        user = cls.register(cls._SINGLE_USERNAME, password, is_admin=True)
+        if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
+            with get_connection() as conn:
+                conn.execute("DELETE FROM users WHERE id=?", (user.id,))
+            raise SingleUserModeError("login.single_store_failed")
+        cls._set_single_user_mode(True)
+        return user
+
+    @classmethod
+    def sign_in_automatically(cls) -> Optional[AppUser]:
+        """The account the app starts with without a login dialog, if any.
+
+        Single-user mode signs in its account. On the very first start there
+        is no account yet: single-user mode is set up, so nobody has to
+        create an account before using the app; one with a password can be
+        created later in the user management. Returns None when the login
+        dialog is needed: password login is on, or Windows Credential
+        Manager is unavailable on the first start.
+        """
+        user = cls.authenticate_single_user()
+        if user is not None or cls.has_any_users():
+            return user
+        try:
+            return cls.initialize_single_user_mode()
+        except Exception as e:
+            reason = e.key if isinstance(e, SingleUserModeError) else e
+            logger.warning(f"Single-User-Modus beim ersten Start nicht eingerichtet ({reason}); Registrierung wird angezeigt.")
+            return None
+
+    @classmethod
+    def enable_single_user_mode(cls) -> AppUser:
+        """Switch the signed-in only account to automatic ``default`` login."""
+        if not is_keyring_available():
+            raise SingleUserModeError("login.single_unavailable_keyring")
+        current = Session.current()
+        if not current or not current.is_admin or not current.enc_key:
+            # Not reachable from the UI: only administrators see the switch.
+            raise SingleUserModeError("login.mode_failed")
+        with get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+            row = conn.execute("SELECT id FROM users WHERE id=?", (current.id,)).fetchone()
+        if count != 1 or not row:
+            raise SingleUserModeError("login.single_unavailable_users")
+
+        import secrets
+        password = secrets.token_urlsafe(32)
+        pw_hash, salt = hash_password(password)
+        enc_key_enc, enc_key_iv = encrypt_key(
+            current.enc_key, password, salt, kdf="argon2"
+        )
+        if not store_key_in_credential_manager(password, cls._SINGLE_CREDENTIAL):
+            raise SingleUserModeError("login.single_store_failed")
+        try:
+            with get_connection() as conn:
+                conn.execute(
+                    """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                       enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
+                       is_admin=1 WHERE id=?""",
+                    (cls._SINGLE_USERNAME, pw_hash, salt, enc_key_enc, enc_key_iv, current.id),
+                )
+                conn.execute("UPDATE application_mode SET single_user=1 WHERE id=1")
+        except Exception:
+            delete_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+            raise
+        user = AppUser(current.id, cls._SINGLE_USERNAME, True, current.enc_key)
+        Session.login(user)
+        return user
+
+    @classmethod
+    def migrate_single_user_to_multi_user(cls, username: str, password: str) -> AppUser:
+        """Give the ``default`` account a name and password; login is required again."""
+        if not cls.single_user_mode_enabled():
+            raise SingleUserModeError("login.mode_failed")
+        if not is_keyring_available():
+            raise SingleUserModeError("login.single_unavailable_keyring")
+        username = username.strip()
+        if len(username) < 3 or len(password) < 8:
+            raise ValueError("Username must have at least 3 characters and password at least 8 characters.")
+
+        old_password = retrieve_key_from_credential_manager(cls._SINGLE_CREDENTIAL)
+        if not old_password:
+            raise SingleUserModeError("users.mode.credential_missing")
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+                (cls._SINGLE_USERNAME,),
+            ).fetchone()
+        if not row:
+            raise SingleUserModeError("login.mode_failed")
+
+        key = decrypt_key(
+            row["enc_key_enc"], row["enc_key_iv"], old_password,
+            row["pw_salt"], kdf=row["enc_key_kdf"],
+        )
+        pw_hash, salt = hash_password(password)
+        enc_key_enc, enc_key_iv = encrypt_key(key, password, salt, kdf="argon2")
+        with get_connection() as conn:
+            conn.execute(
+                """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                   enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
+                   is_admin=1 WHERE id=?""",
+                (username, pw_hash, salt, enc_key_enc, enc_key_iv, row["id"]),
+            )
+            conn.execute("UPDATE application_mode SET single_user=0 WHERE id=1")
+
+        # The stored password is no longer needed for automatic login.
+        if not delete_key_from_credential_manager(cls._SINGLE_CREDENTIAL):
+            logger.warning("Single-User-Passwort konnte nicht aus der Anmeldeinformationsverwaltung entfernt werden.")
+
+        user = AppUser(row["id"], username, True, key)
+        Session.login(user)
+        return user
+
+    # ------------------------------------------------------------------
+    # Login screen
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def record_login(user_id: str) -> None:
+        """Remember who signed in last; the login screen takes its look from them."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", (user_id,)
+            )
+
+    @staticmethod
+    def set_user_language(user_id: str, language: str) -> None:
+        """Store the language picked on the login screen for this user."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE app_settings SET language = ? WHERE user_id = ?", (language, user_id)
+            )
+
+    @staticmethod
+    def login_screen_appearance() -> dict:
+        """Theme, accent colour, language and background network for the
+        login screen.
+
+        They are those of the user who signed in last (accounts from before
+        last_login_at existed count as never signed in; then the oldest
+        account wins). Before the first account exists, the installer's
+        choices apply. None of these settings is encrypted.
+        """
+        with get_connection() as conn:
+            row = conn.execute(
+                """SELECT s.theme, s.accent_color, s.accent_text_color, s.language, s.background_network
+                   FROM users u JOIN app_settings s ON s.user_id = u.id
+                   ORDER BY u.last_login_at IS NULL, u.last_login_at DESC, u.created_at
+                   LIMIT 1"""
+            ).fetchone()
+        if row:
+            return {
+                "theme": row["theme"] or "dark",
+                "accent": row["accent_color"] or "",
+                "accent_text": row["accent_text_color"] or "",
+                "language": row["language"] or "en",
+                "background_network": row["background_network"] != 0,
+            }
+        from src.config import read_install_prefs
+        prefs = read_install_prefs()
+        return {
+            "theme": prefs.get("theme", "dark"),
+            "accent": "",
+            "accent_text": "",
+            "language": prefs.get("language", "en"),
+            "background_network": True,
+        }
 
     @staticmethod
     def has_any_users() -> bool:
@@ -1015,6 +1272,11 @@ class UserConnectionManager:
             telemetry_enabled=bool(row["telemetry_enabled"]) if "telemetry_enabled" in row.keys() else False,
             telemetry_prompt_shown=bool(row["telemetry_prompt_shown"]) if "telemetry_prompt_shown" in row.keys() else False,
             sshfs_disable_cache=bool(row["sshfs_disable_cache"]) if "sshfs_disable_cache" in row.keys() else False,
+            accent_color=(row["accent_color"] or "") if "accent_color" in row.keys() else "",
+            accent_text_color=(row["accent_text_color"] or "") if "accent_text_color" in row.keys() else "",
+            allow_shared_drive_letters=bool(row["allow_shared_drive_letters"]) if "allow_shared_drive_letters" in row.keys() else False,
+            auto_pick_free_drive_letter=bool(row["auto_pick_free_drive_letter"]) if "auto_pick_free_drive_letter" in row.keys() else False,
+            background_network=bool(row["background_network"]) if "background_network" in row.keys() else True,
         )
 
     def save_settings(self, s: AppSettings) -> None:
@@ -1026,9 +1288,10 @@ class UserConnectionManager:
                     use_putty, putty_path, terminal_client, auto_login, auto_reconnect, language, theme,
                     security_level, allow_passwordless_key_auth, allow_insecure_password_auth,
                     auto_remount_on_lost, telemetry_enabled, telemetry_prompt_shown,
-                    sshfs_disable_cache,
-                    updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                    sshfs_disable_cache, accent_color, accent_text_color,
+                    allow_shared_drive_letters, auto_pick_free_drive_letter,
+                    background_network, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(user_id) DO UPDATE SET
                      start_with_windows=excluded.start_with_windows,
                      minimize_to_tray=excluded.minimize_to_tray,
@@ -1049,6 +1312,11 @@ class UserConnectionManager:
                      telemetry_enabled=excluded.telemetry_enabled,
                      telemetry_prompt_shown=excluded.telemetry_prompt_shown,
                      sshfs_disable_cache=excluded.sshfs_disable_cache,
+                     accent_color=excluded.accent_color,
+                     accent_text_color=excluded.accent_text_color,
+                     allow_shared_drive_letters=excluded.allow_shared_drive_letters,
+                     auto_pick_free_drive_letter=excluded.auto_pick_free_drive_letter,
+                     background_network=excluded.background_network,
                      updated_at=excluded.updated_at""",
                 (self._user.id,
                  int(s.start_with_windows), int(s.minimize_to_tray),
@@ -1061,7 +1329,12 @@ class UserConnectionManager:
                  int(bool(getattr(s, "auto_remount_on_lost", True))),
                  int(bool(getattr(s, "telemetry_enabled", False))),
                  int(bool(getattr(s, "telemetry_prompt_shown", False))),
-                 int(bool(getattr(s, "sshfs_disable_cache", False))))
+                 int(bool(getattr(s, "sshfs_disable_cache", False))),
+                 getattr(s, "accent_color", "") or "",
+                 getattr(s, "accent_text_color", "") or "",
+                 int(bool(getattr(s, "allow_shared_drive_letters", False))),
+                 int(bool(getattr(s, "auto_pick_free_drive_letter", False))),
+                 int(bool(getattr(s, "background_network", True))))
             )
 
     # Backwards-compatible alias used by main.py
@@ -1086,6 +1359,31 @@ class UserConnectionManager:
             return {}
         return data if isinstance(data, dict) else {}
 
+    # The connection list's text filter stays until the user changes it,
+    # across restarts too. It may name hosts, so it is encrypted like them,
+    # and it has columns of its own, which saving the settings never touches.
+    def get_connection_filter(self) -> str:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT connection_filter_enc, connection_filter_iv FROM app_settings WHERE user_id = ?",
+                (self._user.id,),
+            ).fetchone()
+        if not row:
+            return ""
+        return self._decrypt_pw(row["connection_filter_enc"] or "", row["connection_filter_iv"] or "")
+
+    def save_connection_filter(self, text: str) -> None:
+        enc, iv = self._encrypt_pw(text)
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO app_settings (user_id, connection_filter_enc, connection_filter_iv)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     connection_filter_enc=excluded.connection_filter_enc,
+                     connection_filter_iv=excluded.connection_filter_iv""",
+                (self._user.id, enc, iv),
+            )
+
     def save_sftp_browser_settings(self, data: dict) -> None:
         enc, iv = self._encrypt_pw(json.dumps(data, separators=(",", ":")))
         with get_connection() as conn:
@@ -1102,15 +1400,17 @@ class UserConnectionManager:
     # Active Mounts Tracking (für Auto-Reconnect)
     # ------------------------------------------------------------------
 
-    def add_active_mount(self, conn_id: str) -> None:
-        """Markiert eine Verbindung als aktiv gemountet."""
+    def add_active_mount(self, conn_id: str, drive_letter: str = "") -> None:
+        """Markiert eine Verbindung als aktiv gemountet – auf *drive_letter*,
+        dem tatsächlich genutzten Buchstaben (kann vom eingestellten abweichen)."""
         with get_connection() as conn:
             conn.execute(
-                """INSERT INTO active_mounts (user_id, conn_id)
-                   VALUES (?, ?)
+                """INSERT INTO active_mounts (user_id, conn_id, drive_letter)
+                   VALUES (?, ?, ?)
                    ON CONFLICT(user_id, conn_id) DO UPDATE SET
+                   drive_letter = excluded.drive_letter,
                    mounted_at = datetime('now')""",
-                (self._user.id, conn_id)
+                (self._user.id, conn_id, drive_letter or "")
             )
 
     def remove_active_mount(self, conn_id: str) -> None:
@@ -1121,14 +1421,15 @@ class UserConnectionManager:
                 (self._user.id, conn_id)
             )
 
-    def get_active_mounts(self) -> List[str]:
-        """Gibt Liste der aktiven Connection IDs zurück."""
+    def get_active_mounts(self) -> Dict[str, str]:
+        """Aktive Mounts: {conn_id: tatsächlich genutzter Buchstabe} ('' bei
+        Einträgen aus Versionen, die den Buchstaben noch nicht speicherten)."""
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT conn_id FROM active_mounts WHERE user_id = ?",
+                "SELECT conn_id, drive_letter FROM active_mounts WHERE user_id = ?",
                 (self._user.id,)
             ).fetchall()
-        return [r["conn_id"] for r in rows]
+        return {r["conn_id"]: (r["drive_letter"] or "") for r in rows}
 
     def clear_all_active_mounts(self) -> None:
         """Löscht alle aktiven Mounts (beim Logout)."""

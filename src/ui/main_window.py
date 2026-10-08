@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (
     QFileDialog, QRadioButton, QDialogButtonBox, QMenu,
     QInputDialog, QSplitter, QSplitterHandle, QSizePolicy, QStackedWidget, QGridLayout
 )
-from PyQt6.QtGui import QFont, QIcon, QPainter, QColor, QPen, QBrush, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QPen, QBrush, QShortcut, QKeySequence
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QSize, pyqtSignal, QRectF, QEvent
 import os
 import sys
 from PyQt6 import sip
@@ -42,20 +42,18 @@ from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
 from src.ui.frameless_window import FramelessMainWindow
 from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, pixmap_with_text as svg_pixmap_text
+from src.ui.node_network import NodeFieldBackdrop, set_background_enabled
+from src.help_links import CONNECTION_FORM, open_help
+from src.tips import TipContext, pick_tip
+from src.ui.theme import (
+    DEFAULT_ACCENT, accent_tone, current_accent, current_accent_text, dark_tone, is_light,
+    normalize_hex, text_on_accent,
+)
 from src.ui.widgets.no_wheel import NoWheelComboBox, NoWheelSpinBox
-from src.i18n import tr, current_language, available_languages, set_language, is_rtl
+from src.ui.widgets.stepper import Stepper
+from src.i18n import tr, current_language, available_languages, set_language, is_rtl, LANGUAGE_NAMES
 from src.channel import display_name
 from PyQt6.QtCore import QThread
-
-
-_LANG_LABELS = {
-    "en": "English",
-    "de": "Deutsch",
-    "es": "Español",
-    "ru": "Русский",
-    "nl": "Nederlands",
-    "ar": "العربية",
-}
 
 
 def _apply_layout_direction() -> None:
@@ -91,8 +89,26 @@ try:
 except Exception:
     APP_VERSION = "?"
 
+# Height of the header rows on both sides of the splitter: 52 px
+# (#connectionsHeader and #rightPanelHeader in the stylesheet) plus their
+# 1 px bottom border.
+_HEADER_HEIGHT = 53
+
+
 class _PillHandle(QSplitterHandle):
-    """Splitter handle that paints a centred pill indicator."""
+    """Splitter handle that paints a centred pill indicator. A band at the
+    top carries the header row across, so the two headers read as one bar
+    instead of showing the window colour in the gap between them."""
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._band = QWidget(self)
+        self._band.setObjectName("splitterHeaderBand")
+        self._band.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._band.setGeometry(0, 0, self.width(), _HEADER_HEIGHT)
+
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -100,10 +116,30 @@ class _PillHandle(QSplitterHandle):
         pill_w, pill_h = 4, 36
         x = (w - pill_w) // 2
         y = (h - pill_h) // 2
+        pill = QColor(accent_tone("#00b4d8"))
+        pill.setAlpha(55)
         painter.setPen(QPen(QColor(0, 0, 0, 0)))
-        painter.setBrush(QBrush(QColor(0, 180, 216, 55)))
+        painter.setBrush(QBrush(pill))
         painter.drawRoundedRect(x, y, pill_w, pill_h, pill_w, pill_w)
         painter.end()
+
+
+class _FilterLineEdit(QLineEdit):
+    """The connection filter field. Esc belongs to it rather than to the
+    window's Esc shortcut, and is reported through escape_pressed."""
+    escape_pressed = pyqtSignal()
+
+    def event(self, e):  # noqa: D401
+        if e.type() == QEvent.Type.ShortcutOverride and e.key() == Qt.Key.Key_Escape:
+            e.accept()
+            return True
+        return super().event(e)
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            return
+        super().keyPressEvent(e)
 
 
 class _PillSplitter(QSplitter):
@@ -256,6 +292,13 @@ class MainWindow(FramelessMainWindow):
             _apply_layout_direction()
         except Exception:
             pass
+        from src.ui.theme import set_current_accent
+        _s = self._mgr.get_settings()
+        set_current_accent(getattr(_s, "accent_color", ""), getattr(_s, "accent_text_color", ""))
+        set_background_enabled(getattr(_s, "background_network", True))
+        # (theme, accent) the widgets were last painted in, see _apply_settings_object()
+        self._applied_look = (_s.theme or "dark", current_accent(),
+                              bool(getattr(_s, "allow_shared_drive_letters", False)))
         self._controller = SSHFSController()
         self._cards: dict[str, ConnectionCard] = {}
         self._selected_id: str | None = None
@@ -272,6 +315,7 @@ class MainWindow(FramelessMainWindow):
         self._leave_guard_active = False
         self._saving_in_progress = False
         self._shortcuts: list[QShortcut] = []
+        self._tip_history: list[str] = []      # ids of the tips shown, oldest first
         self._explicit_quit = False
         
         # Debug mode settings
@@ -584,7 +628,14 @@ class MainWindow(FramelessMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._active_mounts: set[str] = set()
+        # Hosts the app mounted: {conn_id: letter actually used} (persisted for
+        # auto-reconnect; '' for records from older versions).
+        self._active_mounts: dict[str, str] = {}
+        # Last resolved mount state: {conn_id: letter} (see _compute_mounted).
+        self._mounted_letters: dict[str, str] = {}
+        # Letter a running mount worker mounts on, per conn_id.
+        self._mount_targets: dict[str, str] = {}
+        self._letter_retry: set[str] = set()   # one automatic retry per mount
         self._load_active_mounts()
         self._containers: dict[str, object] = {}
 
@@ -641,14 +692,14 @@ class MainWindow(FramelessMainWindow):
             btn.setProperty("btn_type", btn_type)
         theme = (self._mgr.get_settings().theme or "dark")
         if btn_type == "danger":
-            color = "#ef4444" if theme == "dark" else "#b91c1c"
+            color = "#ef4444" if not is_light(theme) else "#b91c1c"
         elif btn_type == "warning":
             color = "#f59e0b"
         elif active:
-            # Keep legacy GitHub accent for active navigation icons in both themes.
-            color = "#00b4d8"
+            # Bright accent shade for active navigation icons in every theme.
+            color = accent_tone("#00b4d8")
         else:
-            color = "#aab4c4" if theme == "dark" else "#2f4051"
+            color = "#aab4c4" if not is_light(theme) else "#2f4051"
         self._set_sidebar_icon(btn, icon_name, color)
         if slot:
             btn.clicked.connect(slot)
@@ -683,9 +734,11 @@ class MainWindow(FramelessMainWindow):
             self._sb_users_btn = self._sidebar_btn("users", self._on_user_management)
             v.addWidget(self._sb_users_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # Profile button for all users (password change, etc.)
+        # Profile button for all users (password change, etc.); not in
+        # single-user mode, where there is no password to change.
         self._sb_profile_btn = self._sidebar_btn("key", self._on_profile)
         v.addWidget(self._sb_profile_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._sync_profile_btn()
 
         # File browser (SFTP/FTP) for all hosts
         self._sb_files_btn = self._sidebar_btn(_SB_FILES_ICON, self._on_file_browser)
@@ -727,7 +780,7 @@ class MainWindow(FramelessMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             theme = (self._mgr.get_settings().theme or "dark")
-            icon_color = "#00b4d8" if is_active else ("#aab4c4" if theme == "dark" else "#2f4051")
+            icon_color = accent_tone("#00b4d8") if is_active else ("#aab4c4" if not is_light(theme) else "#2f4051")
             self._set_sidebar_icon(btn, icon_name, icon_color)
 
     def _build_connections_panel(self) -> QWidget:
@@ -740,7 +793,10 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("connectionsHeader")
         header_h = QHBoxLayout(header)
-        header_h.setContentsMargins(18, 12, 18, 12)
+        # No vertical margins: the row is 52 px high and its 30-32 px
+        # controls are centred in it. With 12 px above and below they did
+        # not fit, sank onto the bottom border and cut off the badge.
+        header_h.setContentsMargins(18, 0, 18, 0)
         header_h.setSpacing(8)
 
         title_wrap = QWidget()
@@ -757,6 +813,17 @@ class MainWindow(FramelessMainWindow):
         header_h.addWidget(title_wrap)
         header_h.addStretch()
 
+        # Magnifier: opens the filter field below the header
+        self._search_btn = QPushButton()
+        self._search_btn.setObjectName("headerActionBtn")
+        self._search_btn.setFixedSize(QSize(30, 30))
+        self._search_btn.setIconSize(QSize(16, 16))
+        self._search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._search_btn.setToolTip(tr("search.tooltip"))
+        self._search_btn.setAccessibleName(tr("search.tooltip"))
+        self._search_btn.clicked.connect(self._toggle_search)
+        header_h.addWidget(self._search_btn)
+
         self._add_btn = QPushButton()
         self._add_btn.setObjectName("headerAddBtn")
         self._add_btn.setFixedSize(QSize(32, 32))
@@ -771,7 +838,7 @@ class MainWindow(FramelessMainWindow):
         self._mount_all_btn = QPushButton()
         self._mount_all_btn.setObjectName("headerActionBtn")
         self._mount_all_btn.setFixedSize(QSize(30, 30))
-        self._mount_all_btn.setIcon(svg_icon("cloud", "#0077b6", 16))
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
         self._mount_all_btn.setIconSize(QSize(16, 16))
         self._mount_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mount_all_btn.setToolTip(tr("main.mount_all"))
@@ -803,6 +870,7 @@ class MainWindow(FramelessMainWindow):
         header_h.addWidget(self._badge_lbl)
 
         v.addWidget(header)
+        v.addWidget(self._build_filter_bar())
 
         scroll = QScrollArea()
         scroll.setObjectName("connectionScroll")
@@ -836,7 +904,7 @@ class MainWindow(FramelessMainWindow):
         header = QWidget()
         header.setObjectName("rightPanelHeader")
         hh = QHBoxLayout(header)
-        hh.setContentsMargins(18, 12, 18, 12)
+        hh.setContentsMargins(18, 0, 18, 0)   # 32 px buttons centred in 52 px
         hh.setSpacing(8)
 
         title_wrap = QWidget()
@@ -852,6 +920,19 @@ class MainWindow(FramelessMainWindow):
 
         hh.addWidget(title_wrap)
         hh.addStretch()
+
+        # Help (shown with the connection form): the docs at the form
+        self._rp_help_btn = QPushButton()
+        self._rp_help_btn.setObjectName("rpHeaderBtn")
+        self._rp_help_btn.setFixedSize(QSize(32, 32))
+        self._rp_help_btn.setIcon(svg_icon("circle-help", "#aab4c4", 16))
+        self._rp_help_btn.setIconSize(QSize(16, 16))
+        self._rp_help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rp_help_btn.setToolTip(tr("help.form_tooltip"))
+        self._rp_help_btn.setAccessibleName(tr("help.form_tooltip"))
+        self._rp_help_btn.clicked.connect(lambda: open_help("connections", CONNECTION_FORM))
+        self._rp_help_btn.hide()
+        hh.addWidget(self._rp_help_btn)
 
         # Info button (shown in info mode - opens system info panel)
         self._rp_info_btn = QPushButton("i")
@@ -980,6 +1061,10 @@ class MainWindow(FramelessMainWindow):
         self._rp_layout.setSpacing(0)
         self._rp_scroll.setWidget(self._rp_content)
         v.addWidget(self._rp_scroll, stretch=1)
+        # Behind the empty overview and a connection's details; stays put
+        # while the details scroll over it.
+        self._rp_backdrop = NodeFieldBackdrop(self._rp_scroll.viewport())
+        self._rp_backdrop.hide()
 
         # Terminal area (tab bar + stacked panels + end-session bar)
         # Hidden by default; shown only in _PANEL_TERMINAL mode.
@@ -1151,6 +1236,10 @@ class MainWindow(FramelessMainWindow):
         self._fs_layout.setSpacing(0)
         self._fs_scroll.setWidget(self._fs_content)
         v.addWidget(self._fs_scroll, stretch=1)
+        # Behind the user management and the profile; stays put while the
+        # cards scroll over it.
+        self._fs_backdrop = NodeFieldBackdrop(self._fs_scroll.viewport())
+        self._fs_backdrop.hide()
 
         self._fs_btn_bar = QWidget()
         self._fs_btn_bar.setObjectName("rpBtnBar")
@@ -1174,6 +1263,7 @@ class MainWindow(FramelessMainWindow):
         return panel
 
     def _clear_fs_content(self):
+        self._fs_backdrop.hide()
         while self._fs_layout.count():
             item = self._fs_layout.takeAt(0)
             w = item.widget()
@@ -1227,22 +1317,25 @@ class MainWindow(FramelessMainWindow):
         self._selected_id = None
 
         connections = self._mgr.get_connections()  # Nur normale Verbindungen (keine Templates)
-        mounted_map = self._controller.get_mounted_drives()
+        mounted = self._compute_mounted(connections)
+        # Shared letters switched off: flag hosts that still share a letter.
+        from src.drive_utils import duplicate_letters, norm_letter
+        dupes = (set() if self._mgr.get_settings().allow_shared_drive_letters
+                 else duplicate_letters(connections))
 
         for conn in connections:
             # FTP/FTPS hosts are never mounted — SSHFS speaks SSH only.
-            mounted = (not conn.is_ftp) and conn.drive_letter.upper().rstrip("\\") in {
-                k.upper().rstrip("\\") for k in mounted_map.keys()
-            }
-            container = self._create_connection_container(conn, mounted)
+            container = self._create_connection_container(conn, conn.id in mounted)
             self._list_layout.insertWidget(self._list_layout.count() - 1, container)
             self._containers[conn.id] = container
             self._cards[conn.id] = container._card
+            container._card.set_mounted_letter(mounted.get(conn.id))
+            container._card.set_letter_warning(norm_letter(conn.drive_letter) in dupes)
 
         self._update_status()
-        self._tray.update_connections_menu(connections, set(mounted_map.keys()))
+        self._tray.update_connections_menu(connections, mounted)
         self._refresh_groups_combo()  # Gruppen-Filter aktualisieren
-        self._apply_group_filter()
+        self._apply_list_filters()
         # Restore terminal-active indicators on rebuilt cards
         for conn_id in list(self._terminal_conn_tabs.keys()):
             self._update_card_terminal_indicator(conn_id)
@@ -1272,6 +1365,7 @@ class MainWindow(FramelessMainWindow):
         layout.addWidget(card)
         container._card = card
         container._conn_id = conn.id
+        container._conn = conn
         return container
 
     # ------------------------------------------------------------------
@@ -1280,6 +1374,7 @@ class MainWindow(FramelessMainWindow):
 
     def _clear_right_panel_content(self):
         """Remove all widgets from the scrollable content area."""
+        self._rp_backdrop.hide()
         while self._rp_layout.count():
             item = self._rp_layout.takeAt(0)
             w = item.widget()
@@ -1299,8 +1394,10 @@ class MainWindow(FramelessMainWindow):
             "_ef_ftp_implicit_hint", "_ef_ftp_passive", "_ef_ftp_verify",
             "_ef_ftp_verify_hint", "_ef_ftp_plain_warning", "_ef_key_field",
             "_ef_drive_field", "_ef_cli_section", "_ef_putty_widget",
+            "_ef_key_browse_btn", "_ef_lock_banner",
         ):
             setattr(self, attr, None)
+        self._ef_mount_locked = False
         self._ef_initial_snapshot = None
 
     def _ensure_panel_sized(self):
@@ -1331,6 +1428,7 @@ class MainWindow(FramelessMainWindow):
     def _set_right_panel_header(self, kicker: str = "", title: str = ""):
         self._right_panel_title.setText(title)
         self._right_panel_title.setVisible(bool(title))
+        self._rp_help_btn.setVisible(False)     # the connection form shows it again
 
     def _show_right_panel_placeholder(self):
         """Render the default empty-state panel instead of collapsing the area."""
@@ -1365,26 +1463,65 @@ class MainWindow(FramelessMainWindow):
         copy_layout.setContentsMargins(0, 0, 0, 0)
         copy_layout.setSpacing(10)
 
-        title = QLabel(tr("panel.placeholder.title"))
+        # A tip that fits the user's setup ("Did you know?"), a new one each
+        # time the overview comes back, and more on request.
+        title = QLabel()
         title.setObjectName("rightPanelPlaceholderTitle")
         title.setWordWrap(True)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(title)
 
-        msg = QLabel(tr("panel.placeholder.body"))
+        msg = QLabel()
         msg.setObjectName("rightPanelPlaceholderBody")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
         msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         msg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         copy_layout.addWidget(msg)
+
+        next_btn = QPushButton(tr("tip.next"))
+        next_btn.setObjectName("tipNextBtn")
+        next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_layout.addWidget(next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        def show_tip():
+            tip = pick_tip(self._tip_context(), self._tip_history)
+            self._tip_history = (self._tip_history + [tip.id])[-20:]
+            title.setText(tr(tip.title_key))
+            msg.setText(tr(tip.key))
+
+        show_tip()
+        next_btn.clicked.connect(show_tip)
 
         v.addWidget(copy, 0, Qt.AlignmentFlag.AlignHCenter)
 
         v.addStretch()
         self._rp_layout.addWidget(body, stretch=1)
+        self._rp_backdrop.show_field("overview", is_light(self._mgr.get_settings().theme), quiet=copy)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
+
+    def _tip_context(self) -> TipContext:
+        """What the tips in the empty overview depend on (see src/tips.py)."""
+        settings = self._mgr.get_settings()
+        try:
+            from src.auth_manager import AuthManager
+            single = AuthManager.single_user_mode_enabled()
+            admin = Session.is_admin()
+            return TipContext.collect(
+                settings,
+                self._mgr.get_connections(),
+                self._mgr.get_templates(),
+                self._mgr.get_active_mounts(),
+                single_user=single,
+                # only asked when it matters: it probes the Credential Manager
+                can_go_single=admin and not single and AuthManager.can_enable_single_user_mode(),
+                is_admin=admin,
+            )
+        except Exception as exc:        # a tip is never worth a broken overview
+            logger.warning(f"Tip context unavailable: {exc}")
+            return TipContext(settings=settings)
 
     def _close_right_panel(self):
         """Reset the right panel to its placeholder state and deselect."""
@@ -1430,22 +1567,16 @@ class MainWindow(FramelessMainWindow):
 
         card = self._cards.get(conn_id)
         is_mounted = card and card.is_mounted
-        # In DEBUG mode editing is always allowed, even while mounted.
-        edit_locked = is_mounted and not self._mgr.get_settings().debug_mode
 
         self._set_right_panel_header(tr("panel.header.details"), conn.name.upper())
-        # Edit button: enabled=accent color, disabled=muted (theme-aware)
+        # Edit button: always available; while mounted the form locks the
+        # connection fields itself.
         theme = self._mgr.get_settings().theme or "dark"
-        if edit_locked:
-            edit_icon_color = "#aab4c4" if theme == "light" else "#2a3a4a"
-        else:
-            edit_icon_color = "#0077b6" if theme == "light" else "#aab4c4"
+        edit_icon_color = current_accent() if theme == "light" else "#aab4c4"
         self._rp_edit_btn.setIcon(svg_icon("edit", edit_icon_color, 15))
         self._rp_edit_btn.setVisible(True)
-        self._rp_edit_btn.setEnabled(not edit_locked)
-        self._rp_edit_btn.setToolTip(
-            tr("card.tooltip.edit_locked") if edit_locked else tr("card.tooltip.edit")
-        )
+        self._rp_edit_btn.setEnabled(True)
+        self._rp_edit_btn.setToolTip(tr("card.tooltip.edit"))
         # Header actions (overview): Sysinfo → Edit → Terminal → Mount → Close.
         # Terminal, sysinfo and mount all need SSH, so they are hidden for FTP.
         is_ftp = bool(conn.is_ftp)
@@ -1518,7 +1649,7 @@ class MainWindow(FramelessMainWindow):
         is_mounted = (conn.id in self._cards and self._cards[conn.id].is_mounted)
 
         _theme = (self._mgr.get_settings().theme or "dark")
-        _val_color = "#ffffff" if _theme == "dark" else "#1a2332"
+        _val_color = "#ffffff" if not is_light(_theme) else "#1a2332"
 
         body = QWidget()
         body.setObjectName("rpInfoBody")
@@ -1529,7 +1660,7 @@ class MainWindow(FramelessMainWindow):
         def _section(title):
             lbl = QLabel(title.upper())
             lbl.setObjectName("rpSectionLabel")
-            lbl.setStyleSheet("color: #0077b6; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
+            lbl.setStyleSheet(f"color: {current_accent()}; font-size: 11px;font-weight: 600;text-transform: uppercase; letter-spacing: 1px; padding-top: 4px;")
             return lbl
 
         def _row(label, value, value_obj_name="rpValue"):
@@ -1596,7 +1727,7 @@ class MainWindow(FramelessMainWindow):
             v.addWidget(_row(tr("addedit.ftp.passive"), _yes if conn.ftp_passive else _no))
         else:
             v.addWidget(_row_pair(tr("addedit.label.path"), conn.remote_path,
-                                  tr("addedit.label.drive"), conn.drive_letter, 3, 1))
+                                  tr("addedit.label.drive"), self._effective_letter(conn), 3, 1))
 
         # CLI
         if conn.cli_access_enabled:
@@ -1611,6 +1742,8 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._rp_layout.addWidget(body)
+        # every connection gets a network of its own behind its details
+        self._rp_backdrop.show_field(f"host:{conn.id}", is_light(_theme))
 
     def _build_status_row(self, conn: Connection, is_mounted: bool, theme: str) -> QHBoxLayout:
         """Status pill + folder buttons, shared by the info panel and the edit form.
@@ -1622,9 +1755,9 @@ class MainWindow(FramelessMainWindow):
         - FTP folder (always shown): opens the built-in file browser, which
           works with or without a mount.
         """
-        green = "#00d464" if theme == "dark" else "#007a3d"
+        green = "#00d464" if not is_light(theme) else "#007a3d"
         grey = "#8a9aa8"
-        accent = "#00b4d8" if theme == "dark" else "#0077b6"
+        accent = accent_tone("#00b4d8") if not is_light(theme) else current_accent()
 
         def _on_left_click(widget, callback):
             def _handler(ev):
@@ -1775,14 +1908,8 @@ class MainWindow(FramelessMainWindow):
         if not conn:
             return
 
+        # Mounted hosts can be edited too: the form locks the connection fields.
         card = self._cards.get(conn_id)
-        if card and card.is_mounted and not self._mgr.get_settings().debug_mode:
-            self._show_inline_message(
-                tr("edit.locked.title"),
-                tr("edit.locked.msg"),
-                is_error=True
-            )
-            return
 
         if self._panel_conn_id and self._panel_conn_id in self._cards:
             self._cards[self._panel_conn_id].set_info_active(False)
@@ -1813,6 +1940,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(conn)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1848,6 +1976,7 @@ class MainWindow(FramelessMainWindow):
         self._rp_scroll.setVisible(True)
         self._terminal_area.setVisible(False)
         self._build_edit_form(None)
+        self._rp_help_btn.setVisible(True)
         self._right_panel_widget.setVisible(True)
         self._ensure_panel_sized()
 
@@ -1900,11 +2029,12 @@ class MainWindow(FramelessMainWindow):
 
         _theme = self._mgr.get_settings().theme or "dark"
         _is_light = (_theme == "light")
-        _inp_bg    = "#ffffff"  if _is_light else "#0d1117"
-        _inp_bdr   = "#c0cad6" if _is_light else "#30363d"
-        _inp_fg    = "#1a2332" if _is_light else "#deebf7"
-        _lbl_muted = "#5a6a7a" if _is_light else "#8fa4b8"
-        _lbl_bold  = "#1a2332" if _is_light else "#deebf7"
+        self._fs_backdrop.show_field("profile", _is_light)
+        _inp_bg    = "#ffffff"  if _is_light else dark_tone(_theme, "#0d1117")
+        _inp_bdr   = "#c0cad6" if _is_light else dark_tone(_theme, "#30363d")
+        _inp_fg    = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
+        _lbl_muted = "#5a6a7a" if _is_light else dark_tone(_theme, "#8fa4b8")
+        _lbl_bold  = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
         _inp_style = f"background-color: {_inp_bg}; border: 1px solid {_inp_bdr}; border-radius: 6px; padding: 8px; color: {_inp_fg};"
 
         body = QWidget()
@@ -1916,8 +2046,8 @@ class MainWindow(FramelessMainWindow):
         v.setSpacing(16)
 
         # User info section
-        _title_color  = "#1a2332" if _is_light else "#deebf7"
-        _pill_bg      = "#0077b6"
+        _title_color  = "#1a2332" if _is_light else dark_tone(_theme, "#deebf7")
+        _pill_bg      = current_accent()
 
         def _section_card(title: str, pill_text: str = ""):
             frame = QFrame()
@@ -1942,7 +2072,7 @@ class MainWindow(FramelessMainWindow):
             if pill_text:
                 pill = QLabel(pill_text)
                 pill.setStyleSheet(
-                    f"background-color: {_pill_bg}; color: #ffffff; "
+                    f"background-color: {_pill_bg}; color: {text_on_accent(_pill_bg)}; "
                     f"border-radius: 8px; padding: 2px 8px; "
                     f"font-size: 10px; font-weight: 700;"
                 )
@@ -1979,6 +2109,20 @@ class MainWindow(FramelessMainWindow):
         info_l.addWidget(role_row)
 
         v.addWidget(info_card)
+
+        # Single-user mode: the app password is random and nobody knows it,
+        # so it cannot be changed here. Setting one means switching to
+        # multi-user login in the user management.
+        if AuthManager.single_user_mode_enabled():
+            su_card, su_l = _section_card(tr("profile.change_password"))
+            su_hint = QLabel(tr("profile.single_user_hint"))
+            su_hint.setWordWrap(True)
+            su_hint.setStyleSheet(f"color: {_lbl_muted}; font-size: 12px;")
+            su_l.addWidget(su_hint)
+            v.addWidget(su_card)
+            v.addStretch()
+            self._fs_layout.addWidget(body)
+            return
 
         # Password change card
         pw_card, pw_l = _section_card(tr("profile.change_password"))
@@ -2115,10 +2259,12 @@ class MainWindow(FramelessMainWindow):
     def _build_users_form(self):
         from src.auth_manager import AuthManager
         from src.database import get_connection
+        from src.crypto import is_keyring_available
 
         users = AuthManager.list_users()
         current_user = Session.current()
         current_id = current_user.id if current_user else None
+        self._fs_backdrop.show_field("users", is_light(self._mgr.get_settings().theme))
         current_username = current_user.username if current_user else ""
         with get_connection() as conn:
             rows = conn.execute(
@@ -2181,6 +2327,73 @@ class MainWindow(FramelessMainWindow):
         )
         hero_l.addWidget(summary, 0, Qt.AlignmentFlag.AlignTop)
         v.addWidget(hero)
+
+        # Login mode. Switching keeps the account id and its encryption key,
+        # so connections and settings stay as they are.
+        mode_card, mode_layout = _section_card(tr("users.mode.title"))
+        if AuthManager.single_user_mode_enabled():
+            mode_hint = QLabel(tr("users.mode.single_hint"))
+            mode_hint.setObjectName("hintLabel")
+            mode_hint.setWordWrap(True)
+            mode_layout.addWidget(mode_hint)
+
+            mode_layout.addWidget(self._field_label(tr("users.placeholder.username")))
+            self._um_username = QLineEdit()
+            self._um_username.setPlaceholderText(tr("users.placeholder.username"))
+            mode_layout.addWidget(self._um_username)
+
+            mode_layout.addWidget(self._field_label(tr("users.placeholder.password")))
+            self._um_password = QLineEdit()
+            self._um_password.setPlaceholderText(tr("users.placeholder.password"))
+            self._um_password.setEchoMode(QLineEdit.EchoMode.Password)
+            mode_layout.addWidget(self._um_password)
+
+            mode_layout.addWidget(self._field_label(tr("login.pw_confirm")))
+            self._um_password2 = QLineEdit()
+            self._um_password2.setPlaceholderText(tr("login.pw_repeat"))
+            self._um_password2.setEchoMode(QLineEdit.EchoMode.Password)
+            self._um_password2.returnPressed.connect(self._migrate_single_user_to_multi)
+            mode_layout.addWidget(self._um_password2)
+
+            self._um_error = QLabel("")
+            self._um_error.setObjectName("errorLabel")
+            self._um_error.setWordWrap(True)
+            self._um_error.setVisible(False)
+            mode_layout.addWidget(self._um_error)
+
+            mode_btn = QPushButton(tr("users.mode.enable_multi"))
+            mode_btn.setObjectName("primaryBtn")
+            mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            mode_btn.clicked.connect(self._migrate_single_user_to_multi)
+            mode_layout.addWidget(mode_btn)
+
+            # A single account: no user list, no "create user" form
+            v.addWidget(mode_card)
+            v.addStretch()
+            self._fs_layout.addWidget(body, stretch=1)
+            return
+
+        mode_hint = QLabel(tr("users.mode.multi_hint"))
+        mode_hint.setObjectName("hintLabel")
+        mode_hint.setWordWrap(True)
+        mode_layout.addWidget(mode_hint)
+
+        keyring_available = is_keyring_available()
+        mode_btn = QPushButton(tr("users.mode.enable_single"))
+        mode_btn.setObjectName("secondaryBtn")
+        mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mode_btn.setEnabled(keyring_available and len(users) <= 1)
+        mode_btn.clicked.connect(self._enable_single_user_mode)
+        mode_layout.addWidget(mode_btn)
+
+        if not keyring_available or len(users) > 1:
+            notice = QLabel(
+                tr("login.single_unavailable_keyring") if not keyring_available
+                else tr("login.single_unavailable_users")
+            )
+            notice.setObjectName("hintLabel")
+            notice.setWordWrap(True)
+            mode_layout.addWidget(notice)
 
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -2297,6 +2510,7 @@ class MainWindow(FramelessMainWindow):
         right_col.setContentsMargins(0, 0, 0, 0)
         right_col.setSpacing(16)
         right_col.addWidget(create_card, 0, Qt.AlignmentFlag.AlignTop)
+        right_col.addWidget(mode_card, 0, Qt.AlignmentFlag.AlignTop)
         right_col.addStretch(1)
 
         columns.addLayout(left_col, 6)
@@ -2305,6 +2519,63 @@ class MainWindow(FramelessMainWindow):
 
         v.addStretch()
         self._fs_layout.addWidget(body, stretch=1)
+
+    def _rebuild_users_panel(self):
+        """Rebuild the open users panel (_open_users_panel would close it)."""
+        self._sync_profile_btn()
+        self._panel_mode = None
+        self._open_users_panel()
+
+    def _sync_profile_btn(self):
+        """The profile only offers a password change, which single-user mode
+        does not have: hide its sidebar button there."""
+        from src.auth_manager import AuthManager
+        self._sb_profile_btn.setVisible(not AuthManager.single_user_mode_enabled())
+
+    def _enable_single_user_mode(self):
+        from src.auth_manager import AuthManager, SingleUserModeError
+        if not StyledMessageBox.question(
+            self, tr("users.mode.title"), tr("users.mode.enable_single_confirm"),
+            yes_text=tr("users.mode.enable_single"), no_text=tr("dialog.cancel")
+        ):
+            return
+        try:
+            # Same account id and encryption key: self._mgr stays valid.
+            self._user = AuthManager.enable_single_user_mode()
+        except Exception as e:
+            self._set_status(SingleUserModeError.text_for(e))
+            return
+        self._rebuild_users_panel()
+
+    def _migrate_single_user_to_multi(self):
+        from src.auth_manager import AuthManager, SingleUserModeError
+        username = self._um_username.text().strip()
+        pw = self._um_password.text()
+
+        def _error(msg: str):
+            self._um_error.setText(f"⚠ {msg}")
+            self._um_error.setVisible(True)
+
+        if len(username) < 3:
+            _error(tr("users.username_min"))
+            return
+        if len(pw) < 8:  # NIST SP 800-63B minimum, as for every other account
+            _error(tr("users.password_min"))
+            return
+        if pw != self._um_password2.text():
+            _error(tr("login.passwords_differ"))
+            self._um_password2.clear()
+            self._um_password2.setFocus()
+            return
+        try:
+            self._user = AuthManager.migrate_single_user_to_multi_user(username, pw)
+        except Exception as e:
+            _error(SingleUserModeError.text_for(e))
+            return
+        StyledMessageBox.information(
+            self, tr("users.mode.title"), tr("users.mode.multi_done", name=username)
+        )
+        self._rebuild_users_panel()
 
     def _uf_add_user(self):
         from src.auth_manager import AuthManager
@@ -2316,9 +2587,13 @@ class MainWindow(FramelessMainWindow):
         if len(pw) < 8:  # SECURITY FIX: NIST SP 800-63B minimum is 8
             self._set_status(tr("users.password_min"))
             return
+        import sqlite3
         try:
             AuthManager.register(username, pw, is_admin=self._uf_is_admin.isChecked())
             self._open_users_panel()
+        except sqlite3.IntegrityError:
+            # users.username is UNIQUE (case-insensitive)
+            self._set_status(tr("users.username_taken"))
         except Exception as e:
             self._set_status(str(e))
 
@@ -2327,7 +2602,7 @@ class MainWindow(FramelessMainWindow):
         if StyledMessageBox.question(
             self, tr("users.delete.title"),
             tr("users.delete.confirm", name=username),
-            yes_text="Löschen", no_text="Abbrechen"
+            yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True
         ):
             AuthManager.delete_user(user_id)
             self._open_users_panel()
@@ -2337,7 +2612,7 @@ class MainWindow(FramelessMainWindow):
         if not StyledMessageBox.question(
             self, tr("users.reset.title"),
             tr("users.reset.confirm", name=username),
-            yes_text="Zurücksetzen", no_text="Abbrechen"
+            yes_text=tr("users.reset.title"), no_text=tr("dialog.cancel")
         ):
             return
         new_pw = AuthManager.admin_reset_password(user_id)
@@ -2363,6 +2638,32 @@ class MainWindow(FramelessMainWindow):
         lbl.setObjectName("fieldLabel")
         return lbl
 
+    def _field_help_btn(self, anchor: str, page: str = "connections") -> QPushButton:
+        """A small "?" that opens the docs at *page*#*anchor*."""
+        theme = self._mgr.get_settings().theme or "dark"
+        btn = QPushButton()
+        btn.setObjectName("fieldHelpBtn")
+        btn.setFixedSize(QSize(16, 16))
+        btn.setIcon(svg_icon("circle-help", "#6a7a8a" if is_light(theme) else dark_tone(theme, "#8fa4b8"), 12))
+        btn.setIconSize(QSize(12, 12))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setToolTip(tr("help.field_tooltip"))
+        btn.setAccessibleName(tr("help.field_tooltip"))
+        btn.clicked.connect(lambda: open_help(page, anchor))
+        return btn
+
+    def _section_with_help(self, text: str, anchor: str) -> QWidget:
+        """A section label with a help "?" beside it."""
+        w = QWidget()
+        hl = QHBoxLayout(w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self._section_label(text))
+        hl.addWidget(self._field_help_btn(anchor), 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addStretch()
+        return w
+
     def _pill_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("connectionsBadge")
@@ -2378,11 +2679,15 @@ class MainWindow(FramelessMainWindow):
 
     def _build_edit_form(self, conn):
         """Build add/edit form inside right panel content area."""
-        from src.drive_utils import get_available_drives
+        from src.drive_utils import (
+            assignable_letters, get_available_drives, get_used_drives, norm_letter,
+        )
 
         is_edit = conn is not None
 
-        def _ef_field(label_text, input_widget):
+        def _ef_field(label_text, input_widget, help_anchor=None):
+            """A field frame; *help_anchor*: a "?" beside the label that opens
+            the docs at that field."""
             container = QFrame()
             container.setObjectName("rpInfoField")
             container.setFixedHeight(54)
@@ -2391,17 +2696,26 @@ class MainWindow(FramelessMainWindow):
             vl.setSpacing(4)
             lbl = QLabel(label_text.upper())
             lbl.setObjectName("rpFieldLabelCaps")
-            vl.addWidget(lbl)
+            if help_anchor:
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(4)
+                row.addWidget(lbl)
+                row.addWidget(self._field_help_btn(help_anchor))
+                row.addStretch()
+                vl.addLayout(row)
+            else:
+                vl.addWidget(lbl)
             vl.addWidget(input_widget)
             return container
 
-        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1):
+        def _ef_field_pair(label1, widget1, label2, widget2, s1=2, s2=1, help1=None, help2=None):
             wrapper = QWidget()
             hl = QHBoxLayout(wrapper)
             hl.setContentsMargins(0, 0, 0, 0)
             hl.setSpacing(8)
-            hl.addWidget(_ef_field(label1, widget1), stretch=s1)
-            hl.addWidget(_ef_field(label2, widget2), stretch=s2)
+            hl.addWidget(_ef_field(label1, widget1, help1), stretch=s1)
+            hl.addWidget(_ef_field(label2, widget2, help2), stretch=s2)
             return wrapper
 
         body = QWidget()
@@ -2417,8 +2731,20 @@ class MainWindow(FramelessMainWindow):
             v.addLayout(self._build_status_row(conn, is_mounted, _theme))
             v.addSpacing(8)
 
-            # DEBUG mode: editing a mounted host is allowed but risky (changing
-            # path/drive letter while mounted can leave things inconsistent).
+            # Mounted: connection fields are locked (see _ef_set_mount_lock);
+            # the banner says why. Shown/hidden by _ef_set_mount_lock.
+            self._ef_lock_banner = QLabel(tr("edit.mounted_banner"))
+            self._ef_lock_banner.setWordWrap(True)
+            self._ef_lock_banner.setStyleSheet(
+                f"background-color: {accent_tone('rgba(0, 119, 182, 0.12)')};"
+                f"border: 1px solid {accent_tone('rgba(0, 119, 182, 0.35)')};"
+                "border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600;"
+            )
+            self._ef_lock_banner.setVisible(False)
+            v.addWidget(self._ef_lock_banner)
+
+            # DEBUG mode: nothing is locked, but editing a mounted host is risky
+            # (changing path/drive letter while mounted can leave things inconsistent).
             if is_mounted and self._mgr.get_settings().debug_mode:
                 warn = QLabel(tr("edit.debug_warning"))
                 warn.setWordWrap(True)
@@ -2438,7 +2764,7 @@ class MainWindow(FramelessMainWindow):
             _templates = self._mgr.get_templates()
             if _templates:
                 self._ef_templates = _templates
-                v.addWidget(self._section_label(tr("addedit.section.template")))
+                v.addWidget(self._section_with_help(tr("addedit.section.template"), "field-template"))
                 self._ef_template_btn = QPushButton(tr("addedit.template.none"))
                 self._ef_template_btn.setObjectName("secondaryBtn")
                 self._ef_template_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2453,7 +2779,7 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.general")))
         self._ef_name = QLineEdit(conn.name if is_edit else "")
         self._ef_name.setPlaceholderText(tr("addedit.placeholder.name"))
-        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name))
+        v.addWidget(_ef_field(tr("addedit.label.name"), self._ef_name, "field-name"))
 
         # Protocol: decides which transport the file browser uses and whether
         # the SSH-only fields below (key, drive letter, CLI, PuTTY) apply.
@@ -2465,7 +2791,7 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_protocol.findData(conn.protocol)
             if idx >= 0:
                 self._ef_protocol.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol))
+        v.addWidget(_ef_field(tr("addedit.label.protocol"), self._ef_protocol, "field-protocol"))
 
         self._ef_host = QLineEdit(conn.host if is_edit else "")
         self._ef_host.setPlaceholderText("192.168.1.1")
@@ -2473,11 +2799,12 @@ class MainWindow(FramelessMainWindow):
         self._ef_port.setRange(1, 65535)
         self._ef_port.setValue(conn.port if is_edit else 22)
         v.addWidget(_ef_field_pair(tr("addedit.label.host"), self._ef_host,
-                                   tr("addedit.label.port"), self._ef_port, 2, 1))
+                                   tr("addedit.label.port"), self._ef_port, 2, 1,
+                                   "field-host", "field-port"))
 
         self._ef_user = QLineEdit(conn.user if is_edit else "")
         self._ef_user.setPlaceholderText("root")
-        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user))
+        v.addWidget(_ef_field(tr("addedit.label.user"), self._ef_user, "field-user"))
 
         # Auth
         v.addSpacing(4)
@@ -2490,13 +2817,13 @@ class MainWindow(FramelessMainWindow):
             idx = self._ef_auth.findData(conn.auth_method)
             if idx >= 0:
                 self._ef_auth.setCurrentIndex(idx)
-        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth))
+        v.addWidget(_ef_field(tr("addedit.label.method"), self._ef_auth, "field-auth-method"))
 
         self._ef_pw = QLineEdit(conn.password if is_edit else "")
         self._ef_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self._ef_pw.setPlaceholderText("••••••••")
         self._ef_pw.setStyleSheet("font-size: 8px; letter-spacing: 2px;")
-        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw))
+        v.addWidget(_ef_field(tr("addedit.label.password"), self._ef_pw, "field-password"))
 
         key_container = QWidget()
         key_hl = QHBoxLayout(key_container)
@@ -2505,12 +2832,12 @@ class MainWindow(FramelessMainWindow):
         self._ef_key = QLineEdit(conn.key_path if is_edit else "")
         self._ef_key.setPlaceholderText("C:/Users/user/.ssh/id_rsa")
         key_hl.addWidget(self._ef_key, stretch=1)
-        browse_btn = QPushButton("…")
-        browse_btn.setFixedWidth(28)
-        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        browse_btn.clicked.connect(self._ef_browse_key)
-        key_hl.addWidget(browse_btn)
-        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container)
+        self._ef_key_browse_btn = QPushButton("…")
+        self._ef_key_browse_btn.setFixedWidth(28)
+        self._ef_key_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ef_key_browse_btn.clicked.connect(self._ef_browse_key)
+        key_hl.addWidget(self._ef_key_browse_btn)
+        self._ef_key_field = _ef_field(tr("addedit.label.key"), key_container, "field-key")
         v.addWidget(self._ef_key_field)
 
         # FTP options — only meaningful for FTP/FTPS, hidden for SFTP
@@ -2518,7 +2845,7 @@ class MainWindow(FramelessMainWindow):
         ftp_v = QVBoxLayout(self._ef_ftp_widget)
         ftp_v.setContentsMargins(0, 4, 0, 0)
         ftp_v.setSpacing(6)
-        ftp_v.addWidget(self._section_label(tr("addedit.section.ftp")))
+        ftp_v.addWidget(self._section_with_help(tr("addedit.section.ftp"), "field-ftp-options"))
 
         self._ef_ftp_plain_warning = QLabel(tr("addedit.ftp.plain_warning"))
         self._ef_ftp_plain_warning.setWordWrap(True)
@@ -2565,31 +2892,43 @@ class MainWindow(FramelessMainWindow):
         self._ef_drive = NoWheelComboBox()
         used = [c.drive_letter for c in self._mgr.get_all()
                 if not c.is_ftp and (not is_edit or c.id != conn.id)]
-        available = get_available_drives(exclude=used)
-        if is_edit and conn.drive_letter:
-            curr = conn.drive_letter.upper().rstrip("\\") + ":"
-            if curr not in available:
-                available.insert(0, curr)
-        for letter in sorted(set(available)):
+        if self._mgr.get_settings().allow_shared_drive_letters:
+            # Letters may be shared: every letter, whoever else uses it. A
+            # taken letter is resolved when mounting.
+            letters = assignable_letters()
+        else:
+            letters = get_available_drives(exclude=used)
+        own = norm_letter(conn.drive_letter) if is_edit else None
+        if own and own not in letters:
+            letters.append(own)     # the host's own letter is always offered
+        for letter in sorted(set(letters)):
             self._ef_drive.addItem(letter, letter)
-        if is_edit:
-            idx = self._ef_drive.findData(conn.drive_letter)
-            if idx >= 0:
-                self._ef_drive.setCurrentIndex(idx)
+        if own:
+            self._ef_drive.setCurrentIndex(self._ef_drive.findData(own))
+        else:
+            # New host: the first letter that is free and not used by a host.
+            busy = set(get_used_drives()) | {norm_letter(u) for u in used}
+            free = [l for l in sorted(set(letters)) if l not in busy]
+            if free:
+                self._ef_drive.setCurrentIndex(self._ef_drive.findData(free[0]))
         # Same layout as _ef_field_pair, but the drive half stays addressable so
         # it can be hidden for FTP connections (they are never mounted).
         path_row = QWidget()
         path_hl = QHBoxLayout(path_row)
         path_hl.setContentsMargins(0, 0, 0, 0)
         path_hl.setSpacing(8)
-        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive)
-        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path), stretch=3)
+        self._ef_drive_field = _ef_field(tr("addedit.label.drive"), self._ef_drive, "field-drive-letter")
+        path_hl.addWidget(_ef_field(tr("addedit.label.path"), self._ef_path, "field-remote-path"), stretch=3)
         path_hl.addWidget(self._ef_drive_field, stretch=1)
         v.addWidget(path_row)
+        # Where the files are is the question asked most: a tip right here.
+        path_hint = self._field_label(tr("addedit.path.hint"))
+        path_hint.setWordWrap(True)
+        v.addWidget(path_hint)
 
         # CLI
         v.addSpacing(4)
-        self._ef_cli_section = self._section_label(tr("addedit.section.cli"))
+        self._ef_cli_section = self._section_with_help(tr("addedit.section.cli"), "field-cli-access")
         v.addWidget(self._ef_cli_section)
         self._ef_cli_cb = QCheckBox(tr("addedit.cli.enable"))
         self._ef_cli_cb.setChecked(conn.cli_access_enabled if is_edit else False)
@@ -2652,7 +2991,7 @@ class MainWindow(FramelessMainWindow):
             putty_browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             putty_browse_btn.clicked.connect(self._ef_browse_putty_key)
             putty_hl.addWidget(putty_browse_btn)
-            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container))
+            putty_v.addWidget(_ef_field(tr("addedit.putty_key.label"), putty_container, "field-putty-key"))
             putty_v.addWidget(self._field_label(tr("addedit.putty_key.hint")))
             v.addWidget(self._ef_putty_widget)
 
@@ -2661,15 +3000,19 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(self._section_label(tr("addedit.section.groups")))
         self._ef_groups = QLineEdit(conn.groups if is_edit else "")
         self._ef_groups.setPlaceholderText(tr("addedit.placeholder.groups"))
-        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups))
+        v.addWidget(_ef_field(tr("addedit.label.groups"), self._ef_groups, "field-groups"))
         v.addWidget(self._field_label(tr("addedit.groups.hint")))
 
         # Template Option (nur im Add-Modus oder bei Bearbeitung sichtbar)
         v.addSpacing(4)
-        v.addWidget(self._section_label(tr("addedit.section.template_options")))
-        self._ef_template_cb = QCheckBox(tr("addedit.template.save_as_template"))
+        v.addWidget(self._section_with_help(tr("addedit.section.template_options"), "field-save-as-template"))
+        # Editing a host: the box saves a template COPY; the host stays as it is.
+        _copy = is_edit and not conn.is_template
+        self._ef_template_cb = QCheckBox(tr("addedit.template.save_copy") if _copy
+                                         else tr("addedit.template.save_as_template"))
         self._ef_template_cb.setChecked(conn.is_template if is_edit else False)
-        self._ef_template_cb.setToolTip(tr("addedit.template.save_as_template.hint"))
+        self._ef_template_cb.setToolTip(tr("addedit.template.save_copy.hint") if _copy
+                                        else tr("addedit.template.save_as_template.hint"))
         v.addWidget(self._ef_template_cb)
 
         v.addStretch()
@@ -2681,10 +3024,57 @@ class MainWindow(FramelessMainWindow):
         # the initial visibility for the loaded/default protocol.
         self._ef_protocol.currentIndexChanged.connect(self._ef_on_protocol_changed)
         self._ef_apply_protocol_visibility()
+        if is_edit:
+            self._ef_set_mount_lock(self._ef_should_lock(conn.id))
         self._ef_initial_snapshot = self._snapshot_form()
         self._validate_edit_form()
         self._setup_edit_tab_order()
         QTimer.singleShot(0, self._ef_name.setFocus)
+
+    # ── Editing a mounted host ───────────────────────────────────────────
+    # The running mount depends on these; everything else (name, CLI access,
+    # PuTTY key, groups, template copy) stays editable.
+    _EF_MOUNT_LOCKED_WIDGETS = (
+        "_ef_protocol", "_ef_host", "_ef_port", "_ef_user", "_ef_auth", "_ef_pw",
+        "_ef_key", "_ef_key_browse_btn", "_ef_ftp_implicit", "_ef_ftp_verify",
+        "_ef_ftp_passive", "_ef_path", "_ef_drive",
+    )
+    _EF_MOUNT_LOCKED_FIELDS = (
+        "protocol", "host", "port", "user", "auth_method", "password", "key_path",
+        "ftp_implicit_tls", "ftp_verify_cert", "ftp_passive", "remote_path", "drive_letter",
+    )
+
+    def _ef_should_lock(self, conn_id: str) -> bool:
+        card = self._cards.get(conn_id)
+        return bool(card and card.is_mounted and not self._mgr.get_settings().debug_mode)
+
+    def _ef_set_mount_lock(self, locked: bool):
+        """Grey out the connection fields while the host is mounted; hovering
+        one (or its field frame) says why."""
+        self._ef_mount_locked = locked
+        tip = tr("edit.locked_field") if locked else ""
+        for name in self._EF_MOUNT_LOCKED_WIDGETS:
+            w = getattr(self, name, None)
+            if w is None:
+                continue
+            try:
+                w.setEnabled(not locked)
+                w.setToolTip(tip)
+                frame = w.parentWidget()
+                for _ in range(3):
+                    if frame is None or frame.objectName() == "rpInfoField":
+                        break
+                    frame = frame.parentWidget()
+                if frame is not None and frame.objectName() == "rpInfoField":
+                    frame.setToolTip(tip)
+            except RuntimeError:
+                continue    # widget already deleted
+        banner = getattr(self, "_ef_lock_banner", None)
+        if banner is not None:
+            try:
+                banner.setVisible(locked)
+            except RuntimeError:
+                pass
 
     # ── Protocol-dependent form behaviour ────────────────────────────────
 
@@ -2892,6 +3282,7 @@ class MainWindow(FramelessMainWindow):
             self,
             tr("addedit.template.delete.title"),
             tr("addedit.template.delete.confirm", name=name),
+            yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True,
         )
         if not confirmed:
             return
@@ -2979,6 +3370,7 @@ class MainWindow(FramelessMainWindow):
             ("Ctrl+S", self._shortcut_save),
             ("Esc", self._shortcut_escape),
             ("Ctrl+N", self._shortcut_add),
+            ("Ctrl+F", self._open_search),
             ("Ctrl+E", self._shortcut_edit),
             ("Delete", self._shortcut_delete),
         ]
@@ -3103,7 +3495,7 @@ class MainWindow(FramelessMainWindow):
         self._sf_lang = NoWheelComboBox()
         self._sf_lang.setFixedWidth(180)
         for code in available_languages():
-            self._sf_lang.addItem(_LANG_LABELS.get(code, code), code)
+            self._sf_lang.addItem(LANGUAGE_NAMES.get(code, code), code)
         idx = self._sf_lang.findData(getattr(s, 'language', 'en') or 'en')
         if idx >= 0:
             self._sf_lang.setCurrentIndex(idx)
@@ -3111,13 +3503,48 @@ class MainWindow(FramelessMainWindow):
         self._sf_theme = NoWheelComboBox()
         self._sf_theme.setFixedWidth(180)
         self._sf_theme.addItem(tr("settings.theme.dark"), "dark")
+        self._sf_theme.addItem(tr("settings.theme.blue"), "blue")
+        self._sf_theme.addItem(tr("settings.theme.gray"), "gray")
         self._sf_theme.addItem(tr("settings.theme.light"), "light")
         idx = self._sf_theme.findData(getattr(s, 'theme', 'dark') or 'dark')
         if idx >= 0:
             self._sf_theme.setCurrentIndex(idx)
 
+        # Accent colour: swatch button opens the picker, "Standard" resets.
+        self._sf_accent = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        self._sf_accent_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
+        self._sf_accent_btn = QPushButton()
+        self._sf_accent_btn.setObjectName("settingsActionBtn")
+        self._sf_accent_btn.setFixedWidth(120)
+        self._sf_accent_btn.setMinimumHeight(32)
+        self._sf_accent_btn.setIconSize(QSize(14, 14))
+        self._sf_accent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_accent_btn.setToolTip(tr("colorpicker.title"))
+        self._sf_accent_btn.clicked.connect(self._sf_pick_accent)
+        self._sf_accent_reset_btn = QPushButton(tr("settings.accent.reset"))
+        self._sf_accent_reset_btn.setObjectName("settingsActionBtn")
+        self._sf_accent_reset_btn.setMinimumHeight(32)
+        self._sf_accent_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sf_accent_reset_btn.setToolTip(DEFAULT_ACCENT)
+        self._sf_accent_reset_btn.clicked.connect(
+            lambda: self._sf_set_accent(DEFAULT_ACCENT, preview=True, text=""))
+        accent_box = QWidget()
+        accent_hl = QHBoxLayout(accent_box)
+        accent_hl.setContentsMargins(0, 0, 0, 0)
+        accent_hl.setSpacing(8)
+        accent_hl.addWidget(self._sf_accent_reset_btn)
+        accent_hl.addWidget(self._sf_accent_btn)
+        self._sf_update_accent_ui()
+
+        self._sf_network = QCheckBox(tr("settings.background_network"))
+        self._sf_network.setChecked(getattr(s, "background_network", True))
+
         app_card, app_vl = _group_card()
         app_vl.addWidget(_row_combo(tr("settings.theme.label"), self._sf_theme))
+        app_vl.addWidget(_inner_sep())
+        app_vl.addWidget(_row_combo(tr("settings.accent.label"), accent_box))
+        app_vl.addWidget(_inner_sep())
+        app_vl.addWidget(_row_check(self._sf_network, tr("settings.background_network.hint")))
         app_vl.addWidget(_inner_sep())
         app_vl.addWidget(_row_combo(tr("settings.language.label"), self._sf_lang))
         app_vl.addWidget(_hint_row(tr("settings.language.restart")))
@@ -3178,16 +3605,26 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(_section_hdr(tr("settings.section.mount")))
         v.addSpacing(4)
 
-        self._sf_interval = NoWheelSpinBox()
-        self._sf_interval.setRange(5, 300)
-        self._sf_interval.setValue(s.check_interval_seconds)
-        self._sf_interval.setFixedWidth(72)
+        self._sf_interval = Stepper(5, 300, s.check_interval_seconds, theme=s.theme or "dark")
         self._sf_auto_reconnect = QCheckBox(tr("settings.auto_reconnect"))
         self._sf_auto_reconnect.setChecked(getattr(s, "auto_reconnect", False))
         self._sf_auto_remount = QCheckBox(tr("settings.auto_remount"))
         self._sf_auto_remount.setChecked(getattr(s, "auto_remount_on_lost", True))
         self._sf_sshfs_disable_cache = QCheckBox(tr("settings.sshfs_disable_cache"))
         self._sf_sshfs_disable_cache.setChecked(getattr(s, "sshfs_disable_cache", False))
+        self._sf_shared_letters = QCheckBox(tr("settings.shared_letters"))
+        self._sf_shared_letters.setChecked(getattr(s, "allow_shared_drive_letters", False))
+        self._sf_auto_pick_letter = QCheckBox(tr("settings.auto_pick_letter"))
+        self._sf_auto_pick_letter.setChecked(
+            self._sf_shared_letters.isChecked() and getattr(s, "auto_pick_free_drive_letter", False))
+        # Auto-pick only makes sense while letters may be shared.
+        self._sf_auto_pick_letter.setEnabled(self._sf_shared_letters.isChecked())
+
+        def _on_shared_letters_toggled(on: bool):
+            self._sf_auto_pick_letter.setEnabled(on)
+            if not on:
+                self._sf_auto_pick_letter.setChecked(False)
+        self._sf_shared_letters.toggled.connect(_on_shared_letters_toggled)
 
         mnt_card, mnt_vl = _group_card()
         mnt_vl.addWidget(_row_combo(tr("settings.check_interval"), self._sf_interval))
@@ -3197,6 +3634,10 @@ class MainWindow(FramelessMainWindow):
         mnt_vl.addWidget(_row_check(self._sf_auto_remount))
         mnt_vl.addWidget(_inner_sep())
         mnt_vl.addWidget(_row_check(self._sf_sshfs_disable_cache, tr("settings.sshfs_disable_cache.hint")))
+        mnt_vl.addWidget(_inner_sep())
+        mnt_vl.addWidget(_row_check(self._sf_shared_letters, tr("settings.shared_letters.hint")))
+        mnt_vl.addWidget(_inner_sep())
+        mnt_vl.addWidget(_row_check(self._sf_auto_pick_letter, tr("settings.auto_pick_letter.hint")))
         v.addWidget(mnt_card)
         v.addSpacing(14)
 
@@ -3262,7 +3703,7 @@ class MainWindow(FramelessMainWindow):
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtCore import QUrl as _QUrl
         self._sf_putty_download_lbl = QLabel(
-            f'<a href="https://www.putty.org" style="color:#0077b6;">'
+            f'<a href="https://www.putty.org" style="color:{current_accent()};">'
             f'{tr("settings.putty_download_link")}</a>'
         )
         self._sf_putty_download_lbl.setObjectName("hintLabel")
@@ -3352,64 +3793,8 @@ class MainWindow(FramelessMainWindow):
         v.addWidget(dev_card)
         v.addSpacing(14)
 
-        from src.pro_manager import SHOW_PRO_UI
-        if SHOW_PRO_UI:
-            self._build_pro_settings(v, _section_hdr, _group_card)
-
         v.addStretch()
         self._fs_layout.addWidget(body)
-
-    def _build_pro_settings(self, v, _section_hdr, _group_card):
-        """The Pro licence section of the settings (hidden while SHOW_PRO_UI is off)."""
-        # ── PRO LICENSE ───────────────────────────────────────────────────
-        v.addWidget(_section_hdr(tr("settings.section.pro")))
-        v.addSpacing(4)
-
-        from src.pro_manager import is_pro_active as _is_pro_active
-        _pro_active = _is_pro_active()
-
-        self._sf_pro_status_lbl = QLabel(
-            tr("settings.pro.active") if _pro_active else tr("settings.pro.inactive")
-        )
-        self._sf_pro_status_lbl.setObjectName("rpSectionLabel" if _pro_active else "hintLabel")
-        self._sf_pro_status_lbl.setWordWrap(True)
-
-        self._sf_pro_key = QLineEdit()
-        self._sf_pro_key.setPlaceholderText("NEO-XXXX-XXXX-XXXX")
-        self._sf_pro_key.setVisible(not _pro_active)
-
-        self._sf_pro_activate_btn = QPushButton(tr("settings.pro.activate"))
-        self._sf_pro_activate_btn.setObjectName("primaryBtn")
-        self._sf_pro_activate_btn.setFixedWidth(120)
-        self._sf_pro_activate_btn.setMinimumHeight(32)
-        self._sf_pro_activate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sf_pro_activate_btn.setVisible(not _pro_active)
-        self._sf_pro_activate_btn.clicked.connect(self._sf_activate_pro)
-
-        pro_card, pro_vl = _group_card()
-        _pro_status_row = QWidget()
-        _pro_status_row.setObjectName("settingsRow")
-        _pro_inner = QVBoxLayout(_pro_status_row)
-        _pro_inner.setContentsMargins(16, 11, 16, 11)
-        _pro_inner.setSpacing(6)
-        _pro_inner.addWidget(self._sf_pro_status_lbl)
-        if not _pro_active:
-            _key_row_w = QWidget()
-            _key_row_hl = QHBoxLayout(_key_row_w)
-            _key_row_hl.setContentsMargins(0, 0, 0, 0)
-            _key_row_hl.setSpacing(8)
-            _key_row_hl.addWidget(self._sf_pro_key, stretch=1)
-            _key_row_hl.addWidget(self._sf_pro_activate_btn)
-            _pro_inner.addWidget(_key_row_w)
-            _donate_lbl = QLabel(
-                f'<a href="https://neosshwinmanager.org/pro" style="color:#0077b6;">'
-                f'{tr("settings.pro.learn_more")}</a>'
-            )
-            _donate_lbl.setObjectName("hintLabel")
-            _donate_lbl.setOpenExternalLinks(True)
-            _pro_inner.addWidget(_donate_lbl)
-        pro_vl.addWidget(_pro_status_row)
-        v.addWidget(pro_card)
 
     def _sf_check_updates(self):
         """Manual update check from settings screen."""
@@ -3464,24 +3849,6 @@ class MainWindow(FramelessMainWindow):
 
     def _on_sf_security_changed(self, index: int):
         self._sf_sec_warning.setVisible(index >= 1)
-
-    def _sf_activate_pro(self):
-        from src.pro_manager import activate_pro
-        key = getattr(self._sf_pro_key, "text", lambda: "")().strip().upper()
-        if not key:
-            self._show_inline_message("PRO", tr("settings.pro.key_required"), is_error=True)
-            return
-        self._sf_pro_activate_btn.setEnabled(False)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activating"))
-        QApplication.processEvents()
-        result = activate_pro(key)
-        self._sf_pro_activate_btn.setEnabled(True)
-        self._sf_pro_activate_btn.setText(tr("settings.pro.activate"))
-        if result["success"]:
-            StyledMessageBox.information(self, "PRO", tr("settings.pro.activation_success"))
-            self._open_settings_panel()
-        else:
-            self._show_inline_message("PRO", result.get("error", ""), is_error=True)
 
     def _sf_terminal_client_toggled(self, _button=None, _checked=None):
         is_putty = self._sf_term_putty.isChecked()
@@ -3758,7 +4125,12 @@ class MainWindow(FramelessMainWindow):
             "auto_reconnect": self._safe_bool_checked("_sf_auto_reconnect", False),
             "auto_remount": self._safe_bool_checked("_sf_auto_remount", True),
             "disable_cache": self._safe_bool_checked("_sf_sshfs_disable_cache", False),
+            "shared_letters": self._safe_bool_checked("_sf_shared_letters", False),
+            "auto_pick_letter": self._safe_bool_checked("_sf_auto_pick_letter", False),
             "theme": self._safe_current_data("_sf_theme", "dark"),
+            "accent": getattr(self, "_sf_accent", DEFAULT_ACCENT),
+            "accent_text": getattr(self, "_sf_accent_text", ""),
+            "network": self._safe_bool_checked("_sf_network", True),
             "lang": self._safe_current_data("_sf_lang", "en"),
             "term_ssh": self._safe_bool_checked("_sf_term_ssh", False),
             "term_putty": self._safe_bool_checked("_sf_term_putty", False),
@@ -3849,6 +4221,8 @@ class MainWindow(FramelessMainWindow):
                 if action == "apply":
                     if not self._save_settings_form(navigate_home=False):
                         return False
+                else:
+                    self._sf_revert_accent_preview()
                 self._settings_initial_snapshot = None
                 return True
 
@@ -3971,44 +4345,95 @@ class MainWindow(FramelessMainWindow):
         if not getattr(self, "_ef_conn", None):
             self._show_inline_message(tr("dialog.error"), "Formular ist nicht verfügbar. Bitte erneut öffnen.", is_error=True)
             return
+        import dataclasses
+        import uuid
+        conn = self._ef_conn
         name = self._safe_lineedit_text("_ef_name")
         host = self._safe_lineedit_text("_ef_host")
         user = self._safe_lineedit_text("_ef_user")
         is_template = self._safe_bool_checked("_ef_template_cb", False)
+        # Editing a host: the template box saves a COPY as template; the host
+        # itself stays (and stays mounted). Editing a template keeps it one.
+        make_copy = is_template and not conn.is_template
         errors = []
         if not name: errors.append(tr("addedit.required.name"))
         elif not _is_safe_label(name): errors.append(tr("addedit.name.invalid"))
-        elif not is_template and self._name_is_duplicate(name, exclude_id=self._ef_conn.id): errors.append(tr("addedit.name.duplicate"))
+        elif (not is_template or make_copy) and self._name_is_duplicate(name, exclude_id=conn.id): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
+        fields = self._ef_collect_protocol_fields()
+        locked = bool(getattr(self, "_ef_mount_locked", False))
+        if not locked and not is_template:
+            letter_error = self._drive_letter_conflict(fields.get("drive_letter"), exclude_id=conn.id)
+            if letter_error:
+                errors.append(letter_error)
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
 
+        tpl_name = None
         if is_template:
-            tpl_name = self._ask_template_name(name, exclude_id=self._ef_conn.id)
+            tpl_name = self._ask_template_name(name, exclude_id=conn.id)
             if tpl_name is None:
                 return
-            name = tpl_name
+            if not make_copy:
+                name = tpl_name
 
-        conn = self._ef_conn
+        # PuTTY disabled globally: its field is not in the form, keep the path.
+        if getattr(self, "_ef_putty_key", None) is None and fields["protocol"] == conn.protocol:
+            fields["putty_key_path"] = conn.putty_key_path
 
-        updated = Connection(
-            id=conn.id,
+        # Start from the stored host so fields the form does not show
+        # (template_id, …) survive the save.
+        updated = dataclasses.replace(
+            conn,
             name=name, host=host, user=user,
             remote_path=self._safe_lineedit_text("_ef_path") or "/",
             port=self._safe_spin_value("_ef_port", 22),
             auth_method=self._safe_current_data("_ef_auth", "password"),
             password=self._safe_lineedit_text("_ef_pw"),
             groups=self._safe_lineedit_text("_ef_groups"),
-            is_template=is_template,
-            **self._ef_collect_protocol_fields(),
+            is_template=is_template and not make_copy,
+            **fields,
         )
+        if locked:
+            # Mounted: the running mount depends on these, keep the stored values.
+            updated = dataclasses.replace(
+                updated, **{f: getattr(conn, f) for f in self._EF_MOUNT_LOCKED_FIELDS})
         self._mgr.update(updated)
+
+        if make_copy:
+            # Templates are stored without credentials; a CLI key must stay unique.
+            self._mgr.add(dataclasses.replace(
+                updated, id=str(uuid.uuid4()), name=tpl_name, is_template=True,
+                template_id=None, password="", key_path="", putty_key_path="",
+                cli_access_enabled=False, cli_access_key=None,
+            ))
+
+        if updated.name != conn.name and self._cards.get(conn.id) and self._cards[conn.id].is_mounted:
+            # Renamed while mounted: Explorer shows the name as drive label.
+            try:
+                self._controller._set_drive_label(
+                    dataclasses.replace(updated, drive_letter=self._effective_letter(updated)), delay=0)
+            except Exception as e:
+                logger.warning(f"Laufwerksbezeichnung nicht aktualisiert: {e}")
+
         self._refresh_list()
-        self._set_status(tr("status.saved"))
+        self._set_status(tr("status.template_copy_saved", name=tpl_name) if make_copy
+                         else tr("status.saved"))
         # Reopen info panel for the updated connection
         self._open_info_panel(conn.id)
+
+    def _drive_letter_conflict(self, letter, exclude_id=None) -> str | None:
+        """Shared letters off: an error text if another host already has *letter*."""
+        from src.drive_utils import norm_letter
+        letter = norm_letter(letter)
+        if not letter or self._mgr.get_settings().allow_shared_drive_letters:
+            return None
+        other = next((c for c in self._mgr.get_connections()
+                      if c.id != exclude_id and not c.is_ftp
+                      and norm_letter(c.drive_letter) == letter), None)
+        return tr("addedit.drive.taken", drive=letter, name=other.name) if other else None
 
     def _save_add_form(self):
         name = self._safe_lineedit_text("_ef_name")
@@ -4021,6 +4446,10 @@ class MainWindow(FramelessMainWindow):
         elif not is_tpl and self._name_is_duplicate(name): errors.append(tr("addedit.name.duplicate"))
         if not host: errors.append(tr("addedit.required.host"))
         if not user: errors.append(tr("addedit.required.user"))
+        if not is_tpl:
+            letter_error = self._drive_letter_conflict(self._safe_current_data("_ef_drive", ""))
+            if letter_error and self._ef_current_protocol() == PROTOCOL_SFTP:
+                errors.append(letter_error)
         if errors:
             self._show_inline_message(tr("addedit.required.title"), "\n".join(errors), is_error=True)
             return
@@ -4097,6 +4526,12 @@ class MainWindow(FramelessMainWindow):
             telemetry_enabled=getattr(self, "_sf_telemetry").isChecked() if hasattr(self, "_sf_telemetry") else False,
             telemetry_prompt_shown=getattr(self._mgr.get_settings(), "telemetry_prompt_shown", False),
             sshfs_disable_cache=self._sf_sshfs_disable_cache.isChecked(),
+            accent_color="" if self._sf_accent == DEFAULT_ACCENT else self._sf_accent,
+            accent_text_color=self._sf_accent_text,
+            background_network=self._sf_network.isChecked(),
+            allow_shared_drive_letters=self._sf_shared_letters.isChecked(),
+            auto_pick_free_drive_letter=(self._sf_shared_letters.isChecked()
+                                         and self._sf_auto_pick_letter.isChecked()),
         )
         self._mgr.save_settings(new_settings)
         self._apply_settings_object(new_settings)
@@ -4147,7 +4582,7 @@ class MainWindow(FramelessMainWindow):
         copy_btn.setFixedSize(32, 32)
         copy_btn.setIcon(svg_icon("copy", "#aab4c4", 16))
         copy_btn.setIconSize(QSize(16, 16))
-        copy_btn.setToolTip("Fehlermeldung kopieren")
+        copy_btn.setToolTip(tr("dialog.copy_error"))
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         _clip_text = f"{title}\n\n{message}"
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_clip_text))
@@ -4290,6 +4725,8 @@ class MainWindow(FramelessMainWindow):
             self._badge_lbl.setText(f"{active_str} · {mount_str}")
         else:
             self._badge_lbl.setText("")
+        # without connections the badge would be an empty pill
+        self._badge_lbl.setVisible(bool(total))
         self._mount_count_lbl.setText(
             tr("status.mounted_short", n=mounted) if mounted else tr("status.mounted_none")
         )
@@ -4299,17 +4736,14 @@ class MainWindow(FramelessMainWindow):
     # ------------------------------------------------------------------
 
     def _poll_mount_states(self):
-        mounted_map = self._controller.get_mounted_drives()
-        mounted_set = {k.upper().rstrip("\\") for k in mounted_map.keys()}
+        mounted = self._compute_mounted([c.connection for c in self._cards.values()])
 
         for conn_id, card in self._cards.items():
             conn = card.connection
             if conn.is_ftp:
                 continue        # never mounted, nothing to poll
-            letter_key = conn.drive_letter.upper().rstrip("\\")
-            if not letter_key.endswith(":"):
-                letter_key += ":"
-            is_mounted_now = letter_key in mounted_set
+            is_mounted_now = conn_id in mounted
+            card.set_mounted_letter(mounted.get(conn_id))
             if is_mounted_now != card.is_mounted:
                 card.update_mount_state(is_mounted_now)
                 # Refresh open panel for this connection on mount state change
@@ -4344,15 +4778,16 @@ class MainWindow(FramelessMainWindow):
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.mounted_confirm", name=conn.name),
-                yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel")
+                yes_text=tr("delete.anyway"), no_text=tr("dialog.cancel"), destructive=True
             ):
                 return
-            self._controller.unmount(conn.drive_letter)
+            self._controller.unmount(self._effective_letter(conn))
+            self._save_active_mount(conn_id, False)
         else:
             if not StyledMessageBox.question(
                 self, tr("delete.title"),
                 tr("delete.confirm", name=conn.name),
-                yes_text=tr("main.delete"), no_text=tr("dialog.cancel")
+                yes_text=tr("main.delete"), no_text=tr("dialog.cancel"), destructive=True
             ):
                 return
         self._mgr.delete(conn_id)
@@ -4410,6 +4845,11 @@ class MainWindow(FramelessMainWindow):
 
     @pyqtSlot(str)
     def _on_mount(self, conn_id: str):
+        self._mount(conn_id, interactive=True)
+
+    def _mount(self, conn_id: str, interactive: bool = True):
+        """Mount a host. interactive=False (auto-reconnect at start) never asks:
+        if the letter is taken and no free one may be picked, the host is skipped."""
         if conn_id in self._workers:
             return
         conn = self._mgr.get_by_id(conn_id)
@@ -4417,13 +4857,27 @@ class MainWindow(FramelessMainWindow):
             return
         if self._reject_ftp_action(conn, "ftp.mount_unsupported"):
             return
-        conn = self._prepare_auth(conn)
+        # Settle the drive letter first: never ask for a password and then
+        # report that the letter is taken.
+        letter = self._resolve_mount_letter(conn, interactive)
+        if letter is None:
+            card = self._cards.get(conn_id)
+            if card:
+                card.hide_loading()
+            return
+        conn = self._prepare_auth(self._mgr.get_by_id(conn_id) or conn)
         if conn is None:
             card = self._cards.get(conn_id)
             if card:
                 card.hide_loading()
             return
-        self._set_status(tr("status.connecting", name=conn.name, drive=conn.drive_letter))
+        self._start_mount_worker(conn_id, conn, letter)
+
+    def _start_mount_worker(self, conn_id: str, conn, letter: str):
+        """Run the mount on *letter* (conn is a copy prepared by _prepare_auth)."""
+        conn.drive_letter = letter
+        self._mount_targets[conn_id] = letter
+        self._set_status(tr("status.connecting", name=conn.name, drive=letter))
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.connect"))
@@ -4433,24 +4887,129 @@ class MainWindow(FramelessMainWindow):
         self._workers[conn_id] = worker
         worker.start()
 
+    # ── drive letters ──────────────────────────────────────────────────────
+
+    def _drives_in_use(self) -> set[str]:
+        from src.drive_utils import norm_letter
+        return {l for l in (norm_letter(k) for k in self._controller.get_mounted_drives()) if l}
+
+    def _compute_mounted(self, connections=None) -> dict[str, str]:
+        """Which host is mounted on which letter; also remembered for
+        _effective_letter(). See drive_utils.resolve_mounted."""
+        from src.drive_utils import norm_letter, resolve_mounted
+        if connections is None:
+            connections = self._mgr.get_connections()
+        in_use = self._drives_in_use()
+        # Hosts the app has no mount record for only count as mounted if their
+        # letter really holds an SSHFS mount (not a USB stick on that letter).
+        unrecorded = {norm_letter(c.drive_letter) for c in connections
+                      if c.id not in self._active_mounts and not c.is_ftp}
+        candidates = unrecorded & in_use
+        ours = self._controller.sshfs_letters(candidates) if candidates else set()
+        self._mounted_letters = resolve_mounted(
+            connections, self._active_mounts, in_use, ours)
+        return self._mounted_letters
+
+    def _effective_letter(self, conn) -> str:
+        """The letter the host is mounted on, else its configured letter."""
+        from src.drive_utils import norm_letter
+        return (self._mounted_letters.get(conn.id)
+                or norm_letter(self._active_mounts.get(conn.id))
+                or conn.drive_letter)
+
+    def _resolve_mount_letter(self, conn, interactive: bool = True) -> str | None:
+        """The letter to mount *conn* on, or None to cancel.
+
+        Never a letter that is in use. If the configured one is taken:
+        - shared letters + auto-pick: a random free letter, for this mount only;
+        - otherwise (interactive): offer a free letter; accepting stores it on
+          the host. Not interactive: skip the host.
+        """
+        from src.drive_utils import norm_letter, suggest_free_letter
+        settings = self._mgr.get_settings()
+        shared = bool(getattr(settings, "allow_shared_drive_letters", False))
+        auto_pick = shared and bool(getattr(settings, "auto_pick_free_drive_letter", False))
+        wanted = norm_letter(conn.drive_letter)
+        in_use = self._drives_in_use()
+        if wanted and wanted not in in_use:
+            return wanted
+
+        others = [c for c in self._mgr.get_connections()
+                  if c.id != conn.id and not c.is_ftp]
+        mounted = self._compute_mounted()
+        if conn.id in mounted:
+            return None                     # already mounted
+        # Letters other hosts are configured for: avoided where possible, and
+        # always when letters may not be shared.
+        taken_by_hosts = {norm_letter(c.drive_letter) for c in others}
+        busy = wanted or conn.drive_letter
+
+        if auto_pick:
+            pick = (suggest_free_letter(in_use, taken_by_hosts, randomize=True)
+                    or suggest_free_letter(in_use, randomize=True))
+            if pick:
+                logger.info(f"Mount {conn.name}: {busy} belegt, nutze {pick} (nur für diesen Mount)")
+                self._set_status(tr("status.mount_other_letter", name=conn.name,
+                                    drive=busy, other=pick))
+                return pick
+        else:
+            pick = suggest_free_letter(in_use, taken_by_hosts)
+            if pick is None and shared:
+                pick = suggest_free_letter(in_use)
+
+        if pick is None:
+            if interactive:
+                StyledMessageBox.warning(self, tr("mount.letter_busy.title"),
+                                         tr("mount.letter_busy.none", drive=busy))
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+        if not interactive:
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+
+        owner = next((c for c in others if mounted.get(c.id) == wanted), None)
+        by = (tr("mount.letter_busy.by_host", name=owner.name) if owner
+              else tr("mount.letter_busy.by_drive"))
+        if not StyledMessageBox.question(
+            self, tr("mount.letter_busy.title"),
+            tr("mount.letter_busy.body", drive=busy, by=by, other=pick),
+            yes_text=tr("mount.letter_busy.switch", other=pick),
+            no_text=tr("dialog.cancel"),
+        ):
+            self._set_status(tr("status.mount_letter_busy", name=conn.name, drive=busy))
+            return None
+        stored = self._mgr.get_by_id(conn.id)
+        if stored is None:
+            return None
+        stored.drive_letter = pick
+        self._mgr.update(stored)
+        self._refresh_list()
+        return pick
+
     def _on_mount_finished(self, conn_id: str, result):
         if conn_id in self._workers:
             self._workers[conn_id].deleteLater()
             del self._workers[conn_id]
         conn = self._mgr.get_by_id(conn_id)
+        letter = self._mount_targets.pop(conn_id, None) or (conn.drive_letter if conn else "")
         card = self._cards.get(conn_id)
         if card:
             card.hide_loading()
         if result.success:
+            self._letter_retry.discard(conn_id)
+            self._save_active_mount(conn_id, True, letter)
+            self._mounted_letters[conn_id] = letter
             if card:
                 card.update_mount_state(True)
-            self._save_active_mount(conn_id, True)
+                card.set_mounted_letter(letter)
             if conn:
-                self._set_status(tr("status.connected", name=conn.name, drive=conn.drive_letter))
+                self._set_status(tr("status.connected", name=conn.name, drive=letter))
             if self._panel_conn_id == conn_id:
                 # Keep header mount state and panel content in sync.
-                # EDIT mode: close edit panel and show info (can't edit a mounted connection).
-                if self._panel_mode in (_PANEL_INFO, _PANEL_EDIT):
+                if self._panel_mode == _PANEL_EDIT:
+                    # Keep any unsaved edits; just lock the connection fields.
+                    self._ef_set_mount_lock(self._ef_should_lock(conn_id))
+                elif self._panel_mode == _PANEL_INFO:
                     self._open_info_panel(conn_id)
                 elif self._panel_mode == _PANEL_SYSINFO:
                     self._open_sysinfo_panel(conn_id)
@@ -4458,19 +5017,26 @@ class MainWindow(FramelessMainWindow):
                     self._sync_rp_mount_button(conn_id)
         else:
             name = conn.name if conn else "?"
+            # The letter was taken between the check and the mount: start over,
+            # which offers another letter (once, so this can never loop).
+            if getattr(result, "code", "") == "drive_in_use" and conn_id not in self._letter_retry:
+                self._letter_retry.add(conn_id)
+                QTimer.singleShot(0, lambda: self._on_mount(conn_id))
+                return
+            self._letter_retry.discard(conn_id)
             # SSH Key Fallback: Wenn Key fehlschlägt aber Passwort hinterlegt ist
             if conn and conn.auth_method == "key" and conn.password:
                 if self._show_key_fallback_dialog(conn):
                     # Temporär auf Passwort-Auth wechseln und retry
                     conn.auth_method = "password"
-                    QTimer.singleShot(500, lambda: self._retry_mount_with_password(conn_id, conn))
+                    QTimer.singleShot(500, lambda: self._retry_mount_with_password(conn_id, conn, letter))
                     return
             if self._show_mount_failure_dialog(conn, result.message):
                 QTimer.singleShot(500, lambda: self._on_mount(conn_id))
                 return
             self._set_status(tr("status.connect_failed", name=name))
         self._update_status()
-        self._apply_group_filter()
+        self._apply_list_filters()
 
     def _show_key_fallback_dialog(self, conn) -> bool:
         """Zeigt Dialog an, der fragt ob mit Passwort statt Key verbunden werden soll.
@@ -4481,19 +5047,11 @@ class MainWindow(FramelessMainWindow):
             yes_text=tr("dialog.key_fallback.yes"), no_text=tr("dialog.key_fallback.no")
         )
 
-    def _retry_mount_with_password(self, conn_id: str, conn):
-        """Retry mount with password authentication."""
+    def _retry_mount_with_password(self, conn_id: str, conn, letter: str):
+        """Retry mount with password authentication (on the same letter)."""
         if conn_id in self._workers:
             return
-        self._set_status(tr("status.connecting", name=conn.name, drive=conn.drive_letter))
-        card = self._cards.get(conn_id)
-        if card:
-            card.show_loading(tr("card.loading.connect"))
-        _disable_cache = bool(getattr(self._mgr.get_settings(), "sshfs_disable_cache", False))
-        worker = MountWorker(conn, self._controller, disable_cache=_disable_cache)
-        worker.finished.connect(self._on_mount_finished)
-        self._workers[conn_id] = worker
-        worker.start()
+        self._start_mount_worker(conn_id, conn, letter)
 
     @pyqtSlot(str)
     def _on_unmount(self, conn_id: str):
@@ -4502,11 +5060,12 @@ class MainWindow(FramelessMainWindow):
         conn = self._mgr.get_by_id(conn_id)
         if not conn:
             return
-        self._set_status(tr("status.disconnecting", drive=conn.drive_letter))
+        letter = self._effective_letter(conn)
+        self._set_status(tr("status.disconnecting", drive=letter))
         card = self._cards.get(conn_id)
         if card:
             card.show_loading(tr("card.loading.disconnect"))
-        worker = UnmountWorker(conn_id, conn.drive_letter, self._controller)
+        worker = UnmountWorker(conn_id, letter, self._controller)
         worker.finished.connect(self._on_unmount_finished)
         self._workers[conn_id] = worker
         worker.start()
@@ -4526,8 +5085,10 @@ class MainWindow(FramelessMainWindow):
             if card:
                 card.hide_loading()
             if result.success:
+                self._mounted_letters.pop(conn_id, None)
                 if card:
                     card.update_mount_state(False)
+                    card.set_mounted_letter(None)
                 self._save_active_mount(conn_id, False)
                 self._set_status(tr("status.disconnected", name=conn.name if conn else "?"))
                 try:
@@ -4536,6 +5097,8 @@ class MainWindow(FramelessMainWindow):
                             self._open_info_panel(conn_id)
                         elif self._panel_mode == _PANEL_SYSINFO:
                             self._open_sysinfo_panel(conn_id)
+                        elif self._panel_mode == _PANEL_EDIT:
+                            self._ef_set_mount_lock(False)
                         else:
                             self._sync_rp_mount_button(conn_id)
                 except Exception as e:
@@ -4549,7 +5112,7 @@ class MainWindow(FramelessMainWindow):
         finally:
             try:
                 self._update_status()
-                self._apply_group_filter()
+                self._apply_list_filters()
             except Exception:
                 pass
 
@@ -4864,10 +5427,11 @@ class MainWindow(FramelessMainWindow):
         card = self._cards.get(conn_id)
         if not card or not card.is_mounted:
             return
-        path = f"{conn.drive_letter.rstrip(':').rstrip(chr(92))}:\\"
+        letter = self._effective_letter(conn)
+        path = f"{letter.rstrip(':').rstrip(chr(92))}:\\"
         try:
             os.startfile(path)
-            self._set_status(tr("status.explorer_opened", name=conn.name, drive=conn.drive_letter))
+            self._set_status(tr("status.explorer_opened", name=conn.name, drive=letter))
         except OSError as e:
             self._err_popup(tr("explorer.failed.title"), f"{path}\n\n{e}")
 
@@ -4883,12 +5447,26 @@ class MainWindow(FramelessMainWindow):
         if self._poll_timer.interval() != interval:
             self._poll_timer.setInterval(interval)
         self._apply_debug_mode()
-        from src.ui.theme import get_stylesheet
+        from src.ui.theme import build_stylesheet, set_current_accent
         theme = s.theme or "dark"
-        QApplication.instance().setStyleSheet(get_stylesheet(theme))
+        set_current_accent(getattr(s, "accent_color", ""), getattr(s, "accent_text_color", ""))
+        set_background_enabled(getattr(s, "background_network", True))
+        self._rp_backdrop.update()
+        self._fs_backdrop.update()
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
         self.set_app_theme(theme)          # update custom titlebar palette
         self._apply_titlebar_color(theme)  # kept for any residual DWM calls
         self._update_header_btn_icons(theme)
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        self._update_filter_ui()
+        # Connection cards paint their icons in the theme/accent they were
+        # built with, and show duplicate-letter warnings only while letters
+        # may not be shared; rebuild them when any of that changed.
+        look = (theme, current_accent(), bool(getattr(s, "allow_shared_drive_letters", False)))
+        if look != self._applied_look:
+            self._applied_look = look
+            self._refresh_list()
         # Repaint sidebar icon colors for current theme and active item.
         if self._panel_mode == _PANEL_SETTINGS:
             self._set_sidebar_active("settings")
@@ -4902,6 +5480,74 @@ class MainWindow(FramelessMainWindow):
             self._set_sidebar_active("home")
         if self._file_browser is not None:
             self._file_browser.set_theme(theme)
+
+    # ── accent colour (settings panel) ────────────────────────────────────────
+
+    def _sf_update_accent_ui(self):
+        """Show the pending accent, with an "A" in its text colour, on the
+        swatch button."""
+        from src.ui.theme import accent_text_color
+        color = self._sf_accent
+        text = self._sf_accent_text or accent_text_color(color)
+        scale = max(1.0, self.devicePixelRatioF())
+        pm = QPixmap(round(16 * scale), round(16 * scale))
+        pm.setDevicePixelRatio(scale)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(128, 128, 128, 140), 1))
+        p.setBrush(QColor(color))
+        p.drawRoundedRect(QRectF(0.5, 0.5, 15, 15), 4, 4)
+        font = QFont(self.font())
+        font.setPixelSize(10)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(text))
+        p.drawText(QRectF(0, 0, 16, 16), Qt.AlignmentFlag.AlignCenter, "A")
+        p.end()
+        self._sf_accent_btn.setIconSize(QSize(16, 16))
+        self._sf_accent_btn.setIcon(QIcon(pm))
+        self._sf_accent_btn.setText(color.upper())
+        self._sf_accent_reset_btn.setEnabled(color != DEFAULT_ACCENT or bool(self._sf_accent_text))
+
+    def _sf_preview_accent(self, color: str, text: str | None = None):
+        """Live preview: restyle the app in *color*, with *text* on it
+        (default: the pending text colour), without saving it."""
+        from src.ui.theme import build_stylesheet, set_current_accent
+        set_current_accent(color, self._sf_accent_text if text is None else text)
+        theme = self._mgr.get_settings().theme or "dark"
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(theme, current_accent(), current_accent_text()))
+        self._mount_all_btn.setIcon(svg_icon("cloud", current_accent(), 16))
+        self._set_sidebar_active("settings")
+        if self._file_browser is not None:
+            self._file_browser.set_theme(theme)
+
+    def _sf_set_accent(self, color: str, preview: bool, text: str | None = None):
+        """*text*: the text colour on the accent ("" = automatic); None keeps it."""
+        self._sf_accent = normalize_hex(color) or DEFAULT_ACCENT
+        if text is not None:
+            self._sf_accent_text = normalize_hex(text) or ""
+        self._sf_update_accent_ui()
+        if preview:
+            self._sf_preview_accent(self._sf_accent)
+
+    def _sf_pick_accent(self):
+        from src.ui.widgets.color_picker import AccentColorDialog
+        # Cancel makes the dialog preview the colours it started with again.
+        chosen = AccentColorDialog.pick(self, self._sf_accent, self._sf_preview_accent,
+                                        self._sf_accent_text)
+        if chosen is not None:
+            color, text = chosen
+            self._sf_set_accent(color, preview=False, text=text)
+
+    def _sf_revert_accent_preview(self):
+        """Settings discarded: go back to the saved accent if a preview changed it."""
+        s = self._mgr.get_settings()
+        saved = normalize_hex(getattr(s, "accent_color", "")) or DEFAULT_ACCENT
+        saved_text = normalize_hex(getattr(s, "accent_text_color", "")) or ""
+        if (current_accent(), current_accent_text()) != (saved, saved_text):
+            self._sf_preview_accent(saved, saved_text)
 
     def _update_header_btn_icons(self, theme: str):
         if theme == "light":
@@ -5029,7 +5675,7 @@ class MainWindow(FramelessMainWindow):
         lu = line.upper()
         if "[ERROR" in lu or "[CRITICAL" in lu:
             short = line.split(" — ", 1)[-1] if " — " in line else line
-            self._set_status(f"⚠ Fehler: {short[:140]}")
+            self._set_status(f"⚠ {tr('status.error', msg=short[:140])}")
 
     def _check_prerequisites(self):
         status = SSHFSController.get_install_status()
@@ -5044,32 +5690,39 @@ class MainWindow(FramelessMainWindow):
 
     def _load_active_mounts(self):
         try:
-            self._active_mounts = set(self._mgr.get_active_mounts())
+            self._active_mounts = dict(self._mgr.get_active_mounts())
         except Exception as e:
             logger.warning(f"Konnte aktive Mounts nicht laden: {e}")
-            self._active_mounts = set()
+            self._active_mounts = {}
 
-    def _save_active_mount(self, conn_id: str, mounted: bool):
+    def _save_active_mount(self, conn_id: str, mounted: bool, letter: str = ""):
         try:
             if mounted:
-                self._mgr.add_active_mount(conn_id)
-                self._active_mounts.add(conn_id)
+                from src.drive_utils import norm_letter
+                letter = norm_letter(letter) or ""
+                # A letter holds one mount: other records on it are stale
+                # (that mount is gone) and would claim the drive for the wrong host.
+                for other, other_letter in list(self._active_mounts.items()):
+                    if other != conn_id and letter and norm_letter(other_letter) == letter:
+                        self._mgr.remove_active_mount(other)
+                        self._active_mounts.pop(other, None)
+                self._mgr.add_active_mount(conn_id, letter)
+                self._active_mounts[conn_id] = letter
             else:
                 self._mgr.remove_active_mount(conn_id)
-                self._active_mounts.discard(conn_id)
+                self._active_mounts.pop(conn_id, None)
         except Exception as e:
             logger.warning(f"Konnte Mount-Status nicht speichern: {e}")
 
     def _auto_reconnect_mounts(self):
         if not self._mgr.get_settings().auto_reconnect_mounts:
             return
-        active_ids = self._mgr.get_active_mounts()
-        if not active_ids:
+        if not self._active_mounts:
             return
-        for conn_id in active_ids:
-            conn = self._mgr.get_by_id(conn_id)
-            if conn and not self._controller.is_mounted(conn.drive_letter):
-                QTimer.singleShot(1000, lambda cid=conn_id: self._on_mount(cid))
+        mounted = self._compute_mounted()
+        for conn_id in list(self._active_mounts):
+            if conn_id not in mounted and self._mgr.get_by_id(conn_id):
+                QTimer.singleShot(1000, lambda cid=conn_id: self._mount(cid, interactive=False))
 
     def _on_mount_all(self):
         """Mount all connections (or filtered by selected group)."""
@@ -5119,26 +5772,123 @@ class MainWindow(FramelessMainWindow):
 
     def _on_group_filter_changed(self, index: int):
         """Handle group filter selection change."""
-        self._apply_group_filter()
+        self._apply_list_filters()
 
-    def _apply_group_filter(self):
-        """Show/hide connection containers based on the active filter selection."""
+    def _apply_list_filters(self):
+        """Show the connections that pass both the group filter and the
+        text filter (name, host or user, see connection_filter)."""
+        from src.connection_filter import matches
         selected = self._groups_combo.currentData()
+        query = self._filter_input.text()
+        in_group = shown = 0
         for conn_id, container in self._containers.items():
             card = self._cards.get(conn_id)
+            conn = getattr(container, "_conn", None) or self._mgr.get_by_id(conn_id)
             if selected == "__all__":
-                container.setVisible(True)
+                ok = True
             elif selected == "__mounted__":
-                container.setVisible(bool(card and card.is_mounted))
+                ok = bool(card and card.is_mounted)
             elif selected == "__unmounted__":
-                container.setVisible(bool(card and not card.is_mounted))
+                ok = bool(card and not card.is_mounted)
+            elif conn:
+                conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
+                ok = selected in conn_groups
             else:
-                conn = self._mgr.get_by_id(conn_id)
-                if conn:
-                    conn_groups = [g.strip() for g in (conn.groups or "").split(",") if g.strip()]
-                    container.setVisible(selected in conn_groups)
-                else:
-                    container.setVisible(False)
+                ok = False
+            in_group += ok
+            ok = ok and conn is not None and matches(conn, query)
+            shown += ok
+            container.setVisible(ok)
+        self._update_filter_ui(shown, in_group)
+
+    # ── text filter ───────────────────────────────────────────────────────────
+
+    def _build_filter_bar(self) -> QWidget:
+        """The filter field below the header. It filters the list with every
+        character typed, and what is typed stays, across restarts too, until
+        it is changed or cleared by hand."""
+        bar = QWidget()
+        bar.setObjectName("connectionsFilterBar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 10, 12, 0)
+        h.setSpacing(10)
+        self._filter_input = _FilterLineEdit()
+        self._filter_input.setObjectName("connectionsFilterInput")
+        self._filter_input.setPlaceholderText(tr("search.placeholder"))
+        self._filter_input.setAccessibleName(tr("search.tooltip"))
+        self._filter_icon_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.LeadingPosition)
+        self._filter_clear_action = self._filter_input.addAction(
+            QIcon(), QLineEdit.ActionPosition.TrailingPosition)
+        self._filter_clear_action.setToolTip(tr("search.clear"))
+        self._filter_clear_action.triggered.connect(self._clear_filter)
+        self._filter_input.setText(self._mgr.get_connection_filter())
+        self._filter_input.textChanged.connect(self._on_filter_changed)
+        self._filter_input.escape_pressed.connect(self._on_filter_escape)
+        h.addWidget(self._filter_input, 1)
+        self._filter_count = QLabel("")
+        self._filter_count.setObjectName("connectionsFilterCount")
+        h.addWidget(self._filter_count)
+        self._filter_bar = bar
+        if not self._filter_input.text():
+            bar.hide()      # never show() here: the bar has no parent yet
+        self._update_filter_ui()
+        return bar
+
+    def _toggle_search(self):
+        """Magnifier: open the field; close it again only while it is empty,
+        because a filter stays until it is cleared by hand."""
+        if self._filter_bar.isHidden() or self._filter_input.text():
+            self._open_search()
+        else:
+            self._filter_bar.hide()
+
+    def _open_search(self):
+        if self._main_stack.currentIndex() != 0:
+            self._nav_home()
+            if self._main_stack.currentIndex() != 0:   # the user stayed on a form
+                return
+        self._filter_bar.show()
+        self._filter_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._filter_input.selectAll()
+
+    def _on_filter_changed(self, text: str):
+        self._mgr.save_connection_filter(text)
+        self._apply_list_filters()
+
+    def _on_filter_escape(self):
+        """Esc closes an empty field; a filter stays, only the focus leaves."""
+        if self._filter_input.text():
+            self._filter_input.clearFocus()
+        else:
+            self._filter_bar.hide()
+
+    def _clear_filter(self):
+        self._filter_input.clear()
+        self._filter_input.setFocus()
+
+    def _update_filter_ui(self, shown: int | None = None, total: int | None = None):
+        """Icons in the theme's colours (the accent while a filter is set),
+        the clear button and the "3 of 8" count."""
+        theme = self._mgr.get_settings().theme or "dark"
+        text = self._filter_input.text()
+        active = bool(text.strip())
+        idle = "#4a5a6a" if is_light(theme) else dark_tone(theme, "#aab4c4")
+        self._search_btn.setIcon(svg_icon("magnifier", current_accent() if active else idle, 16))
+        if self._search_btn.property("active") != ("true" if active else "false"):
+            self._search_btn.setProperty("active", "true" if active else "false")
+            self._search_btn.style().unpolish(self._search_btn)
+            self._search_btn.style().polish(self._search_btn)
+        self._filter_icon_action.setIcon(svg_icon("magnifier", current_accent() if active else idle, 15))
+        self._filter_clear_action.setIcon(svg_icon("x", idle, 14))
+        self._filter_clear_action.setVisible(bool(text))
+        if shown is not None:
+            if not active:
+                self._filter_count.setText("")
+            elif shown:
+                self._filter_count.setText(tr("search.count", shown=shown, total=total))
+            else:
+                self._filter_count.setText(tr("search.none"))
 
     def _refresh_groups_combo(self):
         """Refresh the groups filter combo with available groups."""
@@ -5189,11 +5939,12 @@ class MainWindow(FramelessMainWindow):
         # Fallback: normaler Unmount, aber nur eigene Laufwerke (keine System-Drives).
         for conn_id in list(self._active_mounts):
             conn = self._mgr.get_by_id(conn_id)
-            if conn and conn.drive_letter:
+            letter = self._effective_letter(conn) if conn else ""
+            if letter:
                 try:
-                    self._controller.unmount(conn.drive_letter)
+                    self._controller.unmount(letter)
                 except Exception as e:
-                    logger.warning(f"Unmount {conn.drive_letter} fehlgeschlagen: {e}")
+                    logger.warning(f"Unmount {letter} fehlgeschlagen: {e}")
 
     def _debug_widget_under_mouse(self):
         """Debug the widget currently under the mouse cursor (triggered by F2)."""
@@ -5334,11 +6085,6 @@ class MainWindow(FramelessMainWindow):
             if active_key:
                 self._switch_terminal_tab(conn_id, active_key)
         else:
-            # First session for this conn — check the free session limit
-            if self._terminal_limit_reached():
-                self._show_pro_session_limit_dialog()
-                self._close_right_panel()
-                return
             self._create_terminal_session(conn_id, initial_input=initial_input)
 
         self._right_panel_widget.setVisible(True)
@@ -5491,27 +6237,8 @@ class MainWindow(FramelessMainWindow):
         self._add_terminal_session(self._panel_conn_id)
 
     def _add_terminal_session(self, conn_id: str, initial_input: str | None = None) -> None:
-        """Another session for conn_id, within the free session limit."""
-        if self._terminal_limit_reached():
-            self._show_pro_session_limit_dialog()
-            return
+        """Another session for conn_id."""
         self._create_terminal_session(conn_id, initial_input=initial_input)
-
-    def _terminal_limit_reached(self) -> bool:
-        """True when the free session limit is on, reached, and Pro is not active."""
-        from src import pro_manager
-        limit = pro_manager.FREE_TERMINAL_SESSION_LIMIT
-        if limit is None:
-            return False
-        total = sum(len(tabs) for tabs in self._terminal_conn_tabs.values())
-        return total >= limit and not pro_manager.is_pro_active()
-
-    def _show_pro_session_limit_dialog(self):
-        StyledMessageBox.information(
-            self,
-            tr("pro.session_limit.title"),
-            tr("pro.session_limit.body"),
-        )
 
     def _on_end_terminal_session(self):
         """'Session beenden' button: terminate active tab; if last → close terminal panel."""

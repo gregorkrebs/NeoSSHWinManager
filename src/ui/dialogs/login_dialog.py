@@ -3,42 +3,95 @@ login_dialog.py – Login-Dialog for NEO SSH-Win Manager.
 
 Shows a registration form on the first start.
 On subsequent starts, a login dialog is displayed.
-Admins can create additional users.
+The login screen has a language picker and takes its theme and accent
+colour from the user who signed in last.
 """
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFrame, QCheckBox, QTabWidget, QWidget,
-    QScrollArea, QApplication
+    QScrollArea, QApplication, QComboBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent, QRectF
+from PyQt6.QtGui import QFont, QIcon, QAction, QColor, QPainter
+import ctypes
 import os
+import tempfile
 
-from src.auth_manager import AuthManager, Session, LoginLockedError
-from src.crypto import is_available
+from src.auth_manager import AuthManager, Session, LoginLockedError, SingleUserModeError
+from src.crypto import is_available, is_keyring_available
 from src.ui.dialog_utils import match_parent_height, make_maximize_button
 from src.ui.dialogs.styled_message_box import StyledMessageBox
 from src.ui.frameless_dialog import FramelessDialog
-from src.ui.icons import icon as svg_icon
+from src.ui.icons import icon as svg_icon, pixmap as svg_pixmap, svg_file
+from src.ui.node_network import background_enabled, paint_node_network
+from src.ui.theme import current_accent, dark_tone, is_light, normalize_theme
 from src.ui.widgets.no_wheel import NoWheelScrollArea
-from src.i18n import tr
+from src.i18n import (
+    tr, set_language, current_language, available_languages, is_rtl, LANGUAGE_NAMES,
+)
+
+
+def _caps_lock_on() -> bool:
+    try:
+        return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)  # VK_CAPITAL
+    except Exception:
+        return False
+
+
+class _LoginBackdrop(QFrame):
+    """The login screen's background: the accent glow from the stylesheet and
+    the network of linked nodes from the About banner beside the header."""
+
+    # (mirrored, top, gap above the card): one network on each side, offset
+    # against each other; the trailing one starts below the language menu.
+    _NETWORKS = ((True, 26, 54), (False, 62, 22))
+
+    def __init__(self, theme: str):
+        super().__init__()
+        self.setObjectName("loginRoot")
+        self._light = is_light(theme)
+        self._card: QWidget | None = None
+
+    def set_card(self, card: QWidget) -> None:
+        """The network stays above the form card."""
+        self._card = card
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if not background_enabled():
+            return
+        card_top = self._card.geometry().top() if self._card is not None else self.height() // 2
+        w = self.width()
+        color = QColor(current_accent())
+        alphas = dict(line_alpha=55, dot_alphas=(140, 90)) if self._light             else dict(line_alpha=70, dot_alphas=(175, 110))
+        p = QPainter(self)
+        for mirrored, top, gap in self._NETWORKS:
+            if card_top - gap - top < 80:
+                continue
+            # Area 0.88 × the width, placed so that the nodes cover the outer
+            # quarter and run a little past the window edge.
+            x0 = -0.053 * w if mirrored else 0.173 * w
+            area = QRectF(x0, top, 0.88 * w, card_top - gap - top)
+            paint_node_network(p, area, color, mirrored=mirrored, glow_alpha=0, **alphas)
+        p.end()
+
 
 class LoginDialog(FramelessDialog):
     """
     Shown at app start.
-    - First start: Registration form
-    - Subsequent starts: Login
-    - Admin tab for creating additional users
+    - First start: registration form, or single-user mode instead
+    - Subsequent starts: login
     """
 
     login_successful = pyqtSignal()
 
-    def __init__(self, parent=None):
+    WIDTH = 500
+
+    def __init__(self, parent=None, theme: str = "dark"):
         super().__init__(parent)
         self.setObjectName("dialogSurface")
-        self.setWindowTitle(tr("login.title"))
-        self.setMinimumWidth(440)
+        self.setFixedWidth(self.WIDTH)
         self.setModal(True)
         for icon_file in ("app_icon.ico", "app_icon.png"):
             icon_path = self._resource_path(os.path.join("assets", icon_file))
@@ -46,7 +99,20 @@ class LoginDialog(FramelessDialog):
                 self.setWindowIcon(QIcon(icon_path))
                 break
 
+        self._theme = normalize_theme(theme)
+        self.set_dialog_theme(self._theme)
         self._first_run = not AuthManager.has_any_users()
+        self._lang_changed = False
+
+        # Lives across rebuilds (a language change rebuilds the form)
+        self._lockout_timer = QTimer(self)
+        self._lockout_timer.setInterval(1000)
+        self._lockout_timer.timeout.connect(self._tick_lockout)
+        self._lockout_remaining = 0
+
+        self._root_layout = QVBoxLayout(self._fdlg_content)
+        self._root_layout.setContentsMargins(0, 0, 0, 0)
+        self._root = None
         self._build_ui()
 
     @staticmethod
@@ -59,150 +125,354 @@ class LoginDialog(FramelessDialog):
             relative_path
         )
 
-    def _divider(self) -> QFrame:
-        f = QFrame()
-        f.setObjectName("divider")
-        f.setFixedHeight(1)
-        return f
+    # ------------------------------------------------------------------
+    # Building blocks
+    # ------------------------------------------------------------------
 
-    def _input(self, placeholder="", password=False) -> QLineEdit:
+    def _icon_color(self) -> str:
+        return "#7a8a9a" if is_light(self._theme) else dark_tone(self._theme, "#8fa4b8")
+
+    _icon_tmp: str | None = None
+
+    @classmethod
+    def _icon_dir(cls) -> str:
+        if cls._icon_tmp is None:
+            cls._icon_tmp = tempfile.mkdtemp(prefix="neossh_login_")
+        return cls._icon_tmp
+
+    @staticmethod
+    def _dpr() -> float:
+        screen = QApplication.primaryScreen()
+        return screen.devicePixelRatio() if screen is not None else 1.0
+
+    def _field_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("loginFieldLabel")
+        return lbl
+
+    def _input(self, placeholder: str, icon_name: str, password: bool = False) -> QLineEdit:
         w = QLineEdit()
+        w.setObjectName("loginInput")
         w.setPlaceholderText(placeholder)
+        w.addAction(svg_icon(icon_name, self._icon_color(), 16),
+                    QLineEdit.ActionPosition.LeadingPosition)
         if password:
             w.setEchoMode(QLineEdit.EchoMode.Password)
+            toggle = QAction(svg_icon("eye", self._icon_color(), 16), tr("login.show_password"), w)
+            toggle.setToolTip(tr("login.show_password"))
+            toggle.triggered.connect(lambda _=False, f=w, a=toggle: self._toggle_password(f, a))
+            w.addAction(toggle, QLineEdit.ActionPosition.TrailingPosition)
+            w.installEventFilter(self)
         return w
 
+    def _toggle_password(self, field: QLineEdit, action: QAction) -> None:
+        hidden = field.echoMode() == QLineEdit.EchoMode.Password
+        field.setEchoMode(QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password)
+        action.setIcon(svg_icon("eye-off" if hidden else "eye", self._icon_color(), 16))
+        tip = tr("login.hide_password") if hidden else tr("login.show_password")
+        action.setText(tip)
+        action.setToolTip(tip)
+
+    def _icon_row(self, object_name: str, icon_name: str, color: str) -> tuple[QFrame, QLabel]:
+        """A row with a small icon and a word-wrapped text (alerts, hints)."""
+        frame = QFrame()
+        frame.setObjectName(object_name)
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(*((12, 9, 12, 9) if object_name == "loginAlert" else (2, 0, 2, 0)))
+        row.setSpacing(8)
+        icon = QLabel()
+        icon.setPixmap(svg_pixmap(icon_name, color, 15, self._dpr()))
+        icon.setFixedSize(16, 16)
+        icon.setStyleSheet("background: transparent;")
+        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+        text = QLabel()
+        text.setObjectName("loginAlertText" if object_name == "loginAlert" else "loginCapsText")
+        text.setWordWrap(True)
+        row.addWidget(text, 1)
+        frame.setVisible(False)
+        return frame, text
+
+    @staticmethod
+    def _messages(*rows: QFrame) -> QVBoxLayout:
+        """Hints and errors under the fields; hidden ones take no space."""
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 10, 0, 0)
+        box.setSpacing(8)
+        for row in rows:
+            box.addWidget(row)
+        return box
+
+    def _alert(self) -> tuple[QFrame, QLabel]:
+        return self._icon_row("loginAlert", "alert-triangle",
+                              "#dc2626" if is_light(self._theme) else "#ff8d8d")
+
+    def _caps_hint(self) -> QFrame:
+        frame, text = self._icon_row("loginCapsHint", "keyboard",
+                                     "#b45309" if is_light(self._theme) else "#f59e0b")
+        text.setText(tr("login.caps_lock"))
+        return frame
+
+    def _app_icon(self) -> QLabel:
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("background: transparent;")
+        icon_path = self._resource_path(os.path.join("assets", "app_icon.png"))
+        if os.path.exists(icon_path):
+            from PyQt6.QtGui import QPixmap
+            pm = QPixmap(icon_path)
+            if not pm.isNull():
+                dpr = self._dpr()
+                pm = pm.scaled(int(68 * dpr), int(68 * dpr),
+                               Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+                pm.setDevicePixelRatio(dpr)
+                lbl.setPixmap(pm)
+                return lbl
+        # Fallback when the app icon is missing: a lock in the accent colour
+        lbl.setPixmap(svg_pixmap("lock", current_accent(), 56, self._dpr()))
+        return lbl
+
+    def _language_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.setObjectName("loginLangCombo")
+        combo.setToolTip(tr("login.language"))
+        combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        combo.setIconSize(QSize(14, 14))
+        # The shared chevron is drawn in currentColor, which a stylesheet
+        # url() renders black: give this one the theme's icon colour.
+        arrow = svg_file("chevron-down", self._icon_color(), self._icon_dir())
+        combo.setStyleSheet(f'QComboBox#loginLangCombo::down-arrow {{ image: url("{arrow}"); }}')
+        globe = svg_icon("globe", self._icon_color(), 14)
+        for code in available_languages():
+            combo.addItem(globe, LANGUAGE_NAMES.get(code, code), code)
+        combo.setCurrentIndex(max(0, combo.findData(current_language())))
+        combo.currentIndexChanged.connect(self._on_language_picked)
+        return combo
+
+    @staticmethod
+    def _version() -> str:
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "..", "..", "version.txt"),
+                      "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            return "?"
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
     def _build_ui(self):
-        layout = QVBoxLayout(self._fdlg_content)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        self.setWindowTitle(tr("login.title"))
 
-        hero = QFrame()
-        hero.setObjectName("dialogHeroCard")
-        hero_l = QVBoxLayout(hero)
-        hero_l.setContentsMargins(22, 22, 22, 22)
-        hero_l.setSpacing(10)
+        root = _LoginBackdrop(self._theme)
+        v = QVBoxLayout(root)
+        v.setContentsMargins(28, 16, 28, 22)
+        v.setSpacing(0)
 
-        icon_lbl = QLabel()
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setObjectName("dialogIconLarge")
-        try:
-            icon_path = self._resource_path(os.path.join("assets", "app_icon.png"))
-            if os.path.exists(icon_path):
-                from PyQt6.QtGui import QPixmap
-                pm = QPixmap(icon_path).scaled(
-                    64, 64,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                icon_lbl.setPixmap(pm)
-            else:
-                icon_lbl.setText("🔐")
-        except Exception:
-            icon_lbl.setText("🔐")
-        hero_l.addWidget(icon_lbl)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addStretch(1)
+        self._lang_combo = self._language_combo()
+        top.addWidget(self._lang_combo)
+        v.addLayout(top)
 
-        title = QLabel("NEO SSH-Win Manager")
-        title.setObjectName("dialogTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hero_l.addWidget(title)
+        v.addSpacing(4)
+        v.addWidget(self._app_icon())
+        v.addSpacing(14)
 
-        try:
-            with open(os.path.join(os.path.dirname(__file__), "..", "..", "version.txt"), "r", encoding="utf-8") as f:
-                APP_VERSION = f.read().strip()
-        except Exception:
-            APP_VERSION = "?"
+        headline = QLabel(tr("login.headline.setup") if self._first_run else tr("login.headline.signin"))
+        headline.setObjectName("loginHeadline")
+        headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        headline.setWordWrap(True)
+        v.addWidget(headline)
+        v.addSpacing(6)
 
-        ver_lbl = QLabel(f"v{APP_VERSION}")
+        subline = QLabel(tr("login.subline.setup") if self._first_run else tr("login.subline.signin"))
+        subline.setObjectName("loginSubline")
+        subline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subline.setWordWrap(True)
+        v.addWidget(subline)
+        v.addSpacing(20)
+
+        card = QFrame()
+        card.setObjectName("loginCard")
+        form = QVBoxLayout(card)
+        form.setContentsMargins(24, 22, 24, 24)
+        form.setSpacing(0)
+        if self._first_run:
+            self._build_register_form(form)
+        else:
+            self._build_login_form(form)
+        v.addWidget(card)
+        root.set_card(card)
+
+        v.addSpacing(16)
+        ver_lbl = QLabel(f"v{self._version()}")
         ver_lbl.setObjectName("dialogPill")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hero_l.addWidget(ver_lbl, 0, Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(ver_lbl, 0, Qt.AlignmentFlag.AlignCenter)
 
-        lead = QLabel(tr("login.create_first") if self._first_run else tr("login.please_sign_in"))
-        lead.setObjectName("dialogLead")
-        lead.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lead.setWordWrap(True)
-        hero_l.addWidget(lead)
-        layout.addWidget(hero)
-
-        form_card = QFrame()
-        form_card.setObjectName("dialogSectionCard")
-        form_l = QVBoxLayout(form_card)
-        form_l.setContentsMargins(22, 20, 22, 20)
-        form_l.setSpacing(10)
-
-        if self._first_run:
-            self._build_register_form(form_l)
-        else:
-            self._build_login_form(form_l)
-        layout.addWidget(form_card)
+        self._root_layout.addWidget(root)
+        self._root = root
 
     def _build_login_form(self, layout: QVBoxLayout):
-        lbl_user = QLabel(tr("login.username"))
-        lbl_user.setObjectName("fieldLabel")
-        layout.addWidget(lbl_user)
-        self._login_user = self._input(tr("login.username"))
+        layout.addWidget(self._field_label(tr("login.username")))
+        layout.addSpacing(6)
+        self._login_user = self._input(tr("login.username"), "user")
         layout.addWidget(self._login_user)
+        layout.addSpacing(16)
 
-        lbl_pw = QLabel(tr("login.password"))
-        lbl_pw.setObjectName("fieldLabel")
-        layout.addWidget(lbl_pw)
-        self._login_pw = self._input(tr("login.password"), password=True)
+        layout.addWidget(self._field_label(tr("login.password")))
+        layout.addSpacing(6)
+        self._login_pw = self._input(tr("login.password"), "lock", password=True)
         self._login_pw.returnPressed.connect(self._do_login)
         layout.addWidget(self._login_pw)
 
-        self._login_error = QLabel("")
-        self._login_error.setObjectName("errorLabel")
-        self._login_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._login_error.setWordWrap(True)
-        self._login_error.setVisible(False)
-        layout.addWidget(self._login_error)
+        self._caps = self._caps_hint()
+        self._login_alert, self._login_error = self._alert()
+        layout.addLayout(self._messages(self._caps, self._login_alert))
 
+        layout.addSpacing(18)
         self._login_btn = QPushButton(tr("login.sign_in"))
         self._login_btn.setObjectName("primaryBtn")
+        self._login_btn.setProperty("size", "large")
         self._login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._login_btn.setMinimumHeight(34)
         self._login_btn.setEnabled(False)
         self._login_btn.clicked.connect(self._do_login)
         layout.addWidget(self._login_btn)
 
+        self._login_user.returnPressed.connect(self._login_pw.setFocus)
         self._login_user.textChanged.connect(self._update_login_btn_state)
         self._login_pw.textChanged.connect(self._update_login_btn_state)
 
-        self._lockout_timer = QTimer(self)
-        self._lockout_timer.setInterval(1000)
-        self._lockout_timer.timeout.connect(self._tick_lockout)
-        self._lockout_remaining = 0
-
+        if self._lockout_remaining > 0:
+            self._set_login_locked(True)
+            self._update_lockout_label()
         self._login_user.setFocus()
 
     def _build_register_form(self, layout: QVBoxLayout):
-        for attr, lbl, ph, pw in [
-            ("_reg_user", tr("login.username"), tr("login.username"), False),
-            ("_reg_pw",   tr("login.password"), tr("login.pw_min"), True),
-            ("_reg_pw2",  tr("login.pw_confirm"), tr("login.pw_repeat"), True),
+        for attr, lbl, ph, icon_name, pw in [
+            ("_reg_user", tr("login.username"), tr("login.username"), "user", False),
+            ("_reg_pw",   tr("login.password"), tr("login.pw_min"), "lock", True),
+            ("_reg_pw2",  tr("login.pw_confirm"), tr("login.pw_repeat"), "lock", True),
         ]:
-            label = QLabel(lbl)
-            label.setObjectName("fieldLabel")
-            layout.addWidget(label)
-            field = self._input(ph, pw)
+            if attr != "_reg_user":
+                layout.addSpacing(16)
+            layout.addWidget(self._field_label(lbl))
+            layout.addSpacing(6)
+            field = self._input(ph, icon_name, pw)
             setattr(self, attr, field)
             layout.addWidget(field)
+        self._reg_user.returnPressed.connect(self._reg_pw.setFocus)
+        self._reg_pw.returnPressed.connect(self._reg_pw2.setFocus)
+        self._reg_pw2.returnPressed.connect(self._do_register)
 
-        self._reg_error = QLabel("")
-        self._reg_error.setObjectName("errorLabel")
-        self._reg_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._reg_error.setVisible(False)
-        layout.addWidget(self._reg_error)
+        self._caps = self._caps_hint()
+        self._reg_alert, self._reg_error = self._alert()
+        layout.addLayout(self._messages(self._caps, self._reg_alert))
 
-        btn = QPushButton(tr("login.create_account"))
+        layout.addSpacing(18)
+        # Qt reads "&" in button texts as a shortcut marker; "&&" shows it.
+        btn = QPushButton(tr("login.create_account").replace("&", "&&"))
         btn.setObjectName("primaryBtn")
+        btn.setProperty("size", "large")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setMinimumHeight(34)
         btn.clicked.connect(self._do_register)
         layout.addWidget(btn)
 
+        # Alternative: no account of one's own, automatic sign-in instead
+        layout.addSpacing(18)
+        or_row = QHBoxLayout()
+        or_row.setSpacing(12)
+        or_lbl = QLabel(tr("login.or").upper())
+        or_lbl.setObjectName("loginOrLabel")
+        left_line, right_line = QFrame(), QFrame()
+        left_line.setObjectName("loginOrLine")
+        right_line.setObjectName("loginOrLine")
+        or_row.addWidget(left_line, 1)
+        or_row.addWidget(or_lbl)
+        or_row.addWidget(right_line, 1)
+        layout.addLayout(or_row)
+        layout.addSpacing(18)
+
+        keyring_ok = is_keyring_available()
+        self._single_btn = QPushButton(tr("login.initial_setup"))
+        self._single_btn.setObjectName("secondaryBtn")
+        self._single_btn.setProperty("size", "large")
+        self._single_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._single_btn.setEnabled(keyring_ok)
+        self._single_btn.clicked.connect(self._initial_single_setup)
+        layout.addWidget(self._single_btn)
+
+        layout.addSpacing(8)
+        single_hint = QLabel(
+            tr("login.single_hint") if keyring_ok else tr("login.single_unavailable_keyring")
+        )
+        single_hint.setObjectName("loginHint")
+        single_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        single_hint.setWordWrap(True)
+        layout.addWidget(single_hint)
+
         self._reg_user.setFocus()
+
+    # ------------------------------------------------------------------
+    # Language
+    # ------------------------------------------------------------------
+
+    def _on_language_picked(self, index: int):
+        code = self._lang_combo.itemData(index)
+        if code and code != current_language():
+            # Rebuild after the combo's signal has returned: it is part of
+            # the form that gets replaced.
+            QTimer.singleShot(0, lambda: self._switch_language(code))
+
+    def _switch_language(self, code: str):
+        values = {attr: getattr(self, attr).text()
+                  for attr in ("_login_user", "_login_pw", "_reg_user", "_reg_pw", "_reg_pw2")
+                  if hasattr(self, attr)}
+        set_language(code)
+        self._lang_changed = True
+        QApplication.instance().setLayoutDirection(
+            Qt.LayoutDirection.RightToLeft if is_rtl() else Qt.LayoutDirection.LeftToRight
+        )
+        old = self._root
+        self._root_layout.removeWidget(old)
+        old.hide()
+        old.deleteLater()
+        self._build_ui()
+        for attr, text in values.items():
+            getattr(self, attr).setText(text)
+        self._lang_combo.setFocus()
+        self.adjustSize()
+
+    def _remember_language(self, user_id: str, always: bool = False):
+        """Keep the language picked here as the user's language."""
+        if always or self._lang_changed:
+            try:
+                AuthManager.set_user_language(user_id, current_language())
+            except Exception:
+                pass  # the login itself has succeeded; never block it here
+
+    # ------------------------------------------------------------------
+    # Caps Lock hint
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease,
+                            QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            QTimer.singleShot(0, self._update_caps_hint)
+        return super().eventFilter(obj, event)
+
+    def _update_caps_hint(self):
+        caps = getattr(self, "_caps", None)
+        if caps is None:
+            return
+        in_password = QApplication.focusWidget() in self._password_fields()
+        caps.setVisible(in_password and _caps_lock_on())
+
+    def _password_fields(self) -> list:
+        return [getattr(self, a) for a in ("_login_pw", "_reg_pw", "_reg_pw2") if hasattr(self, a)]
 
     # ------------------------------------------------------------------
     # Actions
@@ -210,9 +480,11 @@ class LoginDialog(FramelessDialog):
 
     def _update_login_btn_state(self):
         enabled = bool(self._login_user.text().strip()) and bool(self._login_pw.text())
-        self._login_btn.setEnabled(enabled)
+        self._login_btn.setEnabled(enabled and self._lockout_remaining <= 0)
 
     def _do_login(self):
+        if self._lockout_remaining > 0:
+            return
         username = self._login_user.text().strip()
         password = self._login_pw.text()
 
@@ -229,14 +501,21 @@ class LoginDialog(FramelessDialog):
             self._login_pw.setFocus()
             return
 
+        self._remember_language(user.id)
         Session.login(user)
         self.accept()
 
+    def _set_login_locked(self, locked: bool):
+        self._login_user.setEnabled(not locked)
+        self._login_pw.setEnabled(not locked)
+        if locked:
+            self._login_btn.setEnabled(False)
+        else:
+            self._update_login_btn_state()
+
     def _start_lockout_countdown(self, seconds: int, total_failures: int):
         self._lockout_remaining = seconds
-        self._login_btn.setEnabled(False)
-        self._login_user.setEnabled(False)
-        self._login_pw.setEnabled(False)
+        self._set_login_locked(True)
         self._update_lockout_label()
         self._lockout_timer.start()
 
@@ -244,10 +523,8 @@ class LoginDialog(FramelessDialog):
         self._lockout_remaining -= 1
         if self._lockout_remaining <= 0:
             self._lockout_timer.stop()
-            self._login_user.setEnabled(True)
-            self._login_pw.setEnabled(True)
-            self._login_error.setVisible(False)
-            self._update_login_btn_state()
+            self._login_alert.setVisible(False)
+            self._set_login_locked(False)
             self._login_pw.setFocus()
         else:
             self._update_lockout_label()
@@ -255,7 +532,7 @@ class LoginDialog(FramelessDialog):
     def _update_lockout_label(self):
         s = self._lockout_remaining
         if s >= 86400:
-            human = f"{s // 86400}T {(s % 86400) // 3600}h"
+            human = f"{s // 86400}d {(s % 86400) // 3600}h"
         elif s >= 3600:
             h = s // 3600
             m = (s % 3600) // 60
@@ -292,18 +569,33 @@ class LoginDialog(FramelessDialog):
 
         try:
             user = AuthManager.register(username, pw, is_admin=True)
-            Session.login(user)
-            self.accept()
         except Exception as e:
             self._show_reg_error(str(e))
+            return
+        self._remember_language(user.id, always=True)
+        Session.login(user)
+        self.accept()
+
+    def _initial_single_setup(self):
+        if not is_available():
+            StyledMessageBox.critical(self, tr("dialog.error"), tr("login.no_crypto"))
+            return
+        try:
+            user = AuthManager.initialize_single_user_mode()
+        except Exception as e:
+            self._show_reg_error(SingleUserModeError.text_for(e))
+            return
+        self._remember_language(user.id, always=True)
+        Session.login(user)
+        self.accept()
 
     def _show_login_error(self, msg: str):
-        self._login_error.setText(f"⚠ {msg}")
-        self._login_error.setVisible(True)
+        self._login_error.setText(msg)
+        self._login_alert.setVisible(True)
 
     def _show_reg_error(self, msg: str):
-        self._reg_error.setText(f"⚠ {msg}")
-        self._reg_error.setVisible(True)
+        self._reg_error.setText(msg)
+        self._reg_alert.setVisible(True)
 
     def closeEvent(self, event):
         # Wenn nicht eingeloggt → App beenden

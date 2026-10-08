@@ -1,5 +1,8 @@
 """
-icons.py – Zentrale SVG-Icon-Loader (lucide-Stil).
+icons.py – Zentrale SVG-Icon-Loader.
+
+Die Icons in assets/icons/ sind eigens für dieses Projekt gezeichnet
+(24er-Raster, runde Linienenden) und unterliegen keiner fremden Lizenz.
 
 Ermöglicht einheitliche, theme-farbige Icons für QPushButton/QLabel.
 SVGs liegen in assets/icons/ und verwenden stroke="currentColor";
@@ -59,17 +62,20 @@ def icon(name: str, color: str = "#aab4c4", size: int = 18) -> QIcon:
     return QIcon(pm)
 
 
-def pixmap(name: str, color: str = "#aab4c4", size: int = 18) -> QPixmap:
-    """SVG als QPixmap (für QLabel)."""
+def pixmap(name: str, color: str = "#aab4c4", size: int = 18, dpr: float = 1.0) -> QPixmap:
+    """SVG als QPixmap (für QLabel). dpr > 1 renders sharper for HiDPI
+    screens; the pixmap keeps the logical size *size*."""
     data = _svg_bytes(name, color)
     renderer = QSvgRenderer(QByteArray(data))
-    pm = QPixmap(size, size)
+    px = max(1, round(size * dpr))
+    pm = QPixmap(px, px)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
     renderer.render(painter)
     painter.end()
+    pm.setDevicePixelRatio(dpr)
     return pm
 
 

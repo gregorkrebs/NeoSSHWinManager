@@ -8,6 +8,156 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.7.0] — 2026-10-09
+
+Quicker to get started and easier to find your way around: a new installation is ready without setting up an account, a filter finds any connection as you type, and the login screen and the dark look have been redesigned. NEO SSH-Win Manager is now free and open source in full: the Pro licence is gone.
+
+### Highlights
+
+- **Start right away, no account to set up.** A new installation signs you in automatically (single-user mode). Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
+  - If several people use the computer, or you would rather sign in with a password, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
+  - An installation with one account can switch to single-user mode in the same place. The account is then renamed to "default".
+  - Installations that sign in with a password keep doing so after the update. If Windows Credential Manager is not available, the app asks you to create an account as before.
+- **Find any connection as you type.** The magnifier above the connection list, or Ctrl+F, opens a filter field. It looks at the name, the host and the user name, several words narrow the list further, and you see how many connections match. What you type stays there, across restarts too, until you clear it with the × in the field.
+- **A redesigned login screen.** A cleaner layout with icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
+  - A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
+  - The login screen uses the theme, the accent colour and the language of the user who signed in last.
+- **Black replaces Dark.** A classic dark mode in plain black and gray, without the blue tint. If you used Dark, you now have Black. The previous blue look is still there as "Blue (classic)", in the settings and in the installer.
+- **Free and open source, with everything.** The Pro licence is gone for good. The app no longer contains a licence check and no longer contacts the licence server.
+
+### Also new
+
+- **Tips in the empty overview.** Where "Ready for the next step" used to stand, you now get a tip ("Did you know?"): 60 short notes on features, shortcuts and settings, and a few jokes, in all six languages. You only see tips that fit your setup, a new one each time the overview comes back, and "Next tip" shows another one.
+- **Help right in the connection form.** A ? at the top of the form and beside every field opens the online documentation at the explanation of that field. Below the remote path, a tip says that it is usually your home directory on the server and that the command `pwd` shows it after an SSH login.
+- **Choose the text colour on your accent colour.** The accent colour picker has a new row for the text on accent-coloured buttons: automatic, white, black or a colour of your own, with a sample. The automatic choice is better too: bright accents such as orange, a vivid green or cyan now get dark text, while blue, violet, red or pink keep white text.
+- **A network of linked nodes in the background** of the empty overview, a connection's details, User Management, your profile and the login screen. Every page, and every connection, has a pattern of its own, and the text stays easy to read. You can switch it off under Settings → Appearance.
+
+### Improved
+
+- **The whole interface follows your language.** Some texts stayed in German or English whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
+- **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
+- **A tidier header and title bar.** The buttons above the connection list sit in the middle of their bar, and the "… active · … mounted" badge is no longer cut off. The header bar runs on across the gap between the connection list and the right panel, and in every theme the title bar takes the darker tone of the sidebar.
+- **A friendlier check interval field.** In the settings, the check interval sits between two round buttons, − and +. Holding a button keeps counting, and the number can still be typed.
+- **The login window appears a little sooner.** The main window is now loaded after you have signed in.
+- **In single-user mode, the profile button is hidden**, because there is no password to change. It comes back when you create an account.
+
+### Fixed
+
+- **No more small windows flashing up after the login.** While the main window was being built, a small empty window appeared and vanished again for every SFTP host in your list.
+- Button texts with "&", such as "Create account & start", no longer lose the "&".
+
+Single-user mode comes from the community fork [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user) by notstevy. Thank you!
+
+<details>
+<summary>Technical details</summary>
+
+#### Adopted from the fork
+
+Taken from [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user), which is based on 1.6.1, in its final state (branch `newmain2`):
+
+- [`04241d7`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/04241d7a1c4809d6b14385304ee145bc2e69b5f1) / [`26256dc`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/26256dc6f1ae11ea674a1bc10ae37f87e4fc8322) "Single-user, automatic login": a new `application_mode` table (one row with a `single_user` flag) in `init_db()`; `AuthManager.authenticate_single_user()`, `initialize_single_user_mode()`, `enable_single_user_mode()` and `migrate_single_user_to_multi_user()`; `main.py` tries the automatic login before it shows `LoginDialog`; a first-run button in the login dialog and a login mode card in the users panel. Switching modes re-wraps the existing encryption key with the new password (a random `secrets.token_urlsafe(32)` in single-user mode), so the account id and all encrypted data stay untouched.
+- [`b77e06f`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/b77e06f042c958d8ba782d4a610b45cc45948bd1) "Fix security issues with the single-user/multi-user mode switching": single-user mode can no longer be switched on from the login dialog with a freely chosen username and password. It is switched on only from a signed-in administrator session, and only when exactly one account exists. The users panel then shows neither the user list nor the form for new users.
+- [`4970ab3`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/4970ab39864c9a3ad77cb85d38403834a99287be) "Improve translation": wording of `login.single_unavailable_users`.
+- [`e105613`](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user/commit/e1056134dc467ce7a28a2147c609b18fa3f14667) "Improve startup performance": `src.auth_manager`, `LoginDialog` and `MainWindow` are imported inside `main()`. Importing `src.auth_manager` reads the stored login attempts from the database; this now happens after the permission repair and `init_db()` instead of before them. Measured from source, the login dialog appears about 50 ms sooner; the time until the main window is shown is unchanged.
+- `crypto.is_keyring_available()` asks the keyring backend instead of only checking that the `keyring` package can be imported.
+
+The identifiers are the same as in the fork (table `application_mode`, Credential Manager entry `NeoSSHWinManager` / `single_user_password`, account `default`). An installation that ran the fork keeps signing in automatically after the update; this was checked against a copy of such a database.
+
+#### Changed while adopting
+
+- Translations for all six languages; the fork had English only.
+- Switching back to multi-user login asks for the new password twice, in fields on the users panel. The fork used two plain input boxes without confirmation, so a typo would have locked the account at the next start.
+- Switching to single-user mode asks for confirmation first.
+- In single-user mode, the profile shows a hint instead of the password change form, which needs the current password and so could not work.
+- The main window keeps its `UserConnectionManager` when the mode changes, because the account id and key stay the same. Components that hold it, such as the file browser, are not left with a second instance.
+- After a mode change the users panel is rebuilt in place; `_open_users_panel()` alone would close it, since it toggles an open panel.
+- In single-user mode, a missing Credential Manager entry or an unavailable keyring is logged before the login dialog is shown.
+- `Session` is now imported in `main()` before its first use. Before, the import inside the `USERNAME` block made `Session` a local name of `main()`, so starting without a `USERNAME` environment variable raised `UnboundLocalError`.
+- Not adopted, because nothing used them: `AuthManager.set_single_user_mode()` and the strings `login.enable_single`, `login.single_title`, `login.single_username` and `login.single_password`.
+- New tests in `tests/test_single_user_mode.py` cover the first setup, the automatic login, both switches with an existing connection, the rollback when Credential Manager cannot store the password, input checks and the import order in `main.py`.
+
+#### Login screen
+
+- `LoginDialog` is rebuilt: a frame with a soft glow in the accent colour, a card with the form, leading icons in the fields (`QLineEdit.addAction`, new `user.svg` and `eye-off.svg` in the style of the other icons), a show/hide action in password fields, and errors in a box with the `alert-triangle` icon instead of a "⚠" prefix. A Caps Lock hint (`GetKeyState(VK_CAPITAL)`) appears while a password field has the focus. The first-run form puts single-user mode below an "or" divider.
+- A language menu (names from the new `i18n.LANGUAGE_NAMES`, which the settings page now uses too) rebuilds the form in the picked language, keeps what was typed and switches the layout direction for Arabic. A successful login stores the picked language for that user (`AuthManager.set_user_language()`); a registration always stores the language shown.
+- New column `users.last_login_at`, set by `AuthManager.record_login()` after every sign-in in `main.py`, including single-user mode. `AuthManager.login_screen_appearance()` returns theme, accent colour and language of the user who signed in last; accounts from before the column count as never signed in, so the oldest account decides until someone signs in. Before the first account exists, the installer's choices apply. `main.py` applies them before it shows the dialog, and `LoginDialog(theme=…)` passes the theme on to the dialog's title bar. Theme, accent colour and language are stored unencrypted, so no password is needed to read them.
+- The styles are in the dark and light stylesheets; the gray theme derives them as usual. `primaryBtn` and `secondaryBtn` have a `size="large"` variant. The language menu draws its chevron in the theme's icon colour, because the shared chevron uses `currentColor`, which renders black in a stylesheet `url()`.
+- The lockout countdown writes days as "d" instead of the German "T", and keeps running when the language is switched.
+- The network of linked nodes from the About banner moved to `src/ui/node_network.py` (`paint_node_network()`). The banner draws it from there, pixel for pixel as before; the login screen's backdrop draws two copies in the accent colour, offset against each other and running past the window edges beside the header.
+- New README screenshot of the login screen.
+- `NodeFieldBackdrop` (also in `node_network.py`) draws a field of node clusters behind the content of a widget: a child that follows the host's size and is lowered below its other children. The user management and the profile use one on the scroll area's viewport, so it stays put while the cards scroll over it (checked in a real window: after scrolling, the screen matches a full repaint pixel for pixel); the right panel keeps one on its scroll viewport for the empty overview and a connection's details, where the seed is the connection's id (`host:<id>`), so every connection has a pattern of its own; `show_field()` takes the widget to keep clear (`quiet`). `node_field()` builds the field from a seed per page: two opposite corners and one or two edges get a cluster each, in one of three styles (a mesh with shaded triangles, a star around a hub, a winding chain with side shoots), the other corners often a smaller, paler one; dashed long links join some clusters, and loose dots sit near the edges. Clusters are laid out in px from their anchor, so they keep their shape at any window size, and some of their nodes lie beyond the edge, so links run out of the page. The opacity falls from the edges towards the middle; around the overview's text it drops to nothing, and links that would cross the text are left out. Right-to-left layouts mirror the field. Tests in `tests/test_node_network.py`.
+- New tests in `tests/test_login_dialog.py` cover the look of the last user, the installer fallback, the language switch, storing the picked language, the password toggle, the Caps Lock hint and the error box.
+
+#### Themes, header and title bar
+
+- The theme id `dark` now means black: `build_stylesheet("dark")` returns `BLACK_STYLESHEET = _to_black(STYLESHEET)`, derived from the navy sheet like the gray one, through `_BLACK_MAP` and `_BLACK_RGBA`. Every neutral becomes an untinted gray (r = g = b): black (`#000000`) for the frame (title bar, sidebar, headers, status bar), `#0a0a0a` for the content and `#121212` for cards, all darker than in the gray theme. Accent shades, accent tints and the semantic colours stay as in the navy sheet, which is now the theme `blue` ("Blue (classic)").
+- Settings and `install_prefs.json` that store `dark` get black without a migration, and so do new installations, where `dark` was and stays the default. `THEMES` is `("dark", "blue", "gray", "light")`; `THEME_COLORS`, `dark_tone()` (unchanged colours only for `blue`), the title bar palettes (`DARK_PALETTE` black, `BLUE_PALETTE` navy) and the file browser palettes (`DARK`, `BLUE`) follow. The settings and the installer list Black, Blue (classic), Gray and Light; the installer writes `dark`, `blue`, `gray` or `light`.
+- The title bar painted no background of its own: `CustomTitleBar` is a `QWidget` subclass, which draws a stylesheet background only with `WA_StyledBackground`. What showed was `#fwOuter`, the window colour (gray: `#1f1f1f` against the `#181818` frame). It now sets the attribute, and the title bar palettes take the sidebar's colour: `#000000` (black), `#0a0a0f` (blue), `#181818` (gray), `#e4e8ef` (light, with darker hover and pressed fills). A test compares the palette with the `#sidebar` colour of every sheet.
+- The header rows above the connection list and the right panel are 52 px high but had 12 px margins at the top and bottom, which left 28 px for 30–32 px controls: they sank onto the bottom border and the badge was cut off. The margins are now 0, so the controls are centred. The badge is hidden while there are no connections instead of showing as an empty pill.
+- The splitter handle (`_PillHandle`) carries a `#splitterHeaderBand` child, 53 px high (the 52 px header plus its border), in the header colour and border, so the window colour no longer shows between the two headers. The connection list's header border has the right panel's colour (`#1f2b3a`) instead of a darker one. The handle's pill follows the accent colour.
+- New setting `background_network` (column `app_settings.background_network`, default 1, a checkbox under Appearance): `node_network.set_background_enabled()` switches every `NodeFieldBackdrop` and the login screen's networks off; the About banner keeps its network. `AuthManager.login_screen_appearance()` returns it as well, so the login screen follows the user who signed in last.
+- In single-user mode the sidebar hides the profile button (`_sync_profile_btn()`, also run after switching the login mode).
+- New `Stepper` widget (`src/ui/widgets/stepper.py`) for the check interval: a `QSpinBox` without its buttons between two round 24 px buttons with the `minus` and `plus` icons, which repeat while held and turn pale at the ends of the range. It offers `value()`, `setValue()`, `setRange()` and `valueChanged`, so the settings form reads and checks it as before. Styles `#stepper` and `#stepperBtn` in the dark and light sheets; tests in `tests/test_stepper.py`.
+- `accent_text_color()` finds the text colour on the accent with APCA (SAPC 0.0.98G): white while its lightness contrast is 65 or more, otherwise white or near-black (`#111111`), whichever has the higher WCAG contrast. The old rule (relative luminance above 0.36 gives dark text) put white text on orange `#f97316` (2.8:1) and on green `#00b62f` (2.7:1); now every tested accent gets at least 3:1.
+- A text colour of the user's own: setting `accent_text_color` (column `app_settings.accent_text_color`, "" = automatic), passed with the accent through `set_current_accent(accent, text_color)` and `build_stylesheet(theme, accent, text_color)`. `text_on_accent()` returns the colour in use for the current accent; the About banner, the "Active" pill, the file browser's selected rows and the primary buttons use it. `AccentColorDialog` has radio buttons for automatic (naming its pick), white, black and custom with a HEX field, a sample, `textColorChanged` for the live preview, and `pick()` returns (colour, text colour); "Standard" also resets the text to automatic, and Cancel restores both. The accent button in the settings shows an "A" in the text colour. The login screen takes the text colour of the user who signed in last.
+- Tests in `tests/test_theme_accent.py` cover the black sheet (untinted, darker than gray, every navy neutral mapped), `dark` showing black and `blue` the navy look, the palettes, the title bar storing the new settings, the automatic and the chosen text colour on the accent and the picker's text colour row; `tests/test_node_network.py` covers switching the network off.
+
+#### Help links and screenshots
+
+- `src/help_links.py` builds the docs URLs: a page (`connections`, `settings`, `interface`, `users`) and an anchor, on the German site while the UI speaks German and on the English one otherwise. The connection form has a help button in the right panel's header (anchor `connection-form`) and a 16 px "?" (`#fieldHelpBtn`) beside the label of every field and section; their anchors are listed in `help_links.CONNECTION_FIELDS`, and a test checks that the form uses no other. New hint `addedit.path.hint` below the path.
+- New README screenshots: every screen in the four themes as one 2x2 picture (Black and Gray with the accent `#228c2b`, Light and Blue (classic) with the default accent), with fictional hosts and data. They were taken from the running app against a local demo SSH/SFTP server; the old single-theme pictures are gone.
+
+#### Connection filter
+
+- A new `magnifier.svg`, drawn for this button (a lens with a glint and a heavier grip), opens the filter field below the connection list's header; Ctrl+F does the same and is switched off on the file browser page like the other main window shortcuts, so the browser's own Ctrl+F stays unambiguous.
+- `src/connection_filter.py`: a connection matches when every word of the query appears, ignoring case, in its name, host, user or "user@host". `_apply_list_filters()` replaces `_apply_group_filter()` and applies the group filter and the text filter together on every keystroke; the field shows "3 of 8" (out of the connections in the selected group) or "No matches".
+- The filter text is stored per user in `app_settings.connection_filter_enc`/`connection_filter_iv`, encrypted with the user's key like the connections it may name, in columns of their own that saving the settings never overwrites (`get_connection_filter()`, `save_connection_filter()`). It is saved with every change and restored at the start, with the field open. It is cleared only by hand: the × in the field. A second click on the magnifier or Esc closes the field only while it is empty; Esc in a filled field just leaves it.
+- Tests in `tests/test_connection_filter.py` cover matching, the encrypted storage and that saving the settings keeps the filter.
+
+#### Tips in the empty overview
+
+- `src/tips.py` holds the tips: each is a translation key (`tip.<id>`) and a condition on a `TipContext`, which holds the user's settings, the number of connections and of SFTP connections, mounted drives, groups, templates, plain FTP hosts, password or key login, CLI access, single-user mode, whether single-user mode could be switched on, and admin rights. `TipContext.collect()` derives it from the connections; the main window builds it in `_tip_context()` and asks `AuthManager.can_enable_single_user_mode()`, which probes Credential Manager, only for an admin with password login.
+- The tips share the heading `tip.title`; every joke has one of its own (`tip.<id>.title`, see `Tip.title_key`).
+- `pick_tip()` picks at random among the tips that apply and avoids the last 20 shown; while there is no connection, the tip on adding one comes first. The texts `panel.placeholder.title` and `panel.placeholder.body` are gone.
+- The overview's body text has a minimum height instead of a fixed 45 px, so longer tips are not cut off. New style `#tipNextBtn` in the dark and light sheets, in the accent colour.
+- Tests in `tests/test_tips.py` cover the translations (every tip in every language, no texts left without a tip), the conditions (single-user mode, settings that are already on, the chosen terminal, no connections, FTP hosts) and that tips do not repeat.
+
+#### Single-user mode by default
+
+- `main.py` starts with `AuthManager.sign_in_automatically()`. It signs in single-user mode as before; when no account exists yet, it sets single-user mode up through `initialize_single_user_mode()`, so the first start shows no login dialog. If that fails (Windows Credential Manager unavailable, or the password cannot be stored), it logs why and the registration form appears as before. Installations with password login are not affected.
+- The new account takes the installer's language and theme, like any first account.
+- In the users panel and the profile, single-user mode now talks about creating an account: the button reads "Create account" instead of "Enable multi-user login", in all six languages.
+- New tests in `tests/test_single_user_mode.py` cover the first start with and without Credential Manager, a failed store and an installation with password login.
+
+#### Fixed: texts that bypassed the translations
+
+- Texts written into the code instead of going through `tr()` now have translation keys in all six languages: the tooltips of the window buttons (`custom_titlebar.py`, `frameless_dialog.py`) and of the dialog height button (`dialog_utils.py`); "Cancel"/"OK" in `StyledInputDialog` and "OK" in `StyledMessageBox`; the confirm buttons for deleting a user and resetting a password; the "Copy error message" tooltip; the "Error:" prefix in the status bar; "Copy details" in the crash dialog; the "Exit {code}" badge in the CLI history; the debug window titles.
+- `StyledMessageBox.question()` defaulted to the German "Ja"/"Nein". The defaults are now `tr("dialog.yes")`/`tr("dialog.no")`, resolved when the dialog opens, because the language is only known at runtime. This affected the confirmation for deleting a template.
+- `StyledMessageBox` chose the red confirm button by looking for "löschen", "delete", "entfernen" or "remove" in the message, so it worked only in German and English. A `destructive` parameter replaces the word list; the six confirmations that were red in English pass `destructive=True`. Deleting local files, which go to the Recycle Bin, stays blue as before.
+- The CPU line in the system info used a hard-coded "cores"; it now uses the existing `sysinfo.cores` key.
+- The warning shown when the GUI exe is started with `--connect-cli` uses the language chosen in the installer (`install_prefs.json`), since no user is signed in at that point.
+- `QPushButton` reads "&" as a shortcut marker. The texts of `login.create_account`, `logout.quit_unmount` and `update.btn.install_now` are escaped to "&&", as the file browser already did for `fb.settings.confirm_move`.
+- Errors from switching the login mode are raised as `SingleUserModeError` with a translation key instead of English messages. Unexpected errors show a translated sentence with the technical detail in brackets.
+- Adding a user whose name already exists showed SQLite's "UNIQUE constraint failed" text; it now says that the name is taken.
+- `tests/test_ui_translations.py` checks that all languages have the same keys, that every `tr()` key exists, that no live module passes a fixed text to a widget, and that the dialogs, title bar and message boxes show translated texts in English, Spanish and Russian. Three modules that nothing imports any more (`settings_dialog.py`, `add_edit_dialog.py`, `loading_overlay.py`) and the unused `UserManagementDialog` are left out of the text check; a test fails if one of them is used again.
+
+#### Fixed: windows flashing up after the login
+
+- `ConnectionCard._build_ui()` made the SSH button visible before adding it to the card's layout. A widget shown without a parent is a top-level window, so every SFTP card showed a 32×32 window until the layout adopted it a moment later; FTP cards hide the button and were not affected. `setVisible()` now comes after `addWidget()`.
+- Found by logging every window shown (`SetWinEventHook`) while the app started without a console, the way the built exe does, and by recording each widget shown as a window inside the app. The automatic reconnect started `sshfs.exe` and `label` with `CREATE_NO_WINDOW` and showed no window; after the fix, the login, the telemetry question and the main window are the only windows left.
+- `tests/test_no_flashing_windows.py` fails if building a connection card (SFTP, SFTP mounted, FTP) shows any window.
+
+#### Removed: Pro licence
+
+- `src/pro_manager.py` is deleted: the licence activation against `neo_pro_validate.php`, the local HMAC check, the machine ID read via `wmic` and the switches `SHOW_PRO_UI` and `FREE_TERMINAL_SESSION_LIMIT`.
+- The hidden licence section of the settings (`_build_pro_settings`, `_sf_activate_pro`) and the terminal session limit (`_terminal_limit_reached`, `_show_pro_session_limit_dialog`) are removed from `src/ui/main_window.py`. `_add_terminal_session()` now opens the session directly.
+- The `pro_licenses` table is no longer created, and a migration drops it from existing databases together with any stored licence token.
+- The translation keys `settings.section.pro`, `settings.pro.*` and `pro.session_limit.*` are removed from all six languages.
+
+</details>
+
+---
+
 ## [1.6.1] — 2026-09-28
 
 ### What changes for you
