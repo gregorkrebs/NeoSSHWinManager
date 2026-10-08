@@ -8,34 +8,43 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [Unreleased]
+## [1.7.0] — 2026-10-09
 
-### What changes for you
+Quicker to get started and easier to find your way around: a new installation is ready without setting up an account, a filter finds any connection as you type, and the login screen and the dark look have been redesigned. NEO SSH-Win Manager is now free and open source in full: the Pro licence is gone.
 
-- **Filter the connection list.** A magnifier above the list (or Ctrl+F) opens a filter field. It filters by name, host and user name as you type, with every character, and shows how many connections match. Several words narrow the list further. What you type stays there, across restarts too, until you change it or clear it with the × in the field; while a filter is set, the magnifier is highlighted.
-- **Help in the connection form.** A ? at the top of the form and beside every field opens the online documentation at the explanation of that field. Below the remote path, a tip says that it is usually your home directory on the server and that the command pwd shows it after an SSH login.
-- **Tips in the empty overview.** Where "Ready for the next step" used to stand, the overview now shows a tip ("Did you know?"): 60 short notes on features, shortcuts and settings, and a few jokes, in all six languages. A tip only shows up when it fits your setup: single-user mode is suggested only when you are the only account and sign in with a password, the FTP tips only appear with FTP hosts, and the hint at a setting disappears once you have switched it on. A new tip comes each time the overview returns, and "Next tip" shows another one.
-- **No account to set up at the first start.** A new installation starts right away in single-user mode: the app signs you in automatically. Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
-  - If you would rather sign in with a password, for example because several people use the computer, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
+### Highlights
+
+- **Start right away, no account to set up.** A new installation signs you in automatically (single-user mode). Its password is a random one, kept in Windows Credential Manager and protected by your Windows sign-in.
+  - If several people use the computer, or you would rather sign in with a password, create an account under User Management → "Application login mode". Your connections and settings stay as they are.
   - An installation with one account can switch to single-user mode in the same place. The account is then renamed to "default".
-  - In single-user mode, your profile shows how to create an account instead of the password change form, because there is no password to change.
-  - If Windows Credential Manager is not available, the app asks you to create an account as before.
-- **A redesigned login screen.** A cleaner layout with the network of linked nodes from the About window, icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
-- **A network of linked nodes behind the empty overview, a connection's details, User Management and your profile.** Clusters of nodes grow in from the corners and edges and fade out towards the middle, running on behind the cards. Each page has a pattern of its own, with meshes, stars and winding chains, every connection too, and the text in the empty overview stays clear.
-- **Black, a classic dark mode, takes the place of Dark.** Plain black and gray, without the blue tint. If you used Dark, you now have Black. The previous blue look is still there as "Blue (classic)", in the settings and in the installer.
-- **A tidier header and title bar.** The buttons above the connection list sit in the middle of their bar instead of on the line below it, and the "… active · … mounted" badge is no longer cut off. The header bar now runs on across the gap between the connection list and the right panel. In every theme, the title bar takes the darker tone of the window frame, the colour of the sidebar. Without connections, the header no longer shows an empty badge.
-- **The background network can be switched off.** Settings → Appearance has a new option for the network of linked nodes in the background, the login screen included. It is on unless you switch it off.
-- **No profile button in single-user mode.** The profile only offers a password change, which single-user mode does not have. The button comes back when you create an account.
-- **A friendlier check interval field.** In the settings, the check interval sits between two round buttons, − and +, instead of small arrows. Holding a button keeps counting, and the number can still be typed.
-- **Choose the text colour on your accent colour.** The accent colour picker has a new row for the text on accent-filled buttons: automatic, white, black or a colour of your own, with a sample. The automatic choice is better too: bright accents such as orange, a vivid green or cyan now get dark text instead of white text that was hard to read, while blue, violet, red or pink keep white text.
-- **Pick your language on the login screen.** A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
-- **The login screen looks like your app.** It uses the theme (black, blue, gray or light), the accent colour and the language of the user who signed in last.
-- **The login window appears a little sooner.** The main window is now loaded after you have signed in.
-- **The whole interface follows your language.** Some texts stayed in German (or English) whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
+  - Installations that sign in with a password keep doing so after the update. If Windows Credential Manager is not available, the app asks you to create an account as before.
+- **Find any connection as you type.** The magnifier above the connection list, or Ctrl+F, opens a filter field. It looks at the name, the host and the user name, several words narrow the list further, and you see how many connections match. What you type stays there, across restarts too, until you clear it with the × in the field.
+- **A redesigned login screen.** A cleaner layout with icons in the fields, a button to show the password you are typing, a warning when Caps Lock is on, and error messages in a clearly visible box.
+  - A language menu at the top right switches the login screen at once. The language you pick there becomes your language in the app.
+  - The login screen uses the theme, the accent colour and the language of the user who signed in last.
+- **Black replaces Dark.** A classic dark mode in plain black and gray, without the blue tint. If you used Dark, you now have Black. The previous blue look is still there as "Blue (classic)", in the settings and in the installer.
+- **Free and open source, with everything.** The Pro licence is gone for good. The app no longer contains a licence check and no longer contacts the licence server.
+
+### Also new
+
+- **Tips in the empty overview.** Where "Ready for the next step" used to stand, you now get a tip ("Did you know?"): 60 short notes on features, shortcuts and settings, and a few jokes, in all six languages. You only see tips that fit your setup, a new one each time the overview comes back, and "Next tip" shows another one.
+- **Help right in the connection form.** A ? at the top of the form and beside every field opens the online documentation at the explanation of that field. Below the remote path, a tip says that it is usually your home directory on the server and that the command `pwd` shows it after an SSH login.
+- **Choose the text colour on your accent colour.** The accent colour picker has a new row for the text on accent-coloured buttons: automatic, white, black or a colour of your own, with a sample. The automatic choice is better too: bright accents such as orange, a vivid green or cyan now get dark text, while blue, violet, red or pink keep white text.
+- **A network of linked nodes in the background** of the empty overview, a connection's details, User Management, your profile and the login screen. Every page, and every connection, has a pattern of its own, and the text stays easy to read. You can switch it off under Settings → Appearance.
+
+### Improved
+
+- **The whole interface follows your language.** Some texts stayed in German or English whatever language you had chosen: the tooltips of the window buttons, "Cancel" when you rename or create a file in the file browser, the buttons of some confirmations, "Copy details" after an unexpected error, the error prefix in the status bar and the number of CPU cores in the system info. They are now translated.
 - **Confirmations that delete something are red in every language.** Deleting a connection, user or template, deleting files on the server and clearing the CLI history showed the red confirm button only in English and German.
-- **The Pro licence is gone for good.** NEO SSH-Win Manager is free and open source, with every feature for everyone. The app no longer contains a licence check, and it no longer contacts the licence server.
+- **A tidier header and title bar.** The buttons above the connection list sit in the middle of their bar, and the "… active · … mounted" badge is no longer cut off. The header bar runs on across the gap between the connection list and the right panel, and in every theme the title bar takes the darker tone of the sidebar.
+- **A friendlier check interval field.** In the settings, the check interval sits between two round buttons, − and +. Holding a button keeps counting, and the number can still be typed.
+- **The login window appears a little sooner.** The main window is now loaded after you have signed in.
+- **In single-user mode, the profile button is hidden**, because there is no password to change. It comes back when you create an account.
+
+### Fixed
+
+- **No more small windows flashing up after the login.** While the main window was being built, a small empty window appeared and vanished again for every SFTP host in your list.
 - Button texts with "&", such as "Create account & start", no longer lose the "&".
-- **No more small windows flashing up after the login.** While the main window was being built, a small empty window appeared and vanished again for every SFTP host in your list. The automatic reconnect of your drives had nothing to do with it.
 
 Single-user mode comes from the community fork [ultrabuild-katzi/neosshwinmanager-single-user](https://github.com/ultrabuild-katzi/neosshwinmanager-single-user) by notstevy. Thank you!
 
