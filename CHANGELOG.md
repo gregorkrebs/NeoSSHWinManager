@@ -28,7 +28,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [1.7.1]
+## Version 1.7.1
 
 A small update that makes updating smooth again. It also brings everything that is new in 1.7.0 – you find it below.
 

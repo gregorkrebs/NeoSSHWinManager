@@ -36,45 +36,23 @@ def test_notes_between_only_the_newest_version():
     assert notes.startswith("## Version 1.6.1") and "Version 1.6.0" not in notes
 
 
-def test_update_from_1_7_0_also_shows_what_1_7_0_brought():
-    # The update to 1.7.0 ended in "Failed to load Python DLL" for many, so the
-    # 1.7.0 notes are part of the 1.7.1 section (heading without brackets).
+@pytest.mark.parametrize("installed", ["1.6.1", "1.7.0", "1.7.1"])
+def test_update_to_1_7_2_shows_the_notes_of_1_7_2_1_7_1_and_1_7_0(installed):
+    # The headings of 1.7.1 and 1.7.0 have no brackets: their notes are part of
+    # the 1.7.2 section, so every update to 1.7.2 shows all three, once each.
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    notes = updater.notes_between(changelog, "1.7.0", "1.7.1")
-    assert notes.startswith("## Version 1.7.1")
-    assert notes.index("Failed to load Python DLL") < notes.index("## Version 1.7.0")
-    assert notes.count("Start right away, no account to set up.") == 1
-    assert "Version 1.6.1" not in notes
-    assert "<details>" not in notes and "Technical details" not in notes
-
-
-def test_update_from_1_6_1_shows_1_7_1_and_1_7_0_once_each():
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    notes = updater.notes_between(changelog, "1.6.1", "1.7.1")
-    assert notes.count("## Version 1.7.1") == 1 and notes.count("## Version 1.7.0") == 1
-    assert notes.count("Start right away, no account to set up.") == 1
-    assert "Version 1.6.1" not in notes
-
-
-def test_update_from_1_7_1_shows_only_what_1_7_2_changes():
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    notes = updater.notes_between(changelog, "1.7.1", "1.7.2")
+    notes = updater.notes_between(changelog, installed, "1.7.2")
     assert notes.startswith("## Version 1.7.2\n")
-    assert "New servers work in the terminal straight away." in notes
-    assert "Version 1.7.1" not in notes and "Version 1.7.0" not in notes
-    assert "<details>" not in notes and "Technical details" not in notes
-
-
-def test_update_from_1_6_1_to_1_7_2_shows_each_version_once():
-    # The 1.7.x headings carry no date.
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    notes = updater.notes_between(changelog, "1.6.1", "1.7.2")
     assert notes.index("## Version 1.7.2\n") < notes.index("## Version 1.7.1\n") < notes.index("## Version 1.7.0\n")
     for v in ("1.7.2", "1.7.1", "1.7.0"):
         assert notes.count(f"## Version {v}") == 1
-    assert notes.count("Start right away, no account to set up.") == 1
-    assert "2026-" not in notes
+    for item in ("New servers work in the terminal straight away.",
+                 "The app starts again on its own after an update.",
+                 "Start right away, no account to set up."):
+        assert notes.count(item) == 1
     assert "Version 1.6.1" not in notes
+    assert "2026-" not in notes
+    assert "<details>" not in notes and "Technical details" not in notes
 
 
 def test_clean_release_notes_drops_the_technical_details():
