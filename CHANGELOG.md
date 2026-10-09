@@ -8,7 +8,36 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [1.7.0] — 2026-10-09
+## [1.7.1] — 2026-10-09
+
+A small update that makes updating smooth again. It also brings everything that is new in 1.7.0 – you find it below.
+
+### What changes for you
+
+- **The app starts again on its own after an update.** After the in-app update to 1.7.0 the installation went through, but starting the new version failed with the message "Failed to load Python DLL", and you had to start the app yourself. From 1.7.1 on, the app opens again by itself after every update, also when you update from 1.7.0 or 1.6.1.
+  - If you saw that message: nothing is broken, the update was installed. Start NEO SSH-Win Manager once by hand; all your connections and settings are there.
+- **The update window shows everything that is new.** Coming from 1.7.0 or 1.6.1, it lists what 1.7.1 changes and everything 1.7.0 brought.
+
+<details>
+<summary>Technical details</summary>
+
+#### Fixed: "Failed to load Python DLL" after an in-app update (1.6.1 to 1.7.0)
+
+- The app hands over to the installer with its own environment, which included the PyInstaller onefile variables (`_PYI_*`). The installer passed them on to the app it starts again. The new app has the same exe path, so the PyInstaller 6 bootloader took it for a child of the old process and loaded `python314.dll` from the old process's `_MEI…` folder, which was gone by then.
+- `updater.installer_environment()` now starts the installer without the `_PYI_*` variables.
+- Because 1.6.1 to 1.7.0 still pass them on, the installer's `DeinitializeSetup` starts the app through `cmd /d /c set "PYINSTALLER_RESET_ENVIRONMENT=1" & start "" "<exe>"`, which makes the bootloader start fresh. `ShellExec` cannot set a variable, hence `cmd`.
+- Verified end to end with frozen builds and installers under an own AppId, folder and `APPDATA`, the handing-over app running from the install folder: a 1.7.0 client updating with the old installer showed the error (reproduced); with the fixed installer the new version started and created its database; a fixed client updating to a newer fixed build started as well.
+- New test in `tests/test_updater.py`: the installer gets no `_PYI_*` variables.
+
+#### Release notes in the update window
+
+- The update window shows the `CHANGELOG.md` sections of every version newer than the installed one. Clients on 1.7.0 would therefore have shown 1.7.1 only, although their update to 1.7.0 ended in the error above. The 1.7.0 heading is written without brackets ("## Version 1.7.0"), so every client — the ones already released included — reads it as part of the 1.7.1 section: coming from 1.7.0 or 1.6.1, the window shows 1.7.1 and then 1.7.0, each once. Tests in `tests/test_updater.py` check both cases.
+
+</details>
+
+---
+
+## Version 1.7.0 — 2026-10-09
 
 Quicker to get started and easier to find your way around: a new installation is ready without setting up an account, a filter finds any connection as you type, and the login screen and the dark look have been redesigned. NEO SSH-Win Manager is now free and open source in full: the Pro licence is gone.
 

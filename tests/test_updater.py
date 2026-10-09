@@ -36,6 +36,26 @@ def test_notes_between_only_the_newest_version():
     assert notes.startswith("## Version 1.6.1") and "Version 1.6.0" not in notes
 
 
+def test_update_from_1_7_0_also_shows_what_1_7_0_brought():
+    # The update to 1.7.0 ended in "Failed to load Python DLL" for many, so the
+    # 1.7.0 notes are part of the 1.7.1 section (heading without brackets).
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.7.0", "1.7.1")
+    assert notes.startswith("## Version 1.7.1")
+    assert notes.index("Failed to load Python DLL") < notes.index("## Version 1.7.0")
+    assert notes.count("Start right away, no account to set up.") == 1
+    assert "Version 1.6.1" not in notes
+    assert "<details>" not in notes and "Technical details" not in notes
+
+
+def test_update_from_1_6_1_shows_1_7_1_and_1_7_0_once_each():
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.6.1", "1.7.1")
+    assert notes.count("## Version 1.7.1") == 1 and notes.count("## Version 1.7.0") == 1
+    assert notes.count("Start right away, no account to set up.") == 1
+    assert "Version 1.6.1" not in notes
+
+
 def test_clean_release_notes_drops_the_technical_details():
     body = "### What changes for you\n\n- Fixed.\n\n<details>\n<summary>Technical details</summary>\n\n" \
            "- `x.py` changed.\n\n</details>\n\n---\n"
