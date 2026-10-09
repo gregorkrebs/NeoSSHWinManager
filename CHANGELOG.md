@@ -16,7 +16,6 @@ A small update that makes updating smooth again. It also brings everything that 
 
 - **The app starts again on its own after an update.** After the in-app update to 1.7.0 the installation went through, but starting the new version failed with the message "Failed to load Python DLL", and you had to start the app yourself. From 1.7.1 on, the app opens again by itself after every update, also when you update from 1.7.0 or 1.6.1.
   - If you saw that message: nothing is broken, the update was installed. Start NEO SSH-Win Manager once by hand; all your connections and settings are there.
-- **The update window shows everything that is new.** Coming from 1.7.0 or 1.6.1, it lists what 1.7.1 changes and everything 1.7.0 brought.
 
 <details>
 <summary>Technical details</summary>
