@@ -241,6 +241,19 @@ def installer_command(installer: str, app_exe: str, pids: list[int], log_path: s
     ]
 
 
+def installer_environment(environ=None) -> dict[str, str]:
+    """
+    This app's environment without the PyInstaller onefile variables (_PYI_*).
+
+    The installer hands its environment down to the app it relaunches. With
+    these variables the new app — same exe path — takes itself for a child of
+    this process and loads its Python DLL from our temp folder, which is gone
+    by then ("Failed to load Python DLL"). Up to 1.7.0 they were passed on.
+    """
+    environ = os.environ if environ is None else environ
+    return {k: v for k, v in environ.items() if not k.upper().startswith("_PYI_")}
+
+
 def launch_pending_installer(record: dict, from_version: str = "") -> bool:
     """
     Start the installer silently. It waits for this app to exit, installs, and
@@ -268,7 +281,7 @@ def launch_pending_installer(record: dict, from_version: str = "") -> bool:
     # This is a windowed app without standard handles; a child that inherits
     # them can fail on its first read or write, so hand it valid ones.
     kwargs = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL, close_fds=True)
+                  stderr=subprocess.DEVNULL, close_fds=True, env=installer_environment())
     flags = subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         try:

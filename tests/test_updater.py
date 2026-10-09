@@ -85,6 +85,23 @@ def test_handover_starts_the_installer_silently_with_valid_handles(appdata, tmp_
     assert attempt["from_version"] == "1.6.1" and attempt["to_version"] == "9.9.9"
 
 
+def test_handover_does_not_pass_on_the_pyinstaller_environment(appdata, tmp_path, monkeypatch):
+    # Inherited by the relaunched app, these made it look for its Python DLL
+    # in this app's deleted temp folder.
+    _exe, started = _frozen(monkeypatch, tmp_path)
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", str(_exe))
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", str(tmp_path / "_MEI12345"))
+    monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"")
+
+    assert updater.launch_pending_installer({"installer_path": str(installer), "version": "9.9.9"})
+
+    (_cmd, kw), = started
+    assert not [k for k in kw["env"] if k.upper().startswith("_PYI_")]
+    assert kw["env"]["APPDATA"] == os.environ["APPDATA"]
+
+
 def test_start_hands_over_once_and_disarms(appdata, tmp_path, monkeypatch):
     _exe, started = _frozen(monkeypatch, tmp_path)
     installer = tmp_path / "setup.exe"
