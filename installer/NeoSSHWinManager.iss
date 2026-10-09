@@ -258,8 +258,15 @@ begin
   // copy that handed over, so the user is never left without the app.
   if (InstalledExe <> '') and FileExists(InstalledExe) then
     Exe := InstalledExe;
+  // Up to 1.7.0 the app hands its PyInstaller variables (_PYI_*) down to this
+  // setup. Started with them, the new app takes itself for a child of the old
+  // one and looks for its Python DLL in the old app's temp folder, which is
+  // gone by now ("Failed to load Python DLL"). PYINSTALLER_RESET_ENVIRONMENT
+  // makes it start fresh; ShellExec cannot set a variable, so cmd does.
   Log('Starting ' + Exe);
-  ShellExecAsOriginalUser('', Exe, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+  ShellExecAsOriginalUser('', ExpandConstant('{cmd}'),
+    '/d /c set "PYINSTALLER_RESET_ENVIRONMENT=1" & start "" "' + Exe + '"',
+    ExtractFileDir(Exe), SW_HIDE, ewNoWait, ErrorCode);
 end;
 
 procedure InitializeWizard;
