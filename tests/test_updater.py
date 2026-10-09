@@ -56,6 +56,27 @@ def test_update_from_1_6_1_shows_1_7_1_and_1_7_0_once_each():
     assert "Version 1.6.1" not in notes
 
 
+def test_update_from_1_7_1_shows_only_what_1_7_2_changes():
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.7.1", "1.7.2")
+    assert notes.startswith("## Version 1.7.2\n")
+    assert "New servers work in the terminal straight away." in notes
+    assert "Version 1.7.1" not in notes and "Version 1.7.0" not in notes
+    assert "<details>" not in notes and "Technical details" not in notes
+
+
+def test_update_from_1_6_1_to_1_7_2_shows_each_version_once():
+    # The 1.7.x headings carry no date.
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.6.1", "1.7.2")
+    assert notes.index("## Version 1.7.2\n") < notes.index("## Version 1.7.1\n") < notes.index("## Version 1.7.0\n")
+    for v in ("1.7.2", "1.7.1", "1.7.0"):
+        assert notes.count(f"## Version {v}") == 1
+    assert notes.count("Start right away, no account to set up.") == 1
+    assert "2026-" not in notes
+    assert "Version 1.6.1" not in notes
+
+
 def test_clean_release_notes_drops_the_technical_details():
     body = "### What changes for you\n\n- Fixed.\n\n<details>\n<summary>Technical details</summary>\n\n" \
            "- `x.py` changed.\n\n</details>\n\n---\n"

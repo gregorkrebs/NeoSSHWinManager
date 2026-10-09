@@ -8,7 +8,27 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [1.7.1] — 2026-10-09
+## [1.7.2]
+
+### What changes for you
+
+- **New servers work in the terminal straight away.** For a server you had just added, the terminal did not ask whether to trust the server's key, and after half a minute it reported that the connection had failed, as if the host or the password were wrong. It now asks, and the terminal opens once you confirm.
+
+<details>
+<summary>Technical details</summary>
+
+#### Fixed: no host-key question in the embedded terminal
+
+- Since 1.5.2 the SSH handshake of the embedded terminal runs in `TerminalConnectWorker`. For an unknown host key, `MainWindow._terminal_tofu_callback()` is called from that thread. It scheduled the dialog with `QTimer.singleShot(0, ...)`, which never fires in a thread without an event loop, waited 30 s and returned "rejected", so the user only saw "SSH connection failed. Check host, credentials, and network."
+- The question now runs on the main thread through `MainThreadInvoker`, as in the file browser, and the worker waits for the answer without a time limit. `quit_app()` closes the invoker, so a waiting worker gives up.
+- Verified with the app against a local SSH server and an empty `known_hosts`: 1.7.1 failed after 30 s without a question. With the fix the question appears at once; Yes opens the terminal and saves the key, No refuses, an answer after 40 s still connects, and a second session does not ask again.
+- New tests in `tests/test_terminal_host_key.py`.
+
+</details>
+
+---
+
+## [1.7.1]
 
 A small update that makes updating smooth again. It also brings everything that is new in 1.7.0 – you find it below.
 
@@ -36,7 +56,7 @@ A small update that makes updating smooth again. It also brings everything that 
 
 ---
 
-## Version 1.7.0 — 2026-10-09
+## Version 1.7.0
 
 Quicker to get started and easier to find your way around: a new installation is ready without setting up an account, a filter finds any connection as you type, and the login screen and the dark look have been redesigned. NEO SSH-Win Manager is now free and open source in full: the Pro licence is gone.
 
