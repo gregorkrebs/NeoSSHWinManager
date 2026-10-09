@@ -36,6 +36,26 @@ def test_notes_between_only_the_newest_version():
     assert notes.startswith("## Version 1.6.1") and "Version 1.6.0" not in notes
 
 
+def test_update_from_1_7_0_also_shows_what_1_7_0_brought():
+    # The update to 1.7.0 ended in "Failed to load Python DLL" for many, so the
+    # 1.7.0 notes are part of the 1.7.1 section (heading without brackets).
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.7.0", "1.7.1")
+    assert notes.startswith("## Version 1.7.1")
+    assert notes.index("Failed to load Python DLL") < notes.index("## Version 1.7.0")
+    assert notes.count("Start right away, no account to set up.") == 1
+    assert "Version 1.6.1" not in notes
+    assert "<details>" not in notes and "Technical details" not in notes
+
+
+def test_update_from_1_6_1_shows_1_7_1_and_1_7_0_once_each():
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    notes = updater.notes_between(changelog, "1.6.1", "1.7.1")
+    assert notes.count("## Version 1.7.1") == 1 and notes.count("## Version 1.7.0") == 1
+    assert notes.count("Start right away, no account to set up.") == 1
+    assert "Version 1.6.1" not in notes
+
+
 def test_clean_release_notes_drops_the_technical_details():
     body = "### What changes for you\n\n- Fixed.\n\n<details>\n<summary>Technical details</summary>\n\n" \
            "- `x.py` changed.\n\n</details>\n\n---\n"
@@ -83,6 +103,23 @@ def test_handover_starts_the_installer_silently_with_valid_handles(appdata, tmp_
     assert not legacy.exists()
     attempt = json.loads((updater.updates_dir() / "update_attempt.json").read_text())
     assert attempt["from_version"] == "1.6.1" and attempt["to_version"] == "9.9.9"
+
+
+def test_handover_does_not_pass_on_the_pyinstaller_environment(appdata, tmp_path, monkeypatch):
+    # Inherited by the relaunched app, these made it look for its Python DLL
+    # in this app's deleted temp folder.
+    _exe, started = _frozen(monkeypatch, tmp_path)
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", str(_exe))
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", str(tmp_path / "_MEI12345"))
+    monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"")
+
+    assert updater.launch_pending_installer({"installer_path": str(installer), "version": "9.9.9"})
+
+    (_cmd, kw), = started
+    assert not [k for k in kw["env"] if k.upper().startswith("_PYI_")]
+    assert kw["env"]["APPDATA"] == os.environ["APPDATA"]
 
 
 def test_start_hands_over_once_and_disarms(appdata, tmp_path, monkeypatch):
