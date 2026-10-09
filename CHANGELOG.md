@@ -8,6 +8,30 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [Unreleased]
+
+### What changes for you
+
+- **Import your sites from FileZilla.** "Import from FileZilla…" at the top of the form for a new connection reads FileZilla's Site Manager on this computer, or a file you pick, for example a copy from another computer or a FileZilla export. You see every site with its server, protocol and folder and choose which ones to add. FileZilla's folders become groups, SFTP sites get a free drive letter, and sites already in your list start unchecked. Nothing changes in FileZilla.
+  - Stored passwords come along. If FileZilla protects them with a master password, the connection asks for the password when it connects.
+  - SFTP, FTP and FTPS are imported; other protocols of FileZilla Pro, such as S3 or WebDAV, are listed but cannot be imported.
+
+<details>
+<summary>Technical details</summary>
+
+#### FileZilla import
+
+- `src/filezilla_import.py` parses `%APPDATA%\FileZilla\sitemanager.xml` (or an export, both `<FileZilla3><Servers>`), walking nested `<Folder>` elements; the folder path ("A / B") becomes the connection's group, with commas removed because they separate groups.
+- Protocols: 1 → SFTP; 0 (FTP, TLS if offered) and 4 (explicit TLS) → FTPS with explicit TLS, 0 with a note that plain FTP is the fallback; 3 → FTPS with implicit TLS (port 990 by default); 6 → FTP. Others (HTTP, S3, WebDAV, cloud storage) are listed as not supported. `PasvMode` `MODE_ACTIVE` turns passive mode off.
+- Logon types: anonymous → user `anonymous`; normal with a base64 or plain password → password; a password encrypted with the master password (`encoding="crypt"`), "Ask for password" and "Interactive" → `ask`; key file → `key`, a `.ppk` going to `putty_key_path`, any other key to `key_path`.
+- `RemoteDir` ("1 0 4 home 4 user") is decoded with its length-prefixed segments into `/home/user`, or `C:\Users\me` for DOS paths.
+- `FileZillaImportDialog` lists the sites with a check box each and the remarks above; a site with the same host, port, user and protocol as an existing connection starts unchecked. `MainWindow._import_from_filezilla()` keeps names unique ("Name (2)") and gives SFTP sites a drive letter that is free on the system and not configured for another host.
+- Tests in `tests/test_filezilla_import.py` cover the protocols, logon types, folders, remote paths, files that are not from FileZilla, duplicates and the dialog.
+
+</details>
+
+---
+
 ## [1.7.0] — 2026-10-09
 
 Quicker to get started and easier to find your way around: a new installation is ready without setting up an account, a filter finds any connection as you type, and the login screen and the dark look have been redesigned. NEO SSH-Win Manager is now free and open source in full: the Pro licence is gone.
