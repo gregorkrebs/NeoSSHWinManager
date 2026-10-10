@@ -18,6 +18,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - **Mounting checks the server's key against your known servers again.** Because of a path mistake, mounting never read the list of known servers (`known_hosts`) that the rest of the app uses. Depending on your Windows account it kept a list of its own or accepted any server key. Now a server whose key has changed is refused when you mount it, and the error window says so.
 - **Servers that accept SSH keys only can be mounted.** For a connection with a password, mounting and the system info now try your SSH keys first (`id_ed25519`, `id_ecdsa` and `id_rsa` in your `.ssh` folder), as the terminal and the file browser always did. Keys with a passphrase are left out.
 - **The error window says why mounting failed**, for example "Permission denied (publickey)", instead of only "code 1".
+- **A clear message when a server does not offer SFTP.** If you are logged in but the server does not start SFTP for that user, as on web hosting without SSH access or for an extra FTP user, the file browser now says so and what to do (switch on SSH access, or change the connection to FTPS), instead of "EOF during negotiation". A wrong password now shows "Authentication failed" in your language.
 
 <details>
 <summary>Technical details</summary>
@@ -46,6 +47,11 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - sshfs's error output goes to `%TEMP%\NeoSSHWinManager\sshfs-<letter>.log` (a file, not a pipe, because a mount outlives the GUI). When a mount fails, the dialog shows its last lines, and for a changed host key also ssh's headline.
 - New tests in `tests/test_ssh_identities.py`.
 
+#### Improved: the file browser explains a server that does not start SFTP
+
+- `SftpClient.connect()` let paramiko's error from `open_sftp()` through unchanged, so a server that logs the user in and then ends the SFTP channel showed "EOF during negotiation" (or "Channel closed." when `Subsystem sftp` is missing). When the SSH transport is still up after such a failure it now raises `SftpUnavailable`, which the file browser shows as `fb.error.sftp_unavailable` with the original text as technical details..
+- Wrong credentials and a connection without any raise `AuthenticationFailed` and `NoCredentials`; the file browser shows the existing translations `sftp.error.auth_failed` and `sftp.error.no_credentials` instead of the English text.
+- `tests/sftp_test_server.py` can refuse the subsystem or close it after the login; tests in `tests/test_sftp_unavailable.py`.
 
 </details>
 

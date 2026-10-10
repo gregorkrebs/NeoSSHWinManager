@@ -960,6 +960,7 @@
   "fb.keys.undo": "Rückgängig machen (Verschieben, Umbenennen, Anlegen)",
   "fb.keys.redo": "Wiederholen",
   "fb.hostkey.rejected": "Die Verbindung zu {host} wurde nicht aufgebaut, weil du dem Host-Schlüssel nicht vertraut hast.\n\nFingerabdruck:\n{fingerprint}",
+  "fb.error.sftp_unavailable": "Die Anmeldung hat geklappt, aber der Server startet für diesen Benutzer kein SFTP.\n\n• Webhosting: SFTP geht dort meist nur mit eingeschaltetem SSH-Zugang, oft nur für den Hauptbenutzer. Schalte den SSH-Zugang im Kundenbereich deines Anbieters ein oder stell die Verbindung auf FTPS um.\n• Eigener Server: SFTP muss in /etc/ssh/sshd_config eingetragen sein (Zeile „Subsystem sftp“).\n\nTechnische Details: {detail}",
   "fb.hostkey.changed": "WARNUNG: Der Host-Schlüssel von {host} hat sich geändert!\n\nDer Server zeigt einen anderen Schlüssel als den, der in deiner known_hosts-Datei gespeichert ist. Das kann bedeuten, dass jemand die Verbindung abhört – oder dass der Server neu installiert wurde.\n\nNeuer Fingerabdruck:\n{fingerprint}\n\nWenn der Wechsel beabsichtigt ist, entferne den alten Eintrag für {host} aus:\n{path}",
   "fb.settings.tree_from_root": "Server-Ordnerbaum ab „/“ statt ab dem Home-Pfad anzeigen",
   "fb.settings.tree_from_root_hint": "Standardmäßig beginnt der Ordnerbaum beim Pfad der Verbindung (sonst beim Home-Ordner des Kontos), weil viele Konten nur dort Rechte haben.",

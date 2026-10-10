@@ -172,6 +172,16 @@ class _Server(ServerInterface):
         return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
 
+class _ClosingSubsystem(paramiko.SubsystemHandler):
+    """Closes the SFTP channel at once, like a web host whose user may not use SSH."""
+
+    def start_subsystem(self, name, transport, channel):
+        # Like sshd running a login shell that exits: the request was accepted,
+        # the client has sent its SFTP init, and then the channel ends.
+        channel.recv(1024)
+        channel.close()
+
+
 class ConnectedClient:
     """Shaped like src.sftp_client.SftpClient for SftpFS."""
 
@@ -195,17 +205,20 @@ class ConnectedClient:
 
 class SftpTestServer:
     def __init__(self, root: str, windows_home: str = "", home: str = "/",
-                 deny_list: tuple = ()) -> None:
+                 deny_list: tuple = (), sftp: str = "on") -> None:
         """
         windows_home (e.g. "/C:/Users/test"): behave like Windows OpenSSH;
         drive X: is served from the folder "<root>/X_drive".
         home: the login folder (realpath of ".").
         deny_list: folders whose listing fails with "permission denied".
+        sftp: "on"; "closed" starts the subsystem and closes it at once;
+        "missing" refuses the subsystem request (no "Subsystem sftp").
         """
         self.root = os.path.abspath(root)
         self.windows_home = windows_home
         self.home = windows_home or home
         self.deny_list = tuple(deny_list)
+        self.sftp = sftp
         self._key = paramiko.RSAKey.generate(2048)
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -236,7 +249,10 @@ class SftpTestServer:
                 break
             t = paramiko.Transport(conn)
             t.add_server_key(self._key)
-            t.set_subsystem_handler("sftp", SFTPServer, impl)
+            if self.sftp == "on":
+                t.set_subsystem_handler("sftp", SFTPServer, impl)
+            elif self.sftp == "closed":
+                t.set_subsystem_handler("sftp", _ClosingSubsystem)
             try:
                 t.start_server(server=_Server())
             except (paramiko.SSHException, EOFError, OSError):

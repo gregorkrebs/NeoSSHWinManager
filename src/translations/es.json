@@ -958,6 +958,7 @@
   "fb.keys.undo": "Deshacer (mover, renombrar, crear)",
   "fb.keys.redo": "Rehacer",
   "fb.hostkey.rejected": "No se abrió la conexión con {host} porque no confiaste en su clave de host.\n\nHuella:\n{fingerprint}",
+  "fb.error.sftp_unavailable": "El inicio de sesión ha funcionado, pero el servidor no inicia SFTP para este usuario.\n\n• Alojamiento web: SFTP suele requerir que el acceso SSH esté activado y a menudo solo funciona con el usuario principal. Activa el acceso SSH en el área de cliente de tu proveedor o cambia la conexión a FTPS.\n• Servidor propio: SFTP debe estar configurado en /etc/ssh/sshd_config (la línea «Subsystem sftp»).\n\nDetalles técnicos: {detail}",
   "fb.hostkey.changed": "ADVERTENCIA: ¡La clave de host de {host} ha cambiado!\n\nEl servidor presenta una clave distinta de la guardada en tu archivo known_hosts. Puede que alguien esté interceptando la conexión, o que el servidor se haya reinstalado.\n\nNueva huella:\n{fingerprint}\n\nSi el cambio es esperado, elimina la entrada antigua de {host} de:\n{path}",
   "fb.settings.tree_from_root": "Mostrar el árbol de carpetas del servidor desde «/» en lugar de la ruta de inicio",
   "fb.settings.tree_from_root_hint": "Por defecto, el árbol empieza en la ruta de la conexión (o en la carpeta personal de la cuenta), porque muchas cuentas solo tienen permisos ahí.",

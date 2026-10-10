@@ -25,6 +25,9 @@ __all__ = [
     "SftpClientError",
     "HostKeyRejected",
     "HostKeyChanged",
+    "AuthenticationFailed",
+    "NoCredentials",
+    "SftpUnavailable",
     "SftpClient",
     "looks_like_windows_path",
     "normalize_remote_input",
@@ -64,6 +67,26 @@ class HostKeyChanged(SftpClientError):
         self.host = host
         self.fingerprint = fingerprint
         self.known_hosts = known_hosts
+
+
+class AuthenticationFailed(SftpClientError):
+    """The server did not accept the user name, password or key."""
+
+
+class NoCredentials(SftpClientError):
+    """The connection has neither a password nor a key to log in with."""
+
+
+class SftpUnavailable(SftpClientError):
+    """
+    Logged in, but the server did not start SFTP for this account: it closed
+    the SFTP channel right away (web hosting without SSH access, an extra FTP
+    user, no "Subsystem sftp" in sshd_config). The SSH connection is still up.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"The server did not start SFTP: {detail}")
+        self.detail = detail
 
 
 # Key types that sign with the same stored key: an "ssh-rsa" entry in
@@ -215,21 +238,29 @@ class SftpClient:
                 client.connect(conn.host, password=password, **common)
             else:
                 client.close()
-                raise SftpClientError("No usable credentials configured")
+                raise NoCredentials("No usable credentials configured")
         except SftpClientError:
             client.close()
             raise
         except paramiko.AuthenticationException as e:
             client.close()
-            raise SftpClientError("Authentication failed") from e
+            raise AuthenticationFailed("Authentication failed") from e
         except Exception as e:
             client.close()
             raise SftpClientError(str(e)) from e
         finally:
             password = ""   # wipe from local scope
 
+        try:
+            self._sftp = client.open_sftp()
+        except Exception as e:
+            transport = client.get_transport()
+            logged_in = transport is not None and transport.is_active()
+            client.close()
+            if logged_in:
+                raise SftpUnavailable(str(e) or e.__class__.__name__) from e
+            raise SftpClientError(str(e) or e.__class__.__name__) from e
         self._ssh = client
-        self._sftp = client.open_sftp()
         self._connected = True
 
         # Detect the remote OS from the server's canonical home directory.

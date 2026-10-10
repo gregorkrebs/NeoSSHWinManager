@@ -123,13 +123,20 @@ class HostSession(QObject):
         self.state_changed.emit(self)
 
     def error_text(self) -> str:
-        from src.sftp_client import HostKeyChanged, HostKeyRejected
+        from src.sftp_client import (AuthenticationFailed, HostKeyChanged, HostKeyRejected,
+                                     NoCredentials, SftpUnavailable)
         error = self.error
         if isinstance(error, HostKeyChanged):
             return tr("fb.hostkey.changed", host=error.host, fingerprint=error.fingerprint,
                       path=error.known_hosts)
         if isinstance(error, HostKeyRejected):
             return tr("fb.hostkey.rejected", host=error.host, fingerprint=error.fingerprint)
+        if isinstance(error, SftpUnavailable):
+            return tr("fb.error.sftp_unavailable", detail=error.detail)
+        if isinstance(error, AuthenticationFailed):
+            return tr("sftp.error.auth_failed")
+        if isinstance(error, NoCredentials):
+            return tr("sftp.error.no_credentials")
         return str(error) if error else ""
 
     # ── where to start ───────────────────────────────────────────────────────
