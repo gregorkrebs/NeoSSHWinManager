@@ -8,7 +8,37 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [1.7.2]
+## [1.7.3]
+
+### What changes for you
+
+- **Mounting checks the server's key against your known servers again.** Because of a path mistake, mounting never read the list of known servers (`known_hosts`) that the rest of the app uses. Depending on your Windows account it kept a list of its own or accepted any server key. Now a server whose key has changed is refused when you mount it, and the error window says so.
+- **Servers that accept SSH keys only can be mounted.** For a connection with a password, mounting and the system info now try your SSH keys first (`id_ed25519`, `id_ecdsa` and `id_rsa` in your `.ssh` folder), as the terminal and the file browser always did. Keys with a passphrase are left out.
+- **The error window says why mounting failed**, for example "Permission denied (publickey)", instead of only "code 1".
+
+<details>
+<summary>Technical details</summary>
+
+#### Fixed: sshfs never used the user's known_hosts
+
+- sshfs treats a backslash in an `-o` value as an escape and drops it, so `-oUserKnownHostsFile=C:\Users\me\.ssh\known_hosts` became the relative `C:Usersme.sshknown_hosts`, resolved from the SSHFS-Win folder. Running as administrator, ssh kept its own list there (`C:\Program Files\SSHFS-Win\C?Users….sshknown_hosts`). Without write access to that folder it could not save one and, with `StrictHostKeyChecking=accept-new`, accepted any host key on every mount.
+- The path now uses forward slashes, as the `IdentityFile` path already did. Verified against a real server: with wrong keys for it in `known_hosts`, 1.7.2 mounted anyway; 1.7.3 refuses with "REMOTE HOST IDENTIFICATION HAS CHANGED".
+
+#### Fixed: password connections on servers that accept keys only
+
+- The terminal and the file browser log in with paramiko, which tries `~/.ssh/id_*` before the password. sshfs and the system info tried the password only. Both now pass the user's default keys first (`src/ssh_identities.py`: only keys that load without a passphrase, `IdentitiesOnly=yes`, `PreferredAuthentications=publickey,password,keyboard-interactive`). Without such keys the command is unchanged.
+- Verified against Ubuntu 26.04 (OpenSSH 10.2, `PasswordAuthentication no`): a password connection with a wrong password mounted through `id_ed25519`, and the system info showed the server.
+
+#### Improved: the mount error shows sshfs's own message
+
+- sshfs's error output goes to `%TEMP%\NeoSSHWinManager\sshfs-<letter>.log` (a file, not a pipe, because a mount outlives the GUI). When a mount fails, the dialog shows its last lines, and for a changed host key also ssh's headline.
+- New tests in `tests/test_ssh_identities.py`.
+
+</details>
+
+---
+
+## Version 1.7.2
 
 ### What changes for you
 

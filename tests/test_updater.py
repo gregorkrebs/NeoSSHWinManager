@@ -36,17 +36,19 @@ def test_notes_between_only_the_newest_version():
     assert notes.startswith("## Version 1.6.1") and "Version 1.6.0" not in notes
 
 
-@pytest.mark.parametrize("installed", ["1.6.1", "1.7.0", "1.7.1"])
-def test_update_to_1_7_2_shows_the_notes_of_1_7_2_1_7_1_and_1_7_0(installed):
-    # The headings of 1.7.1 and 1.7.0 have no brackets: their notes are part of
-    # the 1.7.2 section, so every update to 1.7.2 shows all three, once each.
+@pytest.mark.parametrize("installed", ["1.6.1", "1.7.0", "1.7.1", "1.7.2"])
+def test_update_to_1_7_3_shows_the_notes_of_every_1_7_version(installed):
+    # The headings of 1.7.2, 1.7.1 and 1.7.0 have no brackets: their notes are
+    # part of the 1.7.3 section, so every update to 1.7.3 shows all four, once each.
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    notes = updater.notes_between(changelog, installed, "1.7.2")
-    assert notes.startswith("## Version 1.7.2\n")
-    assert notes.index("## Version 1.7.2\n") < notes.index("## Version 1.7.1\n") < notes.index("## Version 1.7.0\n")
-    for v in ("1.7.2", "1.7.1", "1.7.0"):
+    notes = updater.notes_between(changelog, installed, "1.7.3")
+    assert notes.startswith("## Version 1.7.3\n")
+    order = [notes.index(f"## Version {v}\n") for v in ("1.7.3", "1.7.2", "1.7.1", "1.7.0")]
+    assert order == sorted(order)
+    for v in ("1.7.3", "1.7.2", "1.7.1", "1.7.0"):
         assert notes.count(f"## Version {v}") == 1
-    for item in ("New servers work in the terminal straight away.",
+    for item in ("Mounting checks the server's key against your known servers again.",
+                 "New servers work in the terminal straight away.",
                  "The app starts again on its own after an update.",
                  "Start right away, no account to set up."):
         assert notes.count(item) == 1
