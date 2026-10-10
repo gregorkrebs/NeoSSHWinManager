@@ -47,7 +47,8 @@ def test_update_to_1_7_3_shows_the_notes_of_every_1_7_version(installed):
     assert order == sorted(order)
     for v in ("1.7.3", "1.7.2", "1.7.1", "1.7.0"):
         assert notes.count(f"## Version {v}") == 1
-    for item in ("Mounting checks the server's key against your known servers again.",
+    for item in ("Import your sites from FileZilla.",
+                 "Mounting checks the server's key against your known servers again.",
                  "New servers work in the terminal straight away.",
                  "The app starts again on its own after an update.",
                  "Start right away, no account to set up."):
