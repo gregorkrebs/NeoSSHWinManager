@@ -25,6 +25,9 @@ __all__ = [
     "SftpClientError",
     "HostKeyRejected",
     "HostKeyChanged",
+    "AuthenticationFailed",
+    "NoCredentials",
+    "SftpUnavailable",
     "SftpClient",
     "looks_like_windows_path",
     "normalize_remote_input",
@@ -64,6 +67,69 @@ class HostKeyChanged(SftpClientError):
         self.host = host
         self.fingerprint = fingerprint
         self.known_hosts = known_hosts
+
+
+class AuthenticationFailed(SftpClientError):
+    """The server did not accept the user name, password or key."""
+
+
+class NoCredentials(SftpClientError):
+    """The connection has neither a password nor a key to log in with."""
+
+
+class SftpUnavailable(SftpClientError):
+    """
+    Logged in, but the server did not start SFTP for this account: it closed
+    the SFTP channel right away (web hosting without SSH access, an extra FTP
+    user, no "Subsystem sftp" in sshd_config) or ran a forced command instead
+    ("Please login as the user ..."). The SSH connection is still up.
+
+    server_message: what the server wrote on the channel instead, if anything.
+    """
+
+    def __init__(self, detail: str, server_message: str = "") -> None:
+        super().__init__(f"The server did not start SFTP: {detail}")
+        self.detail = detail
+        self.server_message = server_message
+
+    def user_text(self) -> str:
+        """The explanation for the error dialogs, in the UI language."""
+        from src.i18n import tr
+        parts = [tr("sftp.unavailable.lead")]
+        if self.server_message:
+            parts.append(tr("sftp.unavailable.server_says", message=self.server_message))
+        parts.append(tr("sftp.unavailable.hints"))
+        parts.append(tr("sftp.unavailable.details", detail=self.detail))
+        return "\n\n".join(parts)
+
+
+def _server_notice(transport: paramiko.Transport, timeout: float = 3.0) -> str:
+    """
+    What the server writes on a new SFTP channel before it ends it: a forced
+    command's notice (cloud-init's "Please login as the user ...") or the
+    message of nologin. Empty when it writes nothing or binary SFTP data.
+    """
+    data = b""
+    chan = None
+    try:
+        chan = transport.open_session(timeout=timeout)
+        chan.settimeout(timeout)
+        chan.invoke_subsystem("sftp")
+        while len(data) < 2048:
+            chunk = chan.recv(2048 - len(data))
+            if not chunk:
+                break
+            data += chunk
+            chan.settimeout(0.5)            # the rest of a notice follows at once
+    except Exception:
+        pass                                # timeout or closed: keep what came
+    finally:
+        if chan is not None:
+            chan.close()
+    text = data.decode("utf-8", errors="replace")
+    if "\ufffd" in text or any(ch < " " and ch not in "\r\n\t" for ch in text):
+        return ""
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())[:300]
 
 
 # Key types that sign with the same stored key: an "ssh-rsa" entry in
@@ -215,21 +281,30 @@ class SftpClient:
                 client.connect(conn.host, password=password, **common)
             else:
                 client.close()
-                raise SftpClientError("No usable credentials configured")
+                raise NoCredentials("No usable credentials configured")
         except SftpClientError:
             client.close()
             raise
         except paramiko.AuthenticationException as e:
             client.close()
-            raise SftpClientError("Authentication failed") from e
+            raise AuthenticationFailed("Authentication failed") from e
         except Exception as e:
             client.close()
             raise SftpClientError(str(e)) from e
         finally:
             password = ""   # wipe from local scope
 
+        try:
+            self._sftp = client.open_sftp()
+        except Exception as e:
+            transport = client.get_transport()
+            logged_in = transport is not None and transport.is_active()
+            notice = _server_notice(transport) if logged_in else ""
+            client.close()
+            if logged_in:
+                raise SftpUnavailable(str(e) or e.__class__.__name__, notice) from e
+            raise SftpClientError(str(e) or e.__class__.__name__) from e
         self._ssh = client
-        self._sftp = client.open_sftp()
         self._connected = True
 
         # Detect the remote OS from the server's canonical home directory.

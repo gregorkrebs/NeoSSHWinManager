@@ -637,6 +637,7 @@ class MainWindow(FramelessMainWindow):
         # Letter a running mount worker mounts on, per conn_id.
         self._mount_targets: dict[str, str] = {}
         self._letter_retry: set[str] = set()   # one automatic retry per mount
+        self._password_retry: set[str] = set()  # key refused, now trying the password
         self._load_active_mounts()
         self._containers: dict[str, object] = {}
 
@@ -5077,11 +5078,25 @@ class MainWindow(FramelessMainWindow):
                 QTimer.singleShot(0, lambda: self._on_mount(conn_id))
                 return
             self._letter_retry.discard(conn_id)
-            # SSH Key Fallback: Wenn Key fehlschlägt aber Passwort hinterlegt ist
-            if conn and conn.auth_method == "key" and conn.password:
+            # conn is reloaded and still says "key": a failed password retry
+            # must not offer the password again, or the question never ends.
+            password_retry = conn_id in self._password_retry
+            self._password_retry.discard(conn_id)
+            code = getattr(result, "code", "")
+            if code == "sftp_unavailable":
+                # Logged in, so neither the password nor a retry helps.
+                StyledMessageBox.critical(self, tr("mount.failed.title"), f"{name}\n\n{result.message}")
+                self._set_status(tr("status.connect_failed", name=name))
+                self._update_status()
+                self._apply_list_filters()
+                return
+            # SSH Key Fallback: the server refused the key, but a password is stored
+            if (conn and conn.auth_method == "key" and conn.password
+                    and code == "auth_failed" and not password_retry):
                 if self._show_key_fallback_dialog(conn):
                     # Temporär auf Passwort-Auth wechseln und retry
                     conn.auth_method = "password"
+                    self._password_retry.add(conn_id)
                     QTimer.singleShot(500, lambda: self._retry_mount_with_password(conn_id, conn, letter))
                     return
             if self._show_mount_failure_dialog(conn, result.message):
@@ -5103,6 +5118,7 @@ class MainWindow(FramelessMainWindow):
     def _retry_mount_with_password(self, conn_id: str, conn, letter: str):
         """Retry mount with password authentication (on the same letter)."""
         if conn_id in self._workers:
+            self._password_retry.discard(conn_id)
             return
         self._start_mount_worker(conn_id, conn, letter)
 
