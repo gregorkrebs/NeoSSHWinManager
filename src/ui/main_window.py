@@ -2776,6 +2776,20 @@ class MainWindow(FramelessMainWindow):
                 v.addWidget(_hint)
                 v.addSpacing(4)
 
+        # Import (add mode only): take the sites over from FileZilla
+        if not is_edit:
+            v.addWidget(self._section_label(tr("addedit.section.import")))
+            fz_btn = QPushButton(tr("import.fz.button"))
+            fz_btn.setObjectName("secondaryBtn")
+            fz_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            fz_btn.clicked.connect(self._import_from_filezilla)
+            v.addWidget(fz_btn)
+            _fz_hint = QLabel(tr("import.fz.hint"))
+            _fz_hint.setObjectName("hintLabel")
+            _fz_hint.setWordWrap(True)
+            v.addWidget(_fz_hint)
+            v.addSpacing(4)
+
         # General
         v.addWidget(self._section_label(tr("addedit.section.general")))
         self._ef_name = QLineEdit(conn.name if is_edit else "")
@@ -4762,6 +4776,44 @@ class MainWindow(FramelessMainWindow):
 
     def _on_add(self):
         self._open_add_panel()
+
+    def _import_from_filezilla(self):
+        """Add the sites the user picks from FileZilla's Site Manager as connections.
+
+        Names stay unique, and every SFTP site gets a drive letter that is free
+        on the system and not yet given to another host (if there is one).
+        """
+        from src.drive_utils import norm_letter, suggest_free_letter
+        from src.filezilla_import import to_connection, unique_name
+        from src.ui.dialogs.filezilla_import_dialog import FileZillaImportDialog
+
+        dlg = FileZillaImportDialog(self._mgr.get_connections(), self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        sites = dlg.selected()
+        if not sites:
+            return
+        names = {c.name for c in self._mgr.get_all(include_templates=True)}
+        in_use = self._drives_in_use()
+        taken = {norm_letter(c.drive_letter) for c in self._mgr.get_connections() if not c.is_ftp}
+        added = 0
+        for site in sites:
+            name = unique_name(site.name, names)
+            names.add(name)
+            letter = Connection.drive_letter
+            if site.protocol == PROTOCOL_SFTP:
+                letter = (suggest_free_letter(in_use, taken) or suggest_free_letter(in_use)
+                          or Connection.drive_letter)
+                taken.add(norm_letter(letter))
+            try:
+                self._mgr.add(to_connection(site, name, letter))
+                added += 1
+            except Exception as e:
+                logger.error(f"FileZilla import of {site.host} failed: {e}")
+        logger.info(f"FileZilla import: {added} of {len(sites)} sites added")
+        self._close_right_panel_force()
+        self._refresh_list()
+        self._set_status(tr("status.fz_imported", n=added))
 
     def _on_delete(self):
         conn_id = self._panel_conn_id or self._selected_id
