@@ -11,6 +11,7 @@ import subprocess
 import os
 import sys
 import shutil
+import tempfile
 import time
 import ctypes
 import threading
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from src.config import Connection
 from src.remote_os import detect_remote_os
 from src.remote_path import looks_like_windows_path, normalize_remote_input
+from src.ssh_identities import default_identity_files
 from src.utils.secure_memory import SecureBytes
 
 SSHFS_EXE_PATHS = [
@@ -39,6 +41,31 @@ class MountResult:
     # Machine-readable reason for a failure the UI handles itself:
     # "drive_in_use" = the drive letter is already taken.
     code: str = ""
+
+
+def _sshfs_log_path(letter: str) -> str:
+    """Where sshfs.exe writes its error output for drive *letter* (overwritten per mount)."""
+    folder = os.path.join(tempfile.gettempdir(), "NeoSSHWinManager")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, f"sshfs-{letter.upper()}.log")
+
+
+def _sshfs_error_output(path: str, max_lines: int = 6) -> str:
+    """
+    What sshfs.exe wrote before it gave up, for the error dialog: the last
+    lines, and the first one too when there are more (ssh's "WARNING: REMOTE
+    HOST IDENTIFICATION HAS CHANGED!" headline), without ssh's @-frame.
+    """
+    try:
+        with open(path, "rb") as f:
+            text = f.read()[-4000:].decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip().strip("@").strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if len(lines) > max_lines:
+        lines = [lines[0], "..."] + lines[-(max_lines - 2):]
+    return "\n".join(lines)
 
 
 def _find_sshfs_exe() -> str | None:
@@ -333,7 +360,12 @@ class SSHFSController:
 
         # SECURITY FIX: Use absolute path for known_hosts instead of %USERPROFILE%
         # SSHFS cannot expand %USERPROFILE% correctly
-        known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+        # Forward slashes: sshfs takes a backslash in -o values as an escape and
+        # drops it, so C:\Users\me\.ssh\known_hosts became the relative
+        # "C:Usersme.sshknown_hosts" - ssh then never read the user's
+        # known_hosts and kept (or, without write access, failed to keep) its
+        # own list in the SSHFS-Win folder.
+        known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts").replace("\\", "/")
 
         cmd = [
             sshfs_exe,
@@ -446,9 +478,21 @@ class SSHFSController:
             cmd.append("-oPreferredAuthentications=publickey")
             logger.info(f"Using SSH key: {key_path}")
         elif conn.auth_method in ("password", "ask") and conn.password:
-            cmd.append("-oPreferredAuthentications=password,keyboard-interactive")
+            # Like the terminal and the file browser (paramiko), try the user's
+            # default keys before the password: a server that accepts keys only
+            # can be mounted too, and one that wants the password still gets it.
+            keys = default_identity_files()
+            for key in keys:
+                key = key.replace("\\", "/")
+                cmd.append(f"-oIdentityFile={key}")
+            if keys:
+                cmd.append("-oIdentitiesOnly=yes")
+                cmd.append("-oPreferredAuthentications=publickey,password,keyboard-interactive")
+            else:
+                cmd.append("-oPreferredAuthentications=password,keyboard-interactive")
             cmd.append("-opassword_stdin")
-            logger.info("Using password authentication")
+            logger.info("Using password authentication"
+                        + (f", default keys first: {', '.join(os.path.basename(k) for k in keys)}" if keys else ""))
         else:
             return MountResult(False, "Kein Passwort oder Key konfiguriert.")
 
@@ -465,20 +509,24 @@ class SSHFSController:
             if _drive_letter_in_use(f"{letter}:"):
                 return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.", "drive_in_use")
 
-            proc = subprocess.Popen(
-                cmd,
-                stdin=(
-                    subprocess.PIPE
-                    if conn.auth_method in ("password", "ask") and conn.password
-                    else subprocess.DEVNULL
-                ),
-                stdout=subprocess.DEVNULL,
-                # "Quit only" deliberately keeps mounts alive after the GUI exits.
-                # A PIPE would then lose its reader and can block/terminate sshfs.
-                stderr=subprocess.DEVNULL,
-                env=env,
-                creationflags=0x08000000,
-            )
+            # "Quit only" deliberately keeps mounts alive after the GUI exits.
+            # A PIPE would then lose its reader and can block/terminate sshfs,
+            # so its error output goes to a file: it shows in the error dialog
+            # when the mount fails ("Permission denied (publickey)", ...).
+            log_path = _sshfs_log_path(letter)
+            with open(log_path, "wb") as stderr_file:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=(
+                        subprocess.PIPE
+                        if conn.auth_method in ("password", "ask") and conn.password
+                        else subprocess.DEVNULL
+                    ),
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_file,
+                    env=env,
+                    creationflags=0x08000000,
+                )
 
             logger.info(f"SSHFS process started with PID: {proc.pid}")
             self._remember_mount_process(letter, proc)
@@ -542,15 +590,20 @@ class SSHFSController:
                 f"Drive {letter}: did not become ready; sshfs returncode={returncode}"
             )
             self._stop_mount_process(letter, proc)
+            output = _sshfs_error_output(log_path)
+            if output:
+                logger.error(f"sshfs output: {output}")
+                output += "\n"
             if returncode is not None:
                 return MountResult(
                     False,
                     f"sshfs.exe wurde vor dem Einbinden beendet (Code {returncode}).\n"
+                    f"{output}"
                     "Bitte Zugangsdaten, SSH-Key und Server-Verbindung prüfen.",
                 )
             return MountResult(
                 False,
-                f"Zeitüberschreitung beim Einbinden von Laufwerk {letter}:.",
+                f"Zeitüberschreitung beim Einbinden von Laufwerk {letter}:.\n{output}".rstrip(),
             )
 
         except Exception as e:

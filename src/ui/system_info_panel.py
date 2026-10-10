@@ -19,6 +19,7 @@ from src.config import Connection
 from src.app_logger import logger
 from src.i18n import tr
 from src.remote_os import detect_remote_os
+from src.ssh_identities import default_identity_files
 from src.ui.host_key_utils import ensure_host_known
 
 class AuthLevelError(Exception):
@@ -525,10 +526,17 @@ class SSHSystemInfoThread(QThread):
             # BatchMode=no required so OpenSSH actually invokes SSH_ASKPASS.
             # With BatchMode=yes OpenSSH suppresses all credential prompts,
             # including the SSH_ASKPASS helper, which causes "Permission denied".
-            auth_options = [
-                "-o", "BatchMode=no",
-                "-o", "PreferredAuthentications=password,keyboard-interactive",
-            ]
+            auth_options = ["-o", "BatchMode=no"]
+            # The user's default keys first, as in the terminal and the file
+            # browser: a server that accepts keys only shows its info too.
+            keys = default_identity_files()
+            for key in keys:
+                auth_options += ["-i", key]
+            if keys:
+                auth_options += ["-o", "IdentitiesOnly=yes",
+                                 "-o", "PreferredAuthentications=publickey,password,keyboard-interactive"]
+            else:
+                auth_options += ["-o", "PreferredAuthentications=password,keyboard-interactive"]
 
         cmd_base = [
             ssh_exe,

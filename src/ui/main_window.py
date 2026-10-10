@@ -323,6 +323,7 @@ class MainWindow(FramelessMainWindow):
 
         # Integrated terminal (xterm.js)
         self._bridge_server = None
+        self._terminal_invoker = None   # asks host-key questions for the connect threads
         self._terminal_panels: dict[str, object] = {}       # session_key → TerminalPanel
         self._terminal_conn_tabs: dict[str, list] = {}       # conn_id → [session_key, ...]
         self._terminal_active_tab: dict[str, str] = {}       # conn_id → active session_key
@@ -5688,6 +5689,8 @@ class MainWindow(FramelessMainWindow):
         self._close_file_browser()
         if unmount:
             self._shutdown_disconnect_all()
+        if self._terminal_invoker:
+            self._terminal_invoker.close()  # a connect thread waiting for an answer gives up
         if self._bridge_server:
             try:
                 self._bridge_server.stop()
@@ -6059,7 +6062,9 @@ class MainWindow(FramelessMainWindow):
 
     def _start_terminal_bridge(self):
         try:
+            from src.filebrowser.threads import MainThreadInvoker
             from src.terminal.bridge_server import TerminalBridgeServer
+            self._terminal_invoker = MainThreadInvoker(self)
             self._bridge_server = TerminalBridgeServer()
             self._bridge_server.host_key_verify_callback = self._terminal_tofu_callback
             self._bridge_server.start()
@@ -6069,12 +6074,15 @@ class MainWindow(FramelessMainWindow):
             logger.warning("Terminal bridge server could not start: %s", e)
 
     def _terminal_tofu_callback(self, host: str, port: int, fingerprint: str) -> bool:
-        """Called from bridge_server thread when an unknown host key is encountered."""
-        import threading
-        result = threading.Event()
-        accepted = [False]
-
-        def _ask():
+        """
+        Called from the TerminalConnectWorker thread when an unknown host key is
+        encountered. The question has to run on the main thread: a
+        QTimer.singleShot() fired from the worker never ran (the worker has no
+        event loop), so every new host was rejected after 30 s with the generic
+        "check host, credentials and network" error. The worker now waits for
+        the answer, however long the user takes.
+        """
+        def ask() -> bool:
             from PyQt6.QtWidgets import QMessageBox
             body = tr("terminal.host_key_dialog.body").format(host=host, fingerprint=fingerprint)
             dlg = QMessageBox(self)
@@ -6084,12 +6092,11 @@ class MainWindow(FramelessMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             dlg.setDefaultButton(QMessageBox.StandardButton.No)
-            accepted[0] = dlg.exec() == QMessageBox.StandardButton.Yes
-            result.set()
+            return dlg.exec() == QMessageBox.StandardButton.Yes
 
-        QTimer.singleShot(0, _ask)
-        result.wait(timeout=30)
-        return accepted[0]
+        if self._terminal_invoker is None:
+            return False
+        return bool(self._terminal_invoker.call(ask, default=False))
 
     def _open_terminal_panel(self, conn_id: str, initial_input: str | None = None):
         """Switch the right panel to _PANEL_TERMINAL for conn_id, opening the first session."""

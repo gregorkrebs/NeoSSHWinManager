@@ -43,6 +43,11 @@ class _CapturedThread:
 
 
 @pytest.fixture(autouse=True)
+def _sshfs_log_in_tmp(monkeypatch, tmp_path):
+    monkeypatch.setattr(sshfs_controller, "_sshfs_log_path", lambda letter: str(tmp_path / f"sshfs-{letter}.log"))
+
+
+@pytest.fixture(autouse=True)
 def _no_banner_probe(monkeypatch):
     # _mount_direct reads the SSH banner of the host for "/" mounts; keep the
     # tests off the network. Tests that need a Windows server override this.
@@ -98,6 +103,8 @@ def test_direct_mount_uses_parent_independent_stdio_and_stable_drive(
     monkeypatch.setattr(sshfs_controller.subprocess, "Popen", popen)
     monkeypatch.setattr(sshfs_controller.threading, "Thread", _CapturedThread)
     monkeypatch.setattr(sshfs_controller.time, "sleep", lambda _seconds: None)
+    log_path = str(tmp_path / "sshfs-X.log")
+    monkeypatch.setattr(sshfs_controller, "_sshfs_log_path", lambda _letter: log_path)
 
     controller = SSHFSController()
     result = controller._mount_direct(conn)
@@ -107,8 +114,13 @@ def test_direct_mount_uses_parent_independent_stdio_and_stable_drive(
     assert "-f" in cmd
     assert "-odebug" not in cmd
     assert "-ologlevel=debug1" not in cmd
+    # sshfs drops backslashes in -o values: the paths must use forward slashes
+    known_hosts = next(c for c in cmd if c.startswith("-oUserKnownHostsFile="))
+    assert "\\" not in known_hosts and known_hosts.endswith("/.ssh/known_hosts")
+    assert "\\" not in next(c for c in cmd if c.startswith("-oIdentityFile="))
     assert popen.call_args.kwargs["stdout"] is sshfs_controller.subprocess.DEVNULL
-    assert popen.call_args.kwargs["stderr"] is sshfs_controller.subprocess.DEVNULL
+    # no PIPE (sshfs outlives the GUI): its error output goes to a file
+    assert popen.call_args.kwargs["stderr"].name == log_path
     assert controller._get_mount_process("X:") is proc
 
     _CapturedThread.created[0].target()
