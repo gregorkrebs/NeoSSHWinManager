@@ -132,7 +132,7 @@ class HostSession(QObject):
         if isinstance(error, HostKeyRejected):
             return tr("fb.hostkey.rejected", host=error.host, fingerprint=error.fingerprint)
         if isinstance(error, SftpUnavailable):
-            return tr("fb.error.sftp_unavailable", detail=error.detail)
+            return error.user_text()
         if isinstance(error, AuthenticationFailed):
             return tr("sftp.error.auth_failed")
         if isinstance(error, NoCredentials):

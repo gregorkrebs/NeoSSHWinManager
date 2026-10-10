@@ -50,6 +50,7 @@ def test_update_to_1_7_3_shows_the_notes_of_every_1_7_version(installed):
     for item in ("Import your sites from FileZilla.",
                  "Mounting checks the server's key against your known servers again.",
                  "A clear message when a server does not offer SFTP.",
+                 "Mounting no longer asks for the password over and over.",
                  "New servers work in the terminal straight away.",
                  "The app starts again on its own after an update.",
                  "Start right away, no account to set up."):

@@ -39,7 +39,10 @@ class MountResult:
     success: bool
     message: str
     # Machine-readable reason for a failure the UI handles itself:
-    # "drive_in_use" = the drive letter is already taken.
+    # "drive_in_use" = the drive letter is already taken;
+    # "auth_failed" = the server refused the login, or the key is missing;
+    # "sftp_unavailable" = logged in, but the server did not start SFTP
+    # (message then explains it, with the server's own notice).
     code: str = ""
 
 
@@ -66,6 +69,31 @@ def _sshfs_error_output(path: str, max_lines: int = 6) -> str:
     if len(lines) > max_lines:
         lines = [lines[0], "..."] + lines[-(max_lines - 2):]
     return "\n".join(lines)
+
+
+# What sshfs says when ssh logged in but the SFTP channel ended at once.
+_SSHFS_DISCONNECTED = "remote host has disconnected"
+
+
+def _sftp_unavailable(conn: Connection):
+    """
+    sshfs only says "remote host has disconnected" when the server logs the
+    user in and then ends SFTP (a forced command such as cloud-init's "Please
+    login as the user ...", a web host without SSH access). Log in once more
+    with paramiko to learn why: returns the SftpUnavailable error, which
+    carries the server's notice, or None.
+    """
+    from src.sftp_client import SftpClient, SftpUnavailable
+    client = SftpClient()
+    try:
+        client.connect(conn)
+    except SftpUnavailable as e:
+        return e
+    except Exception:
+        return None
+    finally:
+        client.disconnect()
+    return None
 
 
 def _find_sshfs_exe() -> str | None:
@@ -460,7 +488,7 @@ class SSHFSController:
 
             # Validate key file exists and is readable
             if not os.path.exists(key_path):
-                return MountResult(False, f"SSH-Key nicht gefunden: {key_path}")
+                return MountResult(False, f"SSH-Key nicht gefunden: {key_path}", "auth_failed")
 
             # OpenSSH keys are valid input for current SSHFS-Win/OpenSSH builds.
             # Keep a lightweight readability check only, but do not block by header type.
@@ -471,7 +499,7 @@ class SSHFSController:
                         logger.info(f"Using OpenSSH private key format: {key_path}")
             except Exception as e:
                 logger.error(f"Error reading key file: {e}")
-                return MountResult(False, f"Fehler beim Lesen des SSH-Keys: {e}")
+                return MountResult(False, f"Fehler beim Lesen des SSH-Keys: {e}", "auth_failed")
 
             cmd.append(f"-oIdentityFile={key_path}")
             cmd.append("-oBatchMode=yes")
@@ -591,6 +619,13 @@ class SSHFSController:
             )
             self._stop_mount_process(letter, proc)
             output = _sshfs_error_output(log_path)
+            if returncode is not None and _SSHFS_DISCONNECTED in output:
+                unavailable = _sftp_unavailable(conn)
+                if unavailable is not None:
+                    logger.error(f"SFTP not started: {unavailable.detail}; "
+                                 f"server: {unavailable.server_message!r}")
+                    return MountResult(False, unavailable.user_text(), "sftp_unavailable")
+            code = "auth_failed" if "Permission denied" in output else ""
             if output:
                 logger.error(f"sshfs output: {output}")
                 output += "\n"
@@ -600,10 +635,12 @@ class SSHFSController:
                     f"sshfs.exe wurde vor dem Einbinden beendet (Code {returncode}).\n"
                     f"{output}"
                     "Bitte Zugangsdaten, SSH-Key und Server-Verbindung prüfen.",
+                    code,
                 )
             return MountResult(
                 False,
                 f"Zeitüberschreitung beim Einbinden von Laufwerk {letter}:.\n{output}".rstrip(),
+                code,
             )
 
         except Exception as e:

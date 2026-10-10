@@ -14,6 +14,7 @@ import os
 import posixpath
 import socket
 import threading
+import time
 
 import paramiko
 from paramiko import (
@@ -182,6 +183,22 @@ class _ClosingSubsystem(paramiko.SubsystemHandler):
         channel.close()
 
 
+NOTICE = 'Please login as the user "gregor" rather than the user "root".'
+
+
+class _NoticeSubsystem(paramiko.SubsystemHandler):
+    """
+    Like an Ubuntu cloud image logged in as root: the key in root's
+    authorized_keys has a forced command that prints a notice and exits.
+    """
+
+    def start_subsystem(self, name, transport, channel):
+        time.sleep(0.2)                    # let the request's reply go out first
+        channel.sendall((NOTICE + "\r\n\r\n").encode())
+        time.sleep(0.2)
+        channel.close()
+
+
 class ConnectedClient:
     """Shaped like src.sftp_client.SftpClient for SftpFS."""
 
@@ -212,7 +229,8 @@ class SftpTestServer:
         home: the login folder (realpath of ".").
         deny_list: folders whose listing fails with "permission denied".
         sftp: "on"; "closed" starts the subsystem and closes it at once;
-        "missing" refuses the subsystem request (no "Subsystem sftp").
+        "missing" refuses the subsystem request (no "Subsystem sftp");
+        "notice" prints NOTICE instead of speaking SFTP, then closes.
         """
         self.root = os.path.abspath(root)
         self.windows_home = windows_home
@@ -253,6 +271,8 @@ class SftpTestServer:
                 t.set_subsystem_handler("sftp", SFTPServer, impl)
             elif self.sftp == "closed":
                 t.set_subsystem_handler("sftp", _ClosingSubsystem)
+            elif self.sftp == "notice":
+                t.set_subsystem_handler("sftp", _NoticeSubsystem)
             try:
                 t.start_server(server=_Server())
             except (paramiko.SSHException, EOFError, OSError):
