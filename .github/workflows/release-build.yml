@@ -23,11 +23,17 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # Actions are pinned to full commit SHAs (the tag noted behind each):
+      # a moved tag cannot change what runs with write access to releases.
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Build the tagged sources. Without a ref, a manual run builds the
+          # branch it was started from and uploads that to the given tag.
+          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.14'
           cache: pip
@@ -54,7 +60,7 @@ jobs:
           & $iscc installer\NeoSSHWinManager.iss
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-executables
           path: |

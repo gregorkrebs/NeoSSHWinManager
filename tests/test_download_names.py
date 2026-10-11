@@ -8,6 +8,7 @@ path unchecked, which on Windows writes outside the chosen folder.
 """
 
 import os
+import sys
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -54,6 +55,8 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the test server serves its own file system; these names need POSIX")
 def test_download_skips_names_that_would_escape(qapp, tmp_path):
     remote = tmp_path / "remote"
     (remote / "dir" / "sub").mkdir(parents=True)
