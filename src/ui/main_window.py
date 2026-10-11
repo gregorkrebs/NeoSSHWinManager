@@ -21,12 +21,6 @@ import json
 import subprocess
 from urllib.parse import quote
 
-# SECURITY FIX (FINDING-01): imports for named-pipe DACL and IPC rate limiting
-import win32security
-import win32api
-import win32con
-import ntsecuritycon
-
 from src.auth_manager import Session, UserConnectionManager
 from src.sshfs_controller import SSHFSController, _is_safe_label
 from src.config import (
@@ -389,7 +383,8 @@ class MainWindow(FramelessMainWindow):
 
     def _setup_ipc(self):
         import threading
-        self._ipc_pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
+        from src.ipc_security import PIPE_NAME
+        self._ipc_pipe_name = PIPE_NAME
         self._ipc_running = True
         self._ipc_thread = threading.Thread(target=self._ipc_listener, daemon=True)
         self._ipc_thread.start()
@@ -412,67 +407,6 @@ class MainWindow(FramelessMainWindow):
             entry["count"] += 1
             _ipc_rate[pid] = entry
             return entry["count"] <= _IPC_MAX_FAILS
-
-        # SECURITY FIX (FINDING-01): Build a SECURITY_ATTRIBUTES struct that
-        # restricts pipe access to the current user only (replaces bare None).
-        def _make_pipe_security_attributes():
-            """Return a SECURITY_ATTRIBUTES ctypes struct granting access only to
-            the current user, or None on failure (falls back to default)."""
-            try:
-                # Get current user SID
-                username = win32api.GetUserNameEx(win32con.NameSamCompatible)
-                sid, _, _ = win32security.LookupAccountName(None, username)
-
-                # Build a DACL with a single ACE: GENERIC_READ | GENERIC_WRITE for current user
-                dacl = win32security.ACL()
-                dacl.AddAccessAllowedAce(
-                    win32security.ACL_REVISION,
-                    ntsecuritycon.GENERIC_READ | ntsecuritycon.GENERIC_WRITE,
-                    sid
-                )
-
-                # Attach the DACL to a new Security Descriptor
-                sd = win32security.SECURITY_DESCRIPTOR()
-                sd.SetSecurityDescriptorDacl(True, dacl, False)
-
-                # Convert SD to a self-relative binary blob and store it so it
-                # stays alive for the lifetime of the pipe handle.
-                sd_bytes = sd.GetSecurityDescriptorDacl()   # keep reference
-
-                # Build a SECURITY_ATTRIBUTES struct pointing to the SD
-                class SECURITY_ATTRIBUTES(ctypes.Structure):
-                    _fields_ = [
-                        ("nLength",              ctypes.c_ulong),
-                        ("lpSecurityDescriptor", ctypes.c_void_p),
-                        ("bInheritHandle",       ctypes.c_bool),
-                    ]
-
-                sa = SECURITY_ATTRIBUTES()
-                sa.nLength = ctypes.sizeof(SECURITY_ATTRIBUTES)
-                # Keep the SD object alive inside sa so GC doesn't collect it
-                sa._sd_obj = sd
-                # Obtain a raw pointer to the SD via win32security
-                raw_sd = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
-                    sd.GetSecurityDescriptorSddl(win32security.DACL_SECURITY_INFORMATION),
-                    win32security.SDDL_REVISION_1,
-                )
-                sa._sd_raw = raw_sd
-                # Use the PyHANDLE buffer address as lpSecurityDescriptor
-                import ctypes
-                sa.lpSecurityDescriptor = ctypes.cast(
-                    ctypes.c_char_p(bytes(raw_sd)), ctypes.c_void_p
-                )
-                sa.bInheritHandle = False
-                return sa
-            except Exception as e:
-                logger.warning(f"IPC: SECURITY_ATTRIBUTES konnte nicht erstellt werden: {e} — "
-                               "Pipe wird mit Standard-ACL erstellt (FINDING-01 nicht vollständig gemindert).")
-                return None
-
-        PIPE_ACCESS_DUPLEX    = 0x00000003
-        PIPE_TYPE_MESSAGE     = 0x00000004
-        PIPE_READMODE_MESSAGE = 0x00000002
-        PIPE_WAIT             = 0x00000000
 
         def _read_full_message(pipe_handle):
             """Reads one complete message from a message-mode pipe.
@@ -501,19 +435,40 @@ class MainWindow(FramelessMainWindow):
                 if len(data) > MAX_MESSAGE_BYTES:
                     return None
 
+        from src import ipc_security
+
+        # Owner-only DACL, built once: the pipe carries SSH passwords. Without
+        # it there is no IPC at all — the default DACL is not good enough.
+        try:
+            sa = ipc_security.owner_only_security_attributes()
+        except Exception as e:
+            logger.error(f"IPC: Sicherheitsbeschreibung fehlgeschlagen: {e}")
+            sa = None
+        if sa is None:
+            logger.error("IPC: Pipe wird nicht angelegt (keine Owner-only-DACL) — CLI-Zugriff deaktiviert.")
+            return
+
+        # The very first instance must be ours: if another process already
+        # holds the name, we do not join its pipe (ERROR_ACCESS_DENIED) and
+        # keep retrying until it is gone.
+        first_instance = True
+        squat_logged = False
         while self._ipc_running:
             try:
-                sa = _make_pipe_security_attributes()
-                sa_ptr = ctypes.byref(sa) if sa is not None else None
+                open_mode = ipc_security.SERVER_OPEN_MODE
+                if first_instance:
+                    open_mode |= ipc_security.FILE_FLAG_FIRST_PIPE_INSTANCE
                 pipe = ctypes.windll.kernel32.CreateNamedPipeW(
-                    self._ipc_pipe_name, PIPE_ACCESS_DUPLEX,
-                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    5, 1048576, 1048576, 5000,
-                    sa_ptr  # SECURITY FIX (FINDING-01): proper DACL instead of None
+                    self._ipc_pipe_name, open_mode, ipc_security.SERVER_PIPE_MODE,
+                    5, 1048576, 1048576, 5000, ctypes.byref(sa),
                 )
                 if pipe == -1:
+                    if first_instance and not squat_logged:
+                        logger.warning("IPC: Pipe-Name ist bereits belegt — warte, bis er frei wird.")
+                        squat_logged = True
                     time.sleep(1)
                     continue
+                first_instance = False
                 ctypes.windll.kernel32.ConnectNamedPipe(pipe, None)
                 if not self._ipc_running:
                     ctypes.windll.kernel32.CloseHandle(pipe)
@@ -553,9 +508,10 @@ class MainWindow(FramelessMainWindow):
                                     # revisiting FINDING-01's original blanket omission). Sending
                                     # it over this pipe is safe in the same way the key_path was
                                     # already considered safe: CreateNamedPipeW above uses
-                                    # _make_pipe_security_attributes(), which restricts the pipe
-                                    # to the current user's SID only, so only this same account's
-                                    # own processes can ever connect; the 64-byte cli_access_key
+                                    # ipc_security.owner_only_security_attributes(), which restricts
+                                    # the pipe to the current user's SID only, so only this same
+                                    # account's own processes can ever connect (and clients check
+                                    # that the server is ours, too); the 64-byte cli_access_key
                                     # is itself a strong bearer secret gating this response; and
                                     # _check_rate() above throttles repeated attempts per PID.
                                     response = {"success": True, "connection": {

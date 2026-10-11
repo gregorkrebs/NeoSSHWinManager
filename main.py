@@ -18,33 +18,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pass-helper":
     if not token:
         sys.exit(1)
     
-    import json
-    import ctypes
-    import ctypes.wintypes
-
-    pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
-    GENERIC_READ = 0x80000000
-    GENERIC_WRITE = 0x40000000
-    OPEN_EXISTING = 3
-    
-    handle = ctypes.windll.kernel32.CreateFileW(
-        pipe_name, GENERIC_READ | GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
-    )
-    if handle != -1:
-        req = json.dumps({"action": "get_askpass", "token": token}).encode('utf-8')
-        written = ctypes.wintypes.DWORD()
-        ctypes.windll.kernel32.WriteFile(handle, req, len(req), ctypes.byref(written), None)
-        
-        buf = ctypes.create_string_buffer(4096)
-        read = ctypes.wintypes.DWORD()
-        if ctypes.windll.kernel32.ReadFile(handle, buf, 4096, ctypes.byref(read), None):
-            try:
-                resp = json.loads(buf.value[:read.value].decode('utf-8'))
-                if resp.get("success"):
-                    print(resp.get("password", ""), end="")
-            except Exception:
-                pass
-        ctypes.windll.kernel32.CloseHandle(handle)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from src.ipc_security import IpcError, request
+    try:
+        # The token goes only to a pipe served by this account
+        # (src/ipc_security.py), never to a process of another user.
+        resp = request({"action": "get_askpass", "token": token}, timeout_ms=5000)
+    except IpcError:
+        sys.exit(1)
+    if resp.get("success"):
+        print(resp.get("password", ""), end="")
     sys.exit(0)
 
 # ── 0.2 Elevated Rechte-Reparatur-Helfer (via UAC-Relaunch, siehe

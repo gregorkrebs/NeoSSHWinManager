@@ -12,7 +12,6 @@
 
 import os
 import re
-import json
 import datetime
 import subprocess
 import shutil
@@ -135,35 +134,9 @@ def _send_cli_log(cli_key: str, entry: dict) -> None:
     if not cli_key:
         return
     try:
-        import ctypes
-        import ctypes.wintypes
-
-        pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
-        PIPE_READMODE_MESSAGE = 0x00000002
-        kernel32 = ctypes.windll.kernel32
-
-        if not kernel32.WaitNamedPipeW(pipe_name, 2000):
-            return
-        h_pipe = kernel32.CreateFileW(
-            pipe_name, 0xC0000000, 0, None, 3, 0, None
-        )
-        if h_pipe == -1:
-            return
-        try:
-            mode = ctypes.wintypes.DWORD(PIPE_READMODE_MESSAGE)
-            kernel32.SetNamedPipeHandleState(h_pipe, ctypes.byref(mode), None, None)
-
-            request = json.dumps({"action": "cli_log", "key": cli_key, "entry": entry}).encode("utf-8")
-            written = ctypes.wintypes.DWORD()
-            kernel32.WriteFile(h_pipe, request, len(request), ctypes.byref(written), None)
-
-            # Antwort abräumen (Inhalt irrelevant, best effort) statt die
-            # Pipe mit einer noch ausstehenden Response zu schließen.
-            buf = ctypes.create_string_buffer(4096)
-            read = ctypes.wintypes.DWORD()
-            kernel32.ReadFile(h_pipe, buf, 4096, ctypes.byref(read), None)
-        finally:
-            kernel32.CloseHandle(h_pipe)
+        # Refuses a pipe served by another account (src/ipc_security.py).
+        from src.ipc_security import request
+        request({"action": "cli_log", "key": cli_key, "entry": entry}, timeout_ms=2000)
     except Exception:
         pass
 

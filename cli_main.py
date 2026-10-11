@@ -13,48 +13,31 @@ Usage:
 
 import sys
 import os
-import json
-import ctypes
-import ctypes.wintypes
 
 
 def _handle_cli_connect(key: str, exec_cmd: str = None) -> int:
-    pipe_name = r"\\.\pipe\SSHWinManager_IPC_v1"
-    PIPE_READMODE_MESSAGE = 0x00000002
-    kernel32 = ctypes.windll.kernel32
+    # src/ auf den Importpfad legen – sowohl im Dev-Modus als auch im frozen EXE.
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    if base not in sys.path:
+        sys.path.insert(0, base)
 
-    if not kernel32.WaitNamedPipeW(pipe_name, 10000):
+    from src.ipc_security import IpcError, IpcNotRunning, IpcUntrustedServer, request
+
+    # The pipe server must run as this account before the key is sent
+    # (see src/ipc_security.py).
+    try:
+        res_data = request({"action": "cli_connect", "key": key}, timeout_ms=10000)
+    except IpcNotRunning:
         print("Fehler: SSH Win Manager muss gestartet und eingeloggt sein.")
         return 1
-
-    h_pipe = kernel32.CreateFileW(
-        pipe_name,
-        0xC0000000,  # GENERIC_READ | GENERIC_WRITE
-        0, None,
-        3,  # OPEN_EXISTING
-        0, None
-    )
-    if h_pipe == -1:
-        print("Fehler: Konnte nicht mit SSH Win Manager kommunizieren.")
+    except IpcUntrustedServer:
+        print("Fehler: Die Gegenstelle der IPC-Pipe läuft unter einem anderen Benutzerkonto – "
+              "Verbindung abgebrochen.")
         return 1
-
-    mode = ctypes.wintypes.DWORD(PIPE_READMODE_MESSAGE)
-    kernel32.SetNamedPipeHandleState(h_pipe, ctypes.byref(mode), None, None)
-
-    request = json.dumps({"action": "cli_connect", "key": key}).encode('utf-8')
-    written = ctypes.wintypes.DWORD()
-    kernel32.WriteFile(h_pipe, request, len(request), ctypes.byref(written), None)
-
-    buf = ctypes.create_string_buffer(65536)
-    read = ctypes.wintypes.DWORD()
-    ok = kernel32.ReadFile(h_pipe, buf, 65536, ctypes.byref(read), None)
-    kernel32.CloseHandle(h_pipe)
-
-    if not ok:
+    except IpcError:
         print("Fehler: Keine Antwort von SSH Win Manager erhalten.")
         return 1
 
-    res_data = json.loads(buf.value[:read.value].decode('utf-8'))
     if not res_data.get("success"):
         print(f"Fehler: {res_data.get('error', 'Ungültiger Key oder Zugriff verweigert.')}")
         return 1
@@ -62,11 +45,6 @@ def _handle_cli_connect(key: str, exec_cmd: str = None) -> int:
     conn_data = res_data["connection"]
     if not exec_cmd:
         print(f"Verbindung zu '{conn_data['name']}' wird hergestellt...")
-
-    # src/ auf den Importpfad legen – sowohl im Dev-Modus als auch im frozen EXE.
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    if base not in sys.path:
-        sys.path.insert(0, base)
 
     from src.ssh_launcher import launch_ssh_in_current_terminal
     # Rückgabewert durchreichen: vorher wurde er verworfen und pauschal 0
