@@ -13,6 +13,7 @@ Security properties:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -215,9 +216,11 @@ class TerminalBridgeServer:
     # ------------------------------------------------------------------
 
     async def _serve(self, ready_event: threading.Event):
-        import websockets
+        # The asyncio implementation (websockets >= 13); the legacy
+        # (websocket, path) handler API is gone in websockets 14.
+        from websockets.asyncio.server import serve
 
-        server = await websockets.serve(
+        server = await serve(
             self._ws_handler,
             "127.0.0.1",
             0,
@@ -257,10 +260,9 @@ class TerminalBridgeServer:
                         except Exception:
                             pass
 
-    async def _ws_handler(self, websocket, path: str):
-        import websockets
-
+    async def _ws_handler(self, websocket):
         # Extract token from path: /ws/{token}
+        path = websocket.request.path if websocket.request else ""
         parts = path.strip("/").split("/")
         if len(parts) != 2 or parts[0] != "ws":
             await websocket.close(1008, "Invalid path")
@@ -292,34 +294,18 @@ class TerminalBridgeServer:
         session.forwarder_task = forwarder
 
         try:
-            # WS→SSH
+            # WS→SSH. Keystrokes and pasted text arrive as binary frames and go
+            # to the shell unchanged; text frames are control messages only.
+            # (Up to 1.7.2 a text frame that parsed as JSON with a "type" key
+            # was swallowed, so pasting such JSON never reached the shell.)
             async for message in websocket:
                 if session.channel.closed:
                     break
+                if isinstance(message, str):
+                    self._handle_control(conn_id, message)
+                    continue
                 try:
-                    if isinstance(message, str):
-                        # JSON control message (e.g. resize from xterm.js)
-                        if message.startswith('{'):
-                            import json as _json
-                            handled = False
-                            try:
-                                ctrl = _json.loads(message)
-                                msg_type = ctrl.get("type")
-                                if msg_type == "resize":
-                                    cols = int(ctrl.get("cols", 80))
-                                    rows = int(ctrl.get("rows", 24))
-                                    if cols > 0 and rows > 0:
-                                        self.resize_session(conn_id, cols, rows)
-                                    handled = True
-                                elif msg_type is not None:
-                                    handled = True  # unknown ctrl msg, ignore
-                            except (ValueError, KeyError, TypeError, AttributeError):
-                                pass  # not valid JSON – send to SSH as-is
-                            if handled:
-                                continue
-                        session.channel.sendall(message.encode("utf-8"))
-                    else:
-                        session.channel.sendall(message)
+                    session.channel.sendall(message)
                 except Exception as e:
                     logger.debug("Terminal: WS→SSH send error: %s", e)
                     break
@@ -328,6 +314,21 @@ class TerminalBridgeServer:
         finally:
             forwarder.cancel()
             logger.debug("Terminal: WebSocket disconnected for %s", conn_id)
+
+    def _handle_control(self, conn_id: str, message: str) -> None:
+        """A control message from xterm.js, e.g. {"type": "resize", ...}."""
+        try:
+            ctrl = json.loads(message)
+        except ValueError:
+            return
+        if not isinstance(ctrl, dict) or ctrl.get("type") != "resize":
+            return
+        try:
+            cols, rows = int(ctrl.get("cols", 0)), int(ctrl.get("rows", 0))
+        except (TypeError, ValueError):
+            return
+        if 0 < cols <= 1000 and 0 < rows <= 1000:
+            self.resize_session(conn_id, cols, rows)
 
     async def _ssh_to_ws(self, session: TerminalSession):
         loop = asyncio.get_event_loop()

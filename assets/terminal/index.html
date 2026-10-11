@@ -197,10 +197,17 @@
     };
   }
 
-  term.onData(function(data) {
+  // Terminal input travels as binary frames; text frames are reserved for
+  // control messages, so pasted text is never mistaken for one.
+  const encoder = new TextEncoder();
+  function sendInput(bytes) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
+      ws.send(bytes);
     }
+  }
+  term.onData(function(data) { sendInput(encoder.encode(data)); });
+  term.onBinary(function(data) {
+    sendInput(Uint8Array.from(data, function(c) { return c.charCodeAt(0) & 0xff; }));
   });
 
   // Exposed globally so the onclick attribute on the button can reach it.

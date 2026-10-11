@@ -13,6 +13,7 @@ Also home of the URL validation for "upload from URL".
 from __future__ import annotations
 
 import base64
+import ntpath
 import re
 import shlex
 import urllib.parse
@@ -140,6 +141,10 @@ def duplicate_command(is_windows: bool, src: str, dst: str) -> str:
 
 # ── Terminal ─────────────────────────────────────────────────────────────────
 
+# Characters PowerShell interprets inside "…": $ and the backtick, plus the
+# typographic double quotes it treats like ".
+_PS_DOUBLE_QUOTE_SPECIAL = "$`\u201c\u201d\u201e"
+
 def terminal_cd_input(is_windows: bool, path: str) -> str:
     """
     Keystrokes that put a fresh interactive shell into `path`.
@@ -149,8 +154,20 @@ def terminal_cd_input(is_windows: bool, path: str) -> str:
     """
     if is_windows:
         target = native(path, True)
+        # The line has to work in cmd.exe and PowerShell alike, so the path
+        # goes in double quotes. PowerShell evaluates $(…), $var and
+        # `-escapes there and also ends the string at typographic double
+        # quotes — a folder named "$(…)" would run code. No quoting is safe
+        # in both shells, so such a folder is replaced by its nearest
+        # ancestor that needs none.
+        while any(c in _PS_DOUBLE_QUOTE_SPECIAL for c in target):
+            parent = ntpath.dirname(target.rstrip("\\"))
+            if not parent or parent == target:
+                target = ""
+                break
+            target = parent
         drive = target[:2] if re.match(r"^[A-Za-z]:", target) else ""
-        lines = ([drive] if drive else []) + [f'cd "{target}"', "cls"]
+        lines = ([drive] if drive else []) + ([f'cd "{target}"'] if target else []) + ["cls"]
         return "".join(line + "\r" for line in lines)
     return f"cd {sh_quote(path)} && clear\r"
 

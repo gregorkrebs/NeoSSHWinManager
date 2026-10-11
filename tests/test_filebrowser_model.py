@@ -197,6 +197,18 @@ def test_terminal_cd_input():
     assert commands.terminal_cd_input(True, "/E:/data") == 'E:\rcd "E:\\data"\rcls\r'
 
 
+def test_terminal_cd_input_never_lets_powershell_evaluate_the_path():
+    # Inside "…" PowerShell runs $(…) and ends the string at typographic quotes.
+    # Such folders cannot be quoted for cmd.exe and PowerShell at once: the
+    # terminal opens in the nearest ancestor that needs no quoting.
+    assert commands.terminal_cd_input(True, "/E:/data/$(calc)/sub") == 'E:\rcd "E:\\data"\rcls\r'
+    assert commands.terminal_cd_input(True, "/E:/a/`b") == 'E:\rcd "E:\\a"\rcls\r'
+    assert commands.terminal_cd_input(True, "/E:/x\u201d; calc; \u201d") == 'E:\rcd "E:\\"\rcls\r'
+    assert commands.terminal_cd_input(True, "/E:/$x") == 'E:\rcd "E:\\"\rcls\r'
+    for cmd in (commands.terminal_cd_input(True, p) for p in ("/C:/$(a)", "/C:/a/`$x")):
+        assert "$" not in cmd and "`" not in cmd
+
+
 # ── settings ─────────────────────────────────────────────────────────────────
 
 def test_settings_are_clamped_and_tolerant():
