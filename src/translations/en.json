@@ -655,6 +655,7 @@
   "fb.error.list_title": "Folder could not be opened",
   "fb.error.move_title": "Move failed",
   "fb.error.open_title": "File could not be opened",
+  "fb.error.unsafe_names": "{count} item(s) were skipped because their name from the server is not a valid local file name (it could point outside the target folder): {names}",
   "fb.error.rename_title": "Rename failed",
   "fb.error.transfer_title": "Transfer",
   "fb.filter.placeholder": "Filter…",

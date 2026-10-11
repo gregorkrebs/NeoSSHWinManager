@@ -653,6 +653,7 @@
   "fb.error.list_title": "Map kon niet worden geopend",
   "fb.error.move_title": "Verplaatsen mislukt",
   "fb.error.open_title": "Bestand kon niet worden geopend",
+  "fb.error.unsafe_names": "{count} item(s) overgeslagen omdat de naam van de server geen geldige lokale bestandsnaam is (die kan buiten de doelmap wijzen): {names}",
   "fb.error.rename_title": "Hernoemen mislukt",
   "fb.error.transfer_title": "Overdracht",
   "fb.filter.placeholder": "Filteren…",

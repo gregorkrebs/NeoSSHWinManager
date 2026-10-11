@@ -653,6 +653,7 @@
   "fb.error.list_title": "No se pudo abrir la carpeta",
   "fb.error.move_title": "Error al mover",
   "fb.error.open_title": "No se pudo abrir el archivo",
+  "fb.error.unsafe_names": "Se omitieron {count} elemento(s) porque su nombre del servidor no es un nombre de archivo local válido (podría apuntar fuera de la carpeta de destino): {names}",
   "fb.error.rename_title": "Error al renombrar",
   "fb.error.transfer_title": "Transferencia",
   "fb.filter.placeholder": "Filtrar…",

@@ -37,8 +37,8 @@ from src.filebrowser.history import (
     MKDIR, MKFILE, MOVE, RENAME, Modified, NotEmpty, UndoOp, apply_op,
 )
 from src.filebrowser.model import (
-    CANCEL, OVERWRITE, FileEntry, keep_both_name, rebase_path, rjoin, rname, same_path,
-    split_name,
+    CANCEL, OVERWRITE, FileEntry, is_safe_local_name, keep_both_name, rebase_path, rjoin,
+    rname, same_path, split_name,
 )
 from src.filebrowser.settings import OPEN_WITH_SYSTEM
 from src.filebrowser.threads import MainThreadInvoker, TaskRunner
@@ -904,6 +904,11 @@ class FileBrowserView(QWidget):
     def _open_remote(self, session: HostSession, entry: FileEntry, program: Optional[str]) -> None:
         if not self._usable(session):
             return
+        if not is_safe_local_name(entry.name):
+            # The name comes from the server; it must not leave the temp folder.
+            self.show_error(tr("fb.error.open_title"),
+                            tr("fb.error.unsafe_names", count=1, names=repr(entry.name)))
+            return
         program = program or self._program_for(entry.extension)
         if not program:
             return
@@ -1452,7 +1457,9 @@ class FileBrowserView(QWidget):
         fs = session.fs
         if fs is None:
             return None
-        path = os.path.join(self._temp_dir, "compare-" + uuid.uuid4().hex[:8] + "-" + entry.name)
+        # The name comes from the server: keep it only if it is one plain component.
+        name = entry.name if is_safe_local_name(entry.name) else "file"
+        path = os.path.join(self._temp_dir, "compare-" + uuid.uuid4().hex[:8] + "-" + name)
         progress = QProgressDialog(tr("fb.compare.loading", name=entry.name), tr("dialog.cancel"),
                                    0, 100, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)

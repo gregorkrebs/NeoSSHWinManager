@@ -655,6 +655,7 @@
   "fb.error.list_title": "Ordner konnte nicht geöffnet werden",
   "fb.error.move_title": "Verschieben fehlgeschlagen",
   "fb.error.open_title": "Datei konnte nicht geöffnet werden",
+  "fb.error.unsafe_names": "{count} Element(e) wurden übersprungen, weil ihr Name vom Server kein gültiger lokaler Dateiname ist (er könnte aus dem Zielordner hinausführen): {names}",
   "fb.error.rename_title": "Umbenennen fehlgeschlagen",
   "fb.error.transfer_title": "Übertragung",
   "fb.filter.placeholder": "Filtern…",

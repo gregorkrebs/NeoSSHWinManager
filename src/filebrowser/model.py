@@ -9,6 +9,7 @@ conflict policies and the directory-sync comparison.
 from __future__ import annotations
 
 import ntpath
+import os
 import posixpath
 import re
 import stat as stat_mod
@@ -162,6 +163,44 @@ def windows_remote_to_native(path: str) -> str:
 
 
 # ── Local paths ("" is the virtual root listing the drives) ──────────────────
+
+class UnsafeNameError(ValueError):
+    """A remote name that cannot be used as one local path component."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
+def is_safe_local_name(name: str) -> bool:
+    """
+    True if a name from the server is one plain local path component.
+
+    A hostile or compromised server can list names such as
+    "..\\..\\AppData\\…\\Startup\\x.bat" (a valid POSIX file name, a path
+    traversal on Windows) or "C:\\x". Rejected: separators of either kind,
+    drive or stream colons, control characters, and names made only of dots
+    and spaces (Windows strips those to "." or "..").
+    """
+    if not name or name.strip(". ") == "":
+        return False
+    return not any(c in "/\\:" or ord(c) < 32 for c in name)
+
+
+def local_child(directory: str, name: str) -> str:
+    """os.path.join(directory, name) for a remote name; UnsafeNameError if unsafe."""
+    if not is_safe_local_name(name):
+        raise UnsafeNameError(name)
+    return os.path.join(directory, name)
+
+
+def local_relative(directory: str, rel: str) -> str:
+    """directory joined with the "/"-separated remote relative path rel."""
+    path = directory
+    for part in rel.split("/"):
+        path = local_child(path, part)
+    return path
+
 
 def lparent(path: str) -> str:
     """'C:\\a\\b' -> 'C:\\a', 'C:\\' -> '' (drive list)."""

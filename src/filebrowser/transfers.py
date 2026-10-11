@@ -35,7 +35,8 @@ from src.filebrowser import commands
 from src.filebrowser.fs import FsError, LocalFS, RateLimiter, TransferAborted
 from src.filebrowser.model import (
     CANCEL, KEEP_BOTH, OVERWRITE, RESUME, SKIP,
-    ConflictInfo, FileEntry, auto_decision, keep_both_name, rjoin, rname, rparent,
+    ConflictInfo, FileEntry, UnsafeNameError, auto_decision, keep_both_name, local_child,
+    local_relative, rjoin, rname, rparent,
 )
 
 # Job kinds
@@ -242,27 +243,57 @@ class TransferQueue(QObject):
         batch = self.new_batch()
 
         def scan() -> None:
+            # Every local path is built from names the server sent: a name
+            # that is not one plain component ("..\\x", "C:\\x") is skipped,
+            # never joined (see model.is_safe_local_name).
             jobs = []
+            skipped: list[str] = []
             for entry in entries:
-                if entry.is_dir:
-                    base = os.path.join(local_dir, entry.name)
-                    os.makedirs(base, exist_ok=True)
-                    for dirpath, dirs, files in self.remote.walk(entry.path):
-                        rel = dirpath[len(entry.path):].strip("/")
-                        ldir = os.path.join(base, *rel.split("/")) if rel else base
-                        for d in dirs:
-                            os.makedirs(os.path.join(ldir, d.name), exist_ok=True)
-                        for f in files:
-                            jobs.append(self._job(DOWNLOAD, f.path, os.path.join(ldir, f.name),
-                                                  batch, size=f.size, mtime=f.mtime))
-                        if len(jobs) >= 200:
-                            self._jobs_found.emit(jobs)
-                            jobs = []
-                else:
-                    jobs.append(self._job(DOWNLOAD, entry.path, os.path.join(local_dir, entry.name),
+                try:
+                    target = local_child(local_dir, entry.name)
+                except UnsafeNameError:
+                    skipped.append(entry.name)
+                    continue
+                if not entry.is_dir:
+                    jobs.append(self._job(DOWNLOAD, entry.path, target,
                                           batch, size=entry.size, mtime=entry.mtime))
+                    continue
+                os.makedirs(target, exist_ok=True)
+                for dirpath, dirs, files in self.remote.walk(entry.path):
+                    rel = dirpath[len(entry.path):].strip("/")
+                    try:
+                        ldir = local_relative(target, rel) if rel else target
+                    except UnsafeNameError as e:
+                        skipped.append(e.name)
+                        continue
+                    for d in dirs:
+                        try:
+                            os.makedirs(local_child(ldir, d.name), exist_ok=True)
+                        except UnsafeNameError:
+                            pass                # reported when the walk enters it
+                    for f in files:
+                        try:
+                            lpath = local_child(ldir, f.name)
+                        except UnsafeNameError:
+                            skipped.append(f.name)
+                            continue
+                        jobs.append(self._job(DOWNLOAD, f.path, lpath,
+                                              batch, size=f.size, mtime=f.mtime))
+                    if len(jobs) >= 200:
+                        self._jobs_found.emit(jobs)
+                        jobs = []
             self._jobs_found.emit(jobs)
+            self._report_unsafe(skipped)
         self._scan(scan)
+
+    def _report_unsafe(self, names: list[str]) -> None:
+        if not names:
+            return
+        logger.warning("filebrowser: skipped %d remote name(s) unsafe as local names: %r",
+                       len(names), names[:20])
+        from src.i18n import tr
+        shown = ", ".join(repr(n) for n in names[:5]) + (" …" if len(names) > 5 else "")
+        self.message.emit(tr("fb.error.unsafe_names", count=len(names), names=shown))
         return batch
 
     def download_to(self, entry: FileEntry, local_path: str, decision: Optional[str] = OVERWRITE,
@@ -300,10 +331,15 @@ class TransferQueue(QObject):
         )
         batch = self.new_batch()
         jobs = []
+        skipped: list[str] = []
         for item in items:
             if not item.selected:
                 continue
-            lpath = os.path.join(local_root, *item.rel.split("/"))
+            try:
+                lpath = local_relative(local_root, item.rel)
+            except UnsafeNameError:
+                skipped.append(item.rel)
+                continue
             rpath = rjoin(remote_root, item.rel) if item.rel else remote_root
             if item.action == ACT_UPLOAD:
                 jobs.append(self._job(UPLOAD, lpath, rpath, batch, size=item.local.size,
@@ -318,6 +354,7 @@ class TransferQueue(QObject):
             elif item.action == ACT_DELETE_LOCAL:
                 jobs.append(self._job(DELETE_LOCAL, lpath, lpath, batch))
         self._add_jobs(jobs)
+        self._report_unsafe(skipped)
         return batch
 
     def upload_folder_as_archive(self, local_dir: str, remote_dir: str) -> None:

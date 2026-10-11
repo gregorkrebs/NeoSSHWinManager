@@ -653,6 +653,7 @@
   "fb.error.list_title": "Не удалось открыть папку",
   "fb.error.move_title": "Ошибка перемещения",
   "fb.error.open_title": "Не удалось открыть файл",
+  "fb.error.unsafe_names": "Пропущено элементов: {count}, так как их имя с сервера не является допустимым локальным именем файла (оно может указывать за пределы целевой папки): {names}",
   "fb.error.rename_title": "Ошибка переименования",
   "fb.error.transfer_title": "Передача",
   "fb.filter.placeholder": "Фильтр…",

@@ -653,6 +653,7 @@
   "fb.error.list_title": "تعذر فتح المجلد",
   "fb.error.move_title": "فشل النقل",
   "fb.error.open_title": "تعذر فتح الملف",
+  "fb.error.unsafe_names": "تم تخطي {count} عنصر لأن اسمه القادم من الخادم ليس اسم ملف محليًا صالحًا (قد يشير إلى خارج المجلد الهدف): {names}",
   "fb.error.rename_title": "فشلت إعادة التسمية",
   "fb.error.transfer_title": "النقل",
   "fb.filter.placeholder": "تصفية…",
