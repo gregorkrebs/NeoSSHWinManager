@@ -47,6 +47,8 @@ def _no_banner_probe(monkeypatch):
     # _mount_direct reads the SSH banner of the host for "/" mounts; keep the
     # tests off the network. Tests that need a Windows server override this.
     monkeypatch.setattr(sshfs_controller, "detect_remote_os", lambda _host, _port: None)
+    # The host-key check before the mount connects as well (tested below).
+    monkeypatch.setattr(sshfs_controller, "confirm_host_key", lambda *_a, **_k: None)
 
 
 def test_find_sshfs_pid_matches_mount_argument_exactly(monkeypatch):
@@ -430,3 +432,45 @@ def test_mount_of_windows_root_uses_home(monkeypatch, tmp_path):
 def test_mount_of_linux_root_stays_root(monkeypatch, tmp_path):
     spec = _mounted_remote_spec(monkeypatch, tmp_path, "/", server_os=None)
     assert spec == "alice@example.test:/"
+
+
+def test_mount_requires_a_trusted_host_key_and_strict_checking(monkeypatch, tmp_path):
+    from src.sftp_client import HostKeyRejected
+    key_path = tmp_path / "id_ed25519"
+    key_path.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n", encoding="utf-8")
+    conn = Connection(name="Server", host="example.test", user="alice", auth_method="key",
+                      key_path=str(key_path), drive_letter="X:")
+    popen = Mock()
+    monkeypatch.setattr(sshfs_controller, "_find_sshfs_exe", lambda: r"C:\sshfs.exe")
+    monkeypatch.setattr(sshfs_controller, "_drive_letter_in_use", lambda _letter: False)
+    monkeypatch.setattr(sshfs_controller.subprocess, "Popen", popen)
+
+    def rejected(host, port, **_kw):
+        raise HostKeyRejected(host, "SHA256:x")
+    monkeypatch.setattr(sshfs_controller, "confirm_host_key", rejected)
+
+    result = SSHFSController()._mount_direct(conn)
+    assert result.success is False
+    popen.assert_not_called()
+
+
+def test_mount_command_trusts_known_keys_only_and_keeps_new_files_private(monkeypatch, tmp_path):
+    key_path = tmp_path / "id_ed25519"
+    key_path.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n", encoding="utf-8")
+    conn = Connection(name="Server", host="example.test", user="alice", auth_method="key",
+                      key_path=str(key_path), drive_letter="X:")
+    checked = []
+    monkeypatch.setattr(sshfs_controller, "confirm_host_key",
+                        lambda host, port, **_kw: checked.append((host, port)))
+    popen = Mock(side_effect=RuntimeError("stop before the process"))
+    monkeypatch.setattr(sshfs_controller, "_find_sshfs_exe", lambda: r"C:\sshfs.exe")
+    monkeypatch.setattr(sshfs_controller, "_drive_letter_in_use", lambda _letter: False)
+    monkeypatch.setattr(sshfs_controller.subprocess, "Popen", popen)
+
+    SSHFSController()._mount_direct(conn)
+
+    assert checked == [("example.test", 22)]
+    cmd = popen.call_args.args[0]
+    assert "-oStrictHostKeyChecking=yes" in cmd
+    assert "-ocreate_umask=022" in cmd
+    assert not any("accept-new" in a for a in cmd)

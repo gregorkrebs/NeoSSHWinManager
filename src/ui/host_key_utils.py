@@ -37,6 +37,12 @@ def set_host_key_prompt(ask: Optional[HostKeyPrompt]) -> None:
     _prompt = ask
 
 
+def is_host_known(host: str, port: int, known_hosts: Optional[str] = None) -> bool:
+    """True if known_hosts holds any key for host:port (hashed entries included)."""
+    from src.sftp_client import HostKeyVerifier
+    return bool(HostKeyVerifier(host, int(port or 22), known_hosts or default_known_hosts(), None).known)
+
+
 @dataclass
 class PendingHostKey:
     """A key the server presented that known_hosts does not hold yet."""

@@ -20,7 +20,9 @@ from src.app_logger import logger
 from src.i18n import tr
 from src.remote_os import detect_remote_os
 from src.ssh_args import is_safe_cli_value
-from src.ui.host_key_utils import PendingHostKey, check_host_key, default_known_hosts
+from src.ui.host_key_utils import (
+    PendingHostKey, check_host_key, default_known_hosts, is_host_known,
+)
 
 class AuthLevelError(Exception):
     """Raised when the connection's auth method is not permitted at the current security level."""
@@ -145,14 +147,16 @@ class SSHSystemInfoThread(QThread):
             raise RuntimeError(f"Ungültige Verbindung: {self._conn.user}@{self._conn.host}")
 
         if client_type == 'ssh':
-            # ssh.exe runs with StrictHostKeyChecking=yes. An unknown key is
-            # never added silently: the panel shows its fingerprint and saves
-            # exactly that key if the user trusts it. A changed key raises
-            # HostKeyChanged. (plink keeps PuTTY's own host-key cache and
-            # refuses unknown keys in -batch mode.)
+            # ssh.exe runs with StrictHostKeyChecking=yes and checks the key
+            # of a known host itself, so only an unknown host costs an extra
+            # connection. Its key is never added silently: the panel shows
+            # the fingerprint and saves exactly that key if the user trusts
+            # it. (plink keeps PuTTY's own host-key cache and refuses unknown
+            # keys in -batch mode.)
             from src.sftp_client import HostKeyChanged
             try:
-                pending = check_host_key(self._conn.host, self._conn.port, default_known_hosts())
+                pending = None if is_host_known(self._conn.host, self._conn.port) else \
+                    check_host_key(self._conn.host, self._conn.port, default_known_hosts())
             except HostKeyChanged as e:
                 raise RuntimeError(tr("fb.hostkey.changed", host=e.host,
                                       fingerprint=e.fingerprint, path=e.known_hosts)) from e

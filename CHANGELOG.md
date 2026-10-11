@@ -8,6 +8,63 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [Unreleased]
+
+### What changes for you
+
+- **Your saved passwords are better protected.** Someone who got hold of the app's database file could, for accounts set up with an older version, read the stored SSH passwords without knowing your app password. That is no longer possible: the database is converted when the app starts, and your next login finishes the switch to the stronger protection.
+- **No server is trusted behind your back.** The system information panel, drive mounting and the SSH console used to accept the key of a new server silently, and from then on the terminal did not ask either. Now you are always asked once, with the fingerprint of the key the server really presents, and only that key is saved. A changed key is refused.
+- **Downloads stay in the folder you chose.** A manipulated server could name files so that a download landed somewhere else on your PC, for example in the Windows startup folder. Such files are now skipped, and you are told about them.
+- **Files you create on a mounted drive are no longer writable for everyone on the server.**
+- **Updates are only installed when they can be verified.** An installer that cannot be checked against the release's checksum is discarded, and it is checked again right before it starts. An update you had already downloaded with an older version is downloaded once more.
+- **"Fix ghost drives" only removes SSHFS drives.** It used to disconnect every mapped network drive, SMB shares included.
+- **Pasting into the terminal always arrives.** Pasted text that looked like a certain kind of JSON was silently dropped.
+
+<details>
+<summary>Technical details</summary>
+
+#### Password hash no longer doubles as a key
+
+- `users.pw_hash` was `PBKDF2(password, pw_salt)`, the same value `derive_key()` uses to wrap the encryption key while `enc_key_kdf` is `'pbkdf2'`. The new column `users.pw_hash_ver` records the format: version 1 hashes are wrapped as `SHA-256(tag || hash)` at every start (no password needed, so accounts that have not signed in are covered); new hashes are `SHA-256(tag || Argon2id(password, salt))`. The first login re-hashes with a fresh salt and re-wraps the key with Argon2. Backups of the database from before the update keep the old weakness.
+- An unknown user name now costs the same hash as a real one.
+
+#### Host keys
+
+- `host_key_utils.check_host_key()` / `confirm_host_key()` read the key over a paramiko handshake and compare it with `known_hosts` (hashed entries included); `ssh-keygen -F`, `ssh-keyscan` and the silent `ensure_host_known()` are gone. The system information panel asks on the main thread; sshfs and `ssh.exe` with `SSH_ASKPASS` ask through the main window's prompt and then run with `StrictHostKeyChecking=yes`. The interactive `ssh.exe` console uses `StrictHostKeyChecking=ask`.
+- The embedded terminal checks the key inside its own handshake (`HostKeyVerifier`) instead of asking about the key of a separate `ssh-keyscan` connection.
+- Host and user names starting with `-` are refused before they reach `ssh.exe`, PuTTY or `sshfs.exe` (`src/ssh_args.py`).
+
+#### File browser
+
+- Names from the server must be one plain path component (`model.is_safe_local_name()`): no `/`, `\`, `:`, control characters, or names of only dots and spaces. Applies to downloads, folder sync, "open" and "compare".
+- Opening the terminal in a Windows folder whose path contains `$`, a backtick or typographic quotes uses the nearest ancestor without them; PowerShell evaluated `$(...)` in the `cd` line.
+
+#### sshfs
+
+- `create_umask=022` instead of `000`.
+- Host, user and remote path are no longer logged.
+- The purge removes only `net use` connections to `\\sshfs…` instead of `net use * /delete`.
+
+#### Updater
+
+- The SHA-256 check fails closed; the verified hash is stored with the pending update and checked again before the handover. The installer is started only from the updates folder, and only files inside it are ever deleted. Downloads are restricted to https assets of this repository's releases.
+
+#### IPC pipe
+
+- The owner-only security descriptor was passed through a pointer into a temporary object and fell back to the default DACL on errors. It is now built once from the process token as a protected DACL, without which no pipe is created. The first instance uses `FILE_FLAG_FIRST_PIPE_INSTANCE`, remote clients are rejected, and the askpass helper and the CLI check that the pipe server runs under the same account before sending anything (`src/ipc_security.py`).
+
+#### Terminal
+
+- Input travels as binary WebSocket frames; text frames are control messages only. The bridge uses the websockets asyncio server API.
+
+#### Release workflow
+
+- A manual run builds the given tag instead of the branch it was started from; actions are pinned to commit SHAs.
+
+</details>
+
+---
+
 ## [1.7.2]
 
 ### What changes for you

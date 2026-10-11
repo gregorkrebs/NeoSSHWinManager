@@ -261,17 +261,27 @@ def _wrap_legacy_password_hashes(conn: sqlite3.Connection) -> None:
     except Exception as exc:
         _db_logger.warning(f"Migration: Passwort-Hashes konnten nicht gelesen werden: {exc}")
         return
+    if not rows:
+        return
+    try:
+        # Zero the old values in pages SQLite frees instead of leaving them
+        # in the file.
+        conn.execute("PRAGMA secure_delete = ON")
+    except Exception:
+        pass
     for row in rows:
         try:
             wrapped = wrap_legacy_password_hash(row["pw_hash"])
         except (TypeError, ValueError):
             continue        # not a hex hash: this account cannot sign in anyway
-        conn.execute(
-            "UPDATE users SET pw_hash = ?, pw_hash_ver = ? WHERE id = ? AND pw_hash_ver = ?",
-            (wrapped, PW_HASH_WRAPPED, row["id"], PW_HASH_LEGACY),
-        )
-    if rows:
-        _db_logger.info(f"Migration: {len(rows)} Passwort-Hash(es) vom Schlüssel getrennt.")
+        try:
+            conn.execute(
+                "UPDATE users SET pw_hash = ?, pw_hash_ver = ? WHERE id = ? AND pw_hash_ver = ?",
+                (wrapped, PW_HASH_WRAPPED, row["id"], PW_HASH_LEGACY),
+            )
+        except Exception as exc:
+            _db_logger.warning(f"Migration: Passwort-Hash konnte nicht umgestellt werden: {exc}")
+    _db_logger.info(f"Migration: {len(rows)} Passwort-Hash(es) vom Schlüssel getrennt.")
 
 
 def init_db() -> None:

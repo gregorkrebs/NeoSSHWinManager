@@ -231,3 +231,27 @@ def test_sshfs_log_line_hides_the_remote():
     from src.sshfs_controller import _redact_remote
     line = _redact_remote(["sshfs.exe", "root@example.org:/srv", "Z:"], "root@example.org:/srv")
     assert "example.org" not in line and "<remote>" in line
+
+
+def test_known_host_needs_no_extra_connection(home, server, monkeypatch):
+    from src.ui import system_info_panel
+    _known_hosts(home).parent.mkdir(parents=True)
+    _known_hosts(home).write_text(known_hosts_line(_name(server), server._key) + "\n")
+    assert hku.is_host_known("127.0.0.1", server.port)
+    assert not hku.is_host_known("127.0.0.1", server.port + 1)
+
+    probes = []
+    monkeypatch.setattr(system_info_panel, "check_host_key", lambda *a, **k: probes.append(a))
+    conn = Connection(name="t", host="127.0.0.1", user="user", password="pass",
+                      port=server.port, auth_method="password")
+    thread = system_info_panel.SSHSystemInfoThread(conn)
+    monkeypatch.setattr(thread, "_find_ssh_client", lambda: ("ssh.exe", "ssh"))
+    commands = []
+    monkeypatch.setattr(system_info_panel.subprocess, "run",
+                        lambda cmd, **k: commands.append(cmd) or (_ for _ in ()).throw(OSError("no ssh")))
+    try:
+        thread._gather_info()
+    except Exception:
+        pass
+    assert probes == []
+    assert commands and "StrictHostKeyChecking=yes" in commands[0]
