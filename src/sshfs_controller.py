@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from src.config import Connection
 from src.remote_os import detect_remote_os
 from src.remote_path import looks_like_windows_path, normalize_remote_input
+from src.ssh_args import is_safe_cli_value
+from src.ui.host_key_utils import confirm_host_key, default_known_hosts
 from src.utils.secure_memory import SecureBytes
 
 SSHFS_EXE_PATHS = [
@@ -89,59 +91,42 @@ def _is_safe_remote_path(path: str) -> bool:
     return True
 
 
-def _is_host_known(host: str, port: int, known_hosts_path: str) -> bool:
-    """
-    Checks if a host is already verified in known_hosts.
-    Uses ssh-keygen -F for correct handling of hashed entries.
-    Fallback: direct text search for non-hashed entries.
-    """
-    if not os.path.exists(known_hosts_path):
-        return False
-
-    # Primär: ssh-keygen -F (also handles hashed known_hosts correctly)
-    ssh_keygen = shutil.which("ssh-keygen") or r"C:\Windows\System32\OpenSSH\ssh-keygen.exe"
-    if os.path.exists(ssh_keygen if os.path.isabs(ssh_keygen) else "") or shutil.which("ssh-keygen"):
-        try:
-            target = f"[{host}]:{port}" if port != 22 else host
-            result = subprocess.run(
-                [ssh_keygen, "-F", target, "-f", known_hosts_path],
-                capture_output=True, timeout=5,
-                creationflags=0x08000000,
-            )
-            return result.returncode == 0
-        except Exception:
-            pass
-
-    # Fallback: direct text search (only works for non-hashed entries)
-    try:
-        target_plain = host
-        target_port = f"[{host}]:{port}" if port != 22 else None
-        with open(known_hosts_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                hosts_field = parts[0]
-                for h in hosts_field.split(','):
-                    if h == target_plain or (target_port and h == target_port):
-                        return True
-    except Exception:
-        pass
-
-    return False
-
-
 def _ssh_host_key_check_option() -> str:
     """
-    Use OpenSSH's TOFU mode so the first verified connection can populate known_hosts.
-
-    Existing host-key mismatches still fail, but brand-new hosts no longer need a
-    separate manual OpenSSH pre-registration step.
+    sshfs only talks to hosts whose key is in known_hosts. _mount_direct()
+    checks the key first and asks the user about an unknown one, so nothing
+    is ever trusted silently.
     """
-    return "StrictHostKeyChecking=accept-new"
+    return "StrictHostKeyChecking=yes"
+
+
+def _redact_remote(cmd: list[str], remote: str) -> str:
+    """The sshfs command line for the log, without user, host and path."""
+    return " ".join("<remote>" if a == remote else a for a in cmd)
+
+
+def _sshfs_network_connections() -> list[str]:
+    """
+    'net use' connections that belong to SSHFS-Win (\\\\sshfs…), by local
+    name (drive letter) or, for connections without one, by remote name.
+    """
+    import win32netcon
+    import win32wnet
+    names = []
+    handle = win32wnet.WNetOpenEnum(win32netcon.RESOURCE_CONNECTED,
+                                    win32netcon.RESOURCETYPE_DISK, 0, None)
+    try:
+        while True:
+            items = win32wnet.WNetEnumResource(handle, 64)
+            if not items:
+                break
+            for res in items:
+                remote = res.lpRemoteName or ""
+                if remote.lower().startswith("\\\\sshfs"):
+                    names.append(res.lpLocalName or remote)
+    finally:
+        win32wnet.WNetCloseEnum(handle)
+    return names
 
 
 def _has_winfsp() -> bool:
@@ -295,14 +280,14 @@ class SSHFSController:
         if _drive_letter_in_use(f"{letter}:"):
             return MountResult(False, f"Laufwerksbuchstabe {letter}: ist bereits belegt.", "drive_in_use")
 
-        logger.info(f"=== SSHFS Mount Debug ===")
-        logger.info(f"Connection name: {conn.name}")
-        logger.info(f"Host: {conn.host}:{conn.port}")
-        logger.info(f"User: {conn.user}")
-        logger.info(f"Auth method: {conn.auth_method}")
-        logger.info(f"Remote path: {conn.remote_path or '/'}")
-        logger.info(f"Drive letter: {letter}:")
-        logger.info(f"SSHFS exe: {sshfs_exe}")
+        # Host, user and path are stored encrypted; keep them out of the log.
+        logger.info(f"SSHFS mount: connection {conn.id}, auth {conn.auth_method}, drive {letter}:")
+        logger.debug(f"SSHFS exe: {sshfs_exe}")
+
+        # sshfs reads an argument starting with "-" as an option
+        # ("-oProxyCommand=…" would run a local program).
+        if not (is_safe_cli_value(conn.host) and is_safe_cli_value(conn.user)):
+            return MountResult(False, "Ungültiger Hostname oder Benutzername.")
 
         # Windows OpenSSH exposes drives as /C:/… — convert a Windows-style
         # remote path (C:\Users\foo, W:\data, /C:/Users) into the forward-slash
@@ -316,7 +301,6 @@ class SSHFSController:
             # as "C" etc. Mount the user's home instead: an empty remote path
             # is relative to the SFTP server's default directory.
             remote_path = ''
-        logger.info(f"Effective remote path: {remote_path or '(home)'}")
 
         # SECURITY FIX: Validate remote_path to prevent path traversal on server
         if not _is_safe_remote_path(remote_path):
@@ -331,9 +315,23 @@ class SSHFSController:
             return MountResult(False, f"Ungültiger Label-Name: {conn.name}")
         safe_name = conn.name[:32].replace("=", "_").replace(",", "_")
 
-        # SECURITY FIX: Use absolute path for known_hosts instead of %USERPROFILE%
-        # SSHFS cannot expand %USERPROFILE% correctly
-        known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+        # Absolute path: sshfs cannot expand %USERPROFILE%.
+        known_hosts_path = default_known_hosts()
+        # sshfs runs with StrictHostKeyChecking=yes: make sure the key is
+        # known, asking the user (on the main thread) about an unknown one.
+        from src.sftp_client import HostKeyChanged, HostKeyRejected, SftpClientError
+        try:
+            confirm_host_key(conn.host, conn.port, known_hosts=known_hosts_path)
+        except HostKeyChanged as e:
+            from src.i18n import tr
+            return MountResult(False, tr("fb.hostkey.changed", host=e.host,
+                                         fingerprint=e.fingerprint, path=e.known_hosts))
+        except HostKeyRejected as e:
+            from src.i18n import tr
+            return MountResult(False, tr("fb.hostkey.rejected", host=e.host,
+                                         fingerprint=e.fingerprint))
+        except SftpClientError as e:
+            return MountResult(False, f"Verbindung zu {conn.host}:{conn.port} fehlgeschlagen: {e}")
 
         cmd = [
             sshfs_exe,
@@ -350,8 +348,12 @@ class SSHFSController:
             "-oidmap=user",
             "-ouid=-1",
             "-ogid=-1",
+            # umask only shapes the modes shown to Windows (the server still
+            # enforces its own permissions). create_umask applies to files and
+            # folders created through the drive: 000 made them writable for
+            # every account on the server.
             "-oumask=000",
-            "-ocreate_umask=000",
+            "-ocreate_umask=022",
             "-odefault_permissions",
         ]
 
@@ -457,7 +459,7 @@ class SSHFSController:
 
         proc = None
         try:
-            logger.debug(f"SSHFS command: {' '.join(cmd)}")
+            logger.debug(f"SSHFS command: {_redact_remote(cmd, remote)}")
             logger.info(f"SSHFS bin dir: {sshfs_bin_dir}")
 
             # Preparing a key or connection can take long enough for another
@@ -971,8 +973,16 @@ class SSHFSController:
             except Exception:
                 pass
 
-            subprocess.run(["net", "use", "*", "/delete", "/y"],
-                           capture_output=True, creationflags=0x08000000)
+            # Only SSHFS-Win's own connections: "net use * /delete" also
+            # dropped every other mapped network drive (SMB shares, ...).
+            try:
+                stale = _sshfs_network_connections()
+            except Exception as e:
+                logger.warning(f"Netzwerkverbindungen konnten nicht gelesen werden: {e}")
+                stale = []
+            for name in stale:
+                subprocess.run(["net", "use", name, "/delete", "/y"],
+                               capture_output=True, creationflags=0x08000000)
             ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
             logger.info("Purge abgeschlossen.")
             return True

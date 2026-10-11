@@ -19,7 +19,8 @@ from src.config import Connection
 from src.app_logger import logger
 from src.i18n import tr
 from src.remote_os import detect_remote_os
-from src.ui.host_key_utils import ensure_host_known
+from src.ssh_args import is_safe_cli_value
+from src.ui.host_key_utils import PendingHostKey, check_host_key, default_known_hosts
 
 class AuthLevelError(Exception):
     """Raised when the connection's auth method is not permitted at the current security level."""
@@ -52,53 +53,6 @@ def _is_safe_file_path(path: str) -> bool:
     return True
 
 
-def _is_host_known(host: str, port: int, known_hosts_path: str) -> bool:
-    """
-    SECURITY FIX (FINDING-02): Check whether a host is already verified in known_hosts
-    before initiating an SSH connection, to prevent MITM attacks.
-
-    Uses ssh-keygen -F for correct handling of hashed known_hosts entries.
-    Falls back to plain text search for unhashed entries.
-    """
-    if not os.path.exists(known_hosts_path):
-        return False
-
-    # Primary: ssh-keygen -F (handles hashed known_hosts correctly)
-    ssh_keygen = shutil.which("ssh-keygen") or r"C:\Windows\System32\OpenSSH\ssh-keygen.exe"
-    if shutil.which("ssh-keygen") or os.path.exists(ssh_keygen):
-        try:
-            target = f"[{host}]:{port}" if port != 22 else host
-            result = subprocess.run(
-                [ssh_keygen, "-F", target, "-f", known_hosts_path],
-                capture_output=True, timeout=5,
-                creationflags=0x08000000,
-            )
-            return result.returncode == 0
-        except Exception:
-            pass
-
-    # Fallback: direct text search (works only for non-hashed entries)
-    try:
-        target_plain = host
-        target_port = f"[{host}]:{port}" if port != 22 else None
-        with open(known_hosts_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                hosts_field = parts[0]
-                for h in hosts_field.split(','):
-                    if h == target_plain or (target_port and h == target_port):
-                        return True
-    except Exception:
-        pass
-
-    return False
-
-
 def _fmt_kb(kb: int) -> str:
     """Human-readable size from KiB, e.g. 16318464 -> '15.6G'."""
     units = ("K", "M", "G", "T", "P")
@@ -112,9 +66,17 @@ def _fmt_kb(kb: int) -> str:
 
 def _ssh_host_key_check_option() -> str:
     """
-    Use OpenSSH's TOFU mode so a first-time host can be added to known_hosts.
+    ssh.exe only talks to hosts whose key is in known_hosts: _gather_info()
+    checks the key first and the panel asks the user about unknown ones.
     """
-    return "StrictHostKeyChecking=accept-new"
+    return "StrictHostKeyChecking=yes"
+
+
+class HostKeyUnknown(Exception):
+    """The host presented a key known_hosts does not hold; the panel asks."""
+    def __init__(self, pending: PendingHostKey):
+        super().__init__(pending.fingerprint)
+        self.pending = pending
 
 
 class SSHSystemInfoThread(QThread):
@@ -128,6 +90,8 @@ class SSHSystemInfoThread(QThread):
         self._conn = conn
         self._settings = settings
         self._stopped = False
+        # Set when the host presented an unknown key (see HostKeyUnknown).
+        self.pending_host_key: PendingHostKey | None = None
         # "linux" | "windows" | None. Lets a refresh skip OS auto-detection.
         self._os_hint = os_hint
 
@@ -139,6 +103,10 @@ class SSHSystemInfoThread(QThread):
         except AuthLevelError as e:
             if not self._stopped:
                 self.error.emit(e.level, "auth_missing")
+        except HostKeyUnknown as e:
+            self.pending_host_key = e.pending
+            if not self._stopped:
+                self.error.emit(e.pending.fingerprint, "host_key_unknown")
         except ValueError as e:
             # ValueError from _build_ssh_command when key is missing
             if not self._stopped:
@@ -173,10 +141,23 @@ class SSHSystemInfoThread(QThread):
             info["error"] = "SSH client not found (ssh.exe or plink.exe)"
             return info
 
-        known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
-        # Save the host key up front so the actual data call never surfaces a
-        # spurious first-time host-key error to the user.
-        ensure_host_known(self._conn.host, self._conn.port, known_hosts_path)
+        if not (is_safe_cli_value(self._conn.host) and is_safe_cli_value(self._conn.user)):
+            raise RuntimeError(f"Ungültige Verbindung: {self._conn.user}@{self._conn.host}")
+
+        if client_type == 'ssh':
+            # ssh.exe runs with StrictHostKeyChecking=yes. An unknown key is
+            # never added silently: the panel shows its fingerprint and saves
+            # exactly that key if the user trusts it. A changed key raises
+            # HostKeyChanged. (plink keeps PuTTY's own host-key cache and
+            # refuses unknown keys in -batch mode.)
+            from src.sftp_client import HostKeyChanged
+            try:
+                pending = check_host_key(self._conn.host, self._conn.port, default_known_hosts())
+            except HostKeyChanged as e:
+                raise RuntimeError(tr("fb.hostkey.changed", host=e.host,
+                                      fingerprint=e.fingerprint, path=e.known_hosts)) from e
+            if pending is not None:
+                raise HostKeyUnknown(pending)
 
         # Build command based on client type
         if client_type == 'plink':
@@ -510,11 +491,10 @@ class SSHSystemInfoThread(QThread):
 
     def _build_ssh_command(self, ssh_exe: str) -> tuple[list, str]:
         """Build SSH command for native ssh.exe. Password auth uses SSH_ASKPASS from _get_ssh_env().
-        SECURITY FIX (FINDING-02): Uses StrictHostKeyChecking=yes (not accept-new) because
-        _gather_info() already verified the host is present in known_hosts."""
+        Uses StrictHostKeyChecking=yes: _gather_info() has checked the host key first."""
         # Key is only "available" if auth_method is "key" AND key exists
         has_key = self._conn.auth_method == "key" and bool(self._conn.key_path)
-        known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+        known_hosts_path = default_known_hosts()
 
         if has_key:
             auth_options = [
@@ -620,6 +600,8 @@ class SystemInfoPanel(QFrame):
         self._loading_anim_phase: int = 0
         # Cached remote OS ("linux"/"windows") so refreshes skip auto-detection.
         self._remote_os: str | None = None
+        # Fingerprint of an unknown host key the user declined (not asked again).
+        self._declined_host_key: str | None = None
 
         self.setObjectName("systemInfoPanel")
         self._build_ui()
@@ -1088,8 +1070,36 @@ class SystemInfoPanel(QFrame):
         # Drives
         self._update_drives(info.get("drives_list") or [])
 
+    def _ask_host_key(self, pending: PendingHostKey) -> bool:
+        from PyQt6.QtWidgets import QMessageBox
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(tr("terminal.host_key_dialog.title"))
+        dlg.setText(tr("terminal.host_key_dialog.body").format(
+            host=pending.name, fingerprint=pending.fingerprint))
+        dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dlg.setDefaultButton(QMessageBox.StandardButton.No)
+        return dlg.exec() == QMessageBox.StandardButton.Yes
+
     def _on_error(self, msg: str, error_type: str = "generic"):
         self._set_loading_overlay_visible(False)
+        if error_type == "host_key_unknown":
+            pending = getattr(self.sender(), "pending_host_key", None)
+            if pending is None:
+                error_type = "generic"
+            else:
+                # Ask once per key: the automatic refresh must not repeat a
+                # question the user already answered with "no".
+                if pending.fingerprint != self._declined_host_key and self._ask_host_key(pending):
+                    try:
+                        pending.trust()
+                    except OSError as e:
+                        logger.warning(f"Host-Key konnte nicht gespeichert werden: {e}")
+                    else:
+                        self._fetch_info()
+                        return
+                self._declined_host_key = pending.fingerprint
+                msg = tr("fb.hostkey.rejected", host=pending.name, fingerprint=pending.fingerprint)
+                error_type = "generic"
         if error_type == "auth_missing":
             self._state_card.hide()
             self._show_overlay_error(

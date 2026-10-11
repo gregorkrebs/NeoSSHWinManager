@@ -323,7 +323,12 @@ class MainWindow(FramelessMainWindow):
 
         # Integrated terminal (xterm.js)
         self._bridge_server = None
-        self._terminal_invoker = None   # asks host-key questions for the connect threads
+        # Asks host-key questions for worker threads (terminal connect, SSHFS
+        # mount) on the main thread; also used by confirm_host_key().
+        from src.filebrowser.threads import MainThreadInvoker
+        from src.ui.host_key_utils import set_host_key_prompt
+        self._terminal_invoker = MainThreadInvoker(self)
+        set_host_key_prompt(self._terminal_tofu_callback)
         self._terminal_panels: dict[str, object] = {}       # session_key → TerminalPanel
         self._terminal_conn_tabs: dict[str, list] = {}       # conn_id → [session_key, ...]
         self._terminal_active_tab: dict[str, str] = {}       # conn_id → active session_key
@@ -5634,11 +5639,13 @@ class MainWindow(FramelessMainWindow):
         if confirm and not self._confirm_quit_with_transfers():
             return
         self._explicit_quit = True
+        # First: a connect or mount thread waiting for a host-key answer gives
+        # up instead of holding up the shutdown below.
+        if self._terminal_invoker:
+            self._terminal_invoker.close()
         self._close_file_browser()
         if unmount:
             self._shutdown_disconnect_all()
-        if self._terminal_invoker:
-            self._terminal_invoker.close()  # a connect thread waiting for an answer gives up
         if self._bridge_server:
             try:
                 self._bridge_server.stop()
@@ -6010,9 +6017,7 @@ class MainWindow(FramelessMainWindow):
 
     def _start_terminal_bridge(self):
         try:
-            from src.filebrowser.threads import MainThreadInvoker
             from src.terminal.bridge_server import TerminalBridgeServer
-            self._terminal_invoker = MainThreadInvoker(self)
             self._bridge_server = TerminalBridgeServer()
             self._bridge_server.host_key_verify_callback = self._terminal_tofu_callback
             self._bridge_server.start()

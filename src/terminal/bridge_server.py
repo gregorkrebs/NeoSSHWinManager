@@ -6,16 +6,14 @@ Security properties:
 - The WebSocket carries only raw terminal I/O (stdin/stdout/stderr); no credentials ever.
 - Session tokens are UUID4, single-use: consumed on first WebSocket connection.
 - Server binds exclusively to 127.0.0.1 on an OS-assigned ephemeral port.
-- Host key verification uses RejectPolicy + TOFU dialog (no AutoAddPolicy).
+- Host keys are checked inside the handshake (HostKeyVerifier): unknown keys are
+  shown to the user with the fingerprint of the key actually presented.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -129,41 +127,36 @@ class TerminalBridgeServer:
         password = getattr(conn, "password", "") or ""
         key_path = getattr(conn, "key_path", "") or ""
 
-        known_hosts_path = os.path.expanduser(r"~\.ssh\known_hosts")
+        from src.sftp_client import HostKeyChanged, HostKeyRejected, HostKeyVerifier
+        from src.ui.host_key_utils import default_known_hosts
 
+        # The key is checked inside the handshake: the fingerprint the user is
+        # asked about is the key this very connection presented, and that is
+        # the key that gets saved.
+        verifier = HostKeyVerifier(host, port, default_known_hosts(),
+                                   self.host_key_verify_callback)
         client = paramiko.SSHClient()
-
-        # Check if host is already known
-        if _is_host_known(host, port, known_hosts_path):
-            client.set_missing_host_key_policy(paramiko.RejectPolicy())
-            client.load_host_keys(known_hosts_path)
-        else:
-            # Unknown host: ask user via TOFU callback
-            fingerprint = _get_server_fingerprint(host, port)
-            accepted = False
-            if self.host_key_verify_callback and fingerprint:
-                accepted = self.host_key_verify_callback(host, port, fingerprint)
-            if not accepted:
-                logger.warning("Terminal: TOFU rejected for %s:%d", host, port)
-                return None
-            # Accept and save to known_hosts
-            policy = _TOFUAcceptPolicy(known_hosts_path)
-            client.set_missing_host_key_policy(policy)
+        client.set_missing_host_key_policy(verifier)
+        common = dict(port=port, username=user, timeout=15,
+                      transport_factory=verifier.transport_factory)
 
         try:
             if auth_method == "key" and key_path:
-                client.connect(host, port=port, username=user, key_filename=key_path, timeout=15)
+                client.connect(host, key_filename=key_path, **common)
             elif auth_method == "key" and getattr(conn, "putty_key_path", ""):
                 # PPK keys: paramiko can load them if they are OpenSSH-compatible
                 # (PPK v2/v3 format). Try key_path first, fallback to putty_key_path.
-                ppk_path = conn.putty_key_path
-                client.connect(host, port=port, username=user, key_filename=ppk_path, timeout=15)
+                client.connect(host, key_filename=conn.putty_key_path, **common)
             elif auth_method in ("password", "ask") and password:
-                client.connect(host, port=port, username=user, password=password, timeout=15)
+                client.connect(host, password=password, **common)
             else:
                 logger.error("Terminal: unsupported auth_method=%s or missing credentials", auth_method)
                 client.close()
                 return None
+        except (HostKeyRejected, HostKeyChanged) as e:
+            logger.warning("Terminal: host key not trusted for %s:%d – %s", host, port, e)
+            client.close()
+            return None
         except paramiko.AuthenticationException as e:
             logger.error("Terminal: authentication failed for %s@%s:%d – %s", user, host, port, e)
             client.close()
@@ -173,11 +166,15 @@ class TerminalBridgeServer:
             client.close()
             return None
         finally:
-            # Wipe password from local scope regardless of success/failure
             password = ""
 
-        channel = client.invoke_shell(term="xterm-256color", width=80, height=24)
-        channel.setblocking(False)
+        try:
+            channel = client.invoke_shell(term="xterm-256color", width=80, height=24)
+            channel.setblocking(False)
+        except Exception as e:
+            logger.error("Terminal: could not open a shell on %s:%d – %s", host, port, e)
+            client.close()
+            return None
 
         # Keepalive every 30 s — prevents server-side idle disconnect regardless of data flow
         transport = client.get_transport()
@@ -376,14 +373,3 @@ class TerminalBridgeServer:
         except Exception:
             pass
         logger.debug("Terminal: session %s closed", conn_id)
-
-
-# ---------------------------------------------------------------------------
-# Host-key helpers (shared with sftp_client via host_key_utils)
-# ---------------------------------------------------------------------------
-
-from src.ui.host_key_utils import (
-    is_host_known as _is_host_known,
-    get_server_fingerprint as _get_server_fingerprint,
-    TOFUAcceptPolicy as _TOFUAcceptPolicy,
-)

@@ -18,7 +18,9 @@ from src.app_logger import logger
 from src.config import Connection
 # Re-exported so callers can keep importing these from src.sftp_client.
 from src.remote_path import looks_like_windows_path, normalize_remote_input
-from src.ui.host_key_utils import append_known_hosts, key_fingerprint, known_hosts_line
+from src.ui.host_key_utils import (
+    append_known_hosts, default_known_hosts, key_fingerprint, known_hosts_line,
+)
 
 __all__ = [
     "SftpEntry",
@@ -191,7 +193,7 @@ class SftpClient:
         Raises SftpClientError on any failure (HostKeyRejected / HostKeyChanged
         for host-key problems).
         """
-        known_hosts = os.path.expanduser(r"~\.ssh\known_hosts")
+        known_hosts = default_known_hosts()
         port = int(conn.port or 22)
         verifier = HostKeyVerifier(conn.host, port, known_hosts, tofu_callback)
         client = paramiko.SSHClient()

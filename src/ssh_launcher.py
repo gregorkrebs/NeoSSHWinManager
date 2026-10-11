@@ -210,12 +210,38 @@ def _launch_native_ssh(conn: Connection, settings: AppSettings | None = None) ->
     if not _is_safe_label(conn.name):
         return False, f"Ungültiger Verbindungsname: {conn.name}"
 
-    # SECURITY FIX: Use absolute path for known_hosts instead of %USERPROFILE%
-    known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
-    
+    from src.ui.host_key_utils import default_known_hosts
+    known_hosts_path = default_known_hosts()
+    sec_level = getattr(settings, 'security_level', 0) if settings else 0
+    use_askpass = sec_level >= 1 and conn.auth_method == "password" and bool(conn.password)
+
+    if use_askpass:
+        # SSH_ASKPASS_REQUIRE=force would route OpenSSH's own host-key
+        # question to the password helper, so check the key here: the user
+        # sees the fingerprint of the key the server presents, and only that
+        # key is saved. ssh.exe then accepts nothing else.
+        from src.sftp_client import HostKeyChanged, HostKeyRejected, SftpClientError
+        from src.ui.host_key_utils import confirm_host_key
+        try:
+            confirm_host_key(conn.host, conn.port, known_hosts=known_hosts_path, timeout=8)
+        except HostKeyChanged as e:
+            from src.i18n import tr
+            return False, tr("fb.hostkey.changed", host=e.host, fingerprint=e.fingerprint,
+                             path=e.known_hosts)
+        except HostKeyRejected as e:
+            from src.i18n import tr
+            return False, tr("fb.hostkey.rejected", host=e.host, fingerprint=e.fingerprint)
+        except SftpClientError as e:
+            return False, str(e)
+        host_key_check = "StrictHostKeyChecking=yes"
+    else:
+        # Interactive console: OpenSSH itself shows the fingerprint of an
+        # unknown key and asks; a changed key is refused.
+        host_key_check = "StrictHostKeyChecking=ask"
+
     ssh_cmd_list = [
         ssh_exe,
-        "-o", "StrictHostKeyChecking=accept-new", # First use is trusted, changed hosts still fail
+        "-o", host_key_check,
         "-o", f"UserKnownHostsFile={known_hosts_path}",
         "-p", str(conn.port),
     ]
@@ -229,8 +255,7 @@ def _launch_native_ssh(conn: Connection, settings: AppSettings | None = None) ->
     ssh_cmd_list.append(f"{conn.user}@{conn.host}")
 
     env = os.environ.copy()
-    sec_level = getattr(settings, 'security_level', 0) if settings else 0
-    if sec_level >= 1 and conn.auth_method == "password" and conn.password:
+    if use_askpass:
         import sys as _sys
         import os.path as _osp
         from src.askpass_manager import create_token
@@ -410,7 +435,8 @@ def launch_ssh_in_current_terminal(conn_data: dict, exec_command: str = None, cl
     # load_host_keys() below every single connection was rejected regardless of
     # what's actually trusted on disk (silently, since the resulting error only
     # ever reached ssh_launcher's own CONOUT$ write, never surfaced anywhere).
-    known_hosts_path = os.path.expanduser("~\\.ssh\\known_hosts")
+    from src.ui.host_key_utils import default_known_hosts
+    known_hosts_path = default_known_hosts()
     try:
         client.load_host_keys(known_hosts_path)
     except Exception:
@@ -614,6 +640,10 @@ def _is_safe_ssh_identifier(value: str) -> bool:
     Prevents command injection attacks.
     """
     if not value or not isinstance(value, str):
+        return False
+    # A leading "-" would make ssh/PuTTY read the value as an option
+    # (e.g. "-oProxyCommand=..." runs a local program).
+    if value.startswith("-"):
         return False
     # Allow alphanumeric, dots, dashes, underscores, @ for user@host
     allowed = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@')

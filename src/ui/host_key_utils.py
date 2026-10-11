@@ -1,130 +1,118 @@
 """
-host_key_utils.py – SSH host-key verification helpers shared by the terminal bridge
-and the SFTP browser.
+host_key_utils.py – SSH host-key verification helpers shared by the terminal
+bridge, the SFTP browser and the external clients (ssh.exe, sshfs.exe).
 
-Provides TOFU (Trust On First Use) utilities that check known_hosts, fetch server
-fingerprints via ssh-keyscan, and implement a paramiko missing-host-key policy
-that saves accepted keys to disk.
+Every check reads known_hosts with paramiko (hashed entries included) and asks
+on first contact with the fingerprint of the key the server actually
+presented. The key that was shown is the key that gets saved: no separate
+ssh-keyscan run whose answer may differ, and nothing is ever added without
+the user's consent.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
+import socket
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+# ask(host, port, fingerprint) -> True to trust and save the key
+HostKeyPrompt = Callable[[str, int, str], bool]
+
+_prompt: Optional[HostKeyPrompt] = None
 
 
-def is_host_known(host: str, port: int, known_hosts_path: str) -> bool:
-    """Return True if host:port already appears in known_hosts_path."""
-    if not os.path.exists(known_hosts_path):
-        return False
+def default_known_hosts() -> str:
+    """The user's OpenSSH known_hosts (%USERPROFILE%\\.ssh\\known_hosts on Windows)."""
+    return os.path.join(os.path.expanduser("~"), ".ssh", "known_hosts")
 
-    ssh_keygen = shutil.which("ssh-keygen") or r"C:\Windows\System32\OpenSSH\ssh-keygen.exe"
-    if shutil.which("ssh-keygen") or os.path.exists(ssh_keygen):
-        try:
-            target = f"[{host}]:{port}" if port != 22 else host
-            result = subprocess.run(
-                [ssh_keygen, "-F", target, "-f", known_hosts_path],
-                capture_output=True, timeout=5,
-                creationflags=0x08000000,
-            )
-            return result.returncode == 0
-        except Exception:
-            pass
 
-    # Fallback: plain-text scan (does not handle hashed entries)
+def set_host_key_prompt(ask: Optional[HostKeyPrompt]) -> None:
+    """
+    Register the question confirm_host_key() asks when no callback is passed.
+    The main window registers a thread-safe dialog; without one, unknown hosts
+    are refused.
+    """
+    global _prompt
+    _prompt = ask
+
+
+@dataclass
+class PendingHostKey:
+    """A key the server presented that known_hosts does not hold yet."""
+    host: str
+    port: int
+    name: str           # known_hosts host field: "host" or "[host]:port"
+    key: object         # paramiko.PKey
+    fingerprint: str
+    known_hosts: str
+
+    def trust(self) -> None:
+        """Save exactly this key (the one the user was shown)."""
+        append_known_hosts(self.known_hosts, [known_hosts_line(self.name, self.key)])
+
+
+def check_host_key(host: str, port: int, known_hosts: Optional[str] = None,
+                   timeout: float = 10.0) -> Optional[PendingHostKey]:
+    """
+    Read the key the host presents and compare it with known_hosts.
+
+    Returns None when it is known, a PendingHostKey to put to the user when it
+    is not. Raises src.sftp_client.HostKeyChanged when known_hosts holds a
+    different key of the same type, SftpClientError when the host cannot be
+    reached.
+    """
+    from src.sftp_client import HostKeyChanged, HostKeyVerifier, SftpClientError
+
+    known_hosts = known_hosts or default_known_hosts()
+    port = int(port or 22)
+    verifier = HostKeyVerifier(host, port, known_hosts, None)
     try:
-        target_plain = host
-        target_port = f"[{host}]:{port}" if port != 22 else None
-        with open(known_hosts_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                for h in parts[0].split(","):
-                    if h == target_plain or (target_port and h == target_port):
-                        return True
-    except Exception:
-        pass
-
-    return False
-
-
-def get_server_fingerprint(host: str, port: int) -> str | None:
-    """Return the SHA256 fingerprint of the server's host key, or None on failure."""
-    ssh_keyscan = shutil.which("ssh-keyscan") or r"C:\Windows\System32\OpenSSH\ssh-keyscan.exe"
-    if not (shutil.which("ssh-keyscan") or os.path.exists(ssh_keyscan)):
-        return None
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as e:
+        raise SftpClientError(str(e)) from e
+    transport = None
     try:
-        result = subprocess.run(
-            [ssh_keyscan, "-p", str(port), "-H", host],
-            capture_output=True, timeout=8,
-            creationflags=0x08000000,
-        )
-        keyscan_output = result.stdout.decode("utf-8", errors="ignore")
-        if not keyscan_output.strip():
+        transport = verifier.transport_factory(sock)
+        transport.start_client(timeout=timeout)
+        key = transport.get_remote_server_key()
+    except Exception as e:
+        raise SftpClientError(str(e)) from e
+    finally:
+        if transport is not None:
+            transport.close()
+        else:
+            sock.close()
+
+    stored = verifier.known.get(key.get_name())
+    if stored is not None:
+        if stored.asbytes() == key.asbytes():
             return None
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
-            tmp.write(keyscan_output)
-            tmp_path = tmp.name
-        try:
-            ssh_keygen = ssh_keyscan.replace("ssh-keyscan", "ssh-keygen").replace(
-                "ssh-keyscan.exe", "ssh-keygen.exe"
-            )
-            r2 = subprocess.run(
-                [ssh_keygen, "-l", "-f", tmp_path],
-                capture_output=True, timeout=5,
-                creationflags=0x08000000,
-            )
-            lines = r2.stdout.decode("utf-8", errors="ignore").strip().splitlines()
-            if lines:
-                return lines[0]
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return None
+        raise HostKeyChanged(verifier.name, key_fingerprint(key), known_hosts)
+    return PendingHostKey(host, port, verifier.name, key, key_fingerprint(key), known_hosts)
 
 
-def ensure_host_known(host: str, port: int, known_hosts_path: str) -> bool:
+def confirm_host_key(host: str, port: int, ask: Optional[HostKeyPrompt] = None,
+                     known_hosts: Optional[str] = None, timeout: float = 10.0) -> None:
     """
-    Make sure host:port is present in known_hosts, adding it silently if missing.
+    For clients that verify host keys themselves (ssh.exe with
+    StrictHostKeyChecking=yes, sshfs.exe): make sure the key the host presents
+    is in known_hosts, asking on first contact (ask, else the registered
+    prompt; without either, unknown hosts are refused).
 
-    Used before headless SSH subprocess calls (e.g. the system-info panel) so a
-    first-time host does not surface a spurious host-key error to the user. The
-    key is fetched with ssh-keyscan and appended to known_hosts. Returns True if
-    the host is known afterwards.
+    Returns when the key is known or was accepted and saved. Raises
+    src.sftp_client.HostKeyRejected / HostKeyChanged for host-key problems and
+    SftpClientError when the host cannot be reached.
     """
-    if is_host_known(host, port, known_hosts_path):
-        return True
+    from src.sftp_client import HostKeyRejected
 
-    ssh_keyscan = shutil.which("ssh-keyscan") or r"C:\Windows\System32\OpenSSH\ssh-keyscan.exe"
-    if not (shutil.which("ssh-keyscan") or os.path.exists(ssh_keyscan)):
-        return False
-    try:
-        result = subprocess.run(
-            [ssh_keyscan, "-p", str(port), "-H", host],
-            capture_output=True, timeout=8,
-            creationflags=0x08000000,
-        )
-        output = result.stdout.decode("utf-8", errors="ignore")
-        lines = [
-            line for line in output.splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        if not lines:
-            return False
-        append_known_hosts(known_hosts_path, lines)
-        return True
-    except Exception:
-        return False
+    pending = check_host_key(host, port, known_hosts, timeout)
+    if pending is None:
+        return
+    ask = ask or _prompt
+    if not (ask and ask(pending.host, pending.port, pending.fingerprint)):
+        raise HostKeyRejected(pending.name, pending.fingerprint)
+    pending.trust()
 
 
 def append_known_hosts(known_hosts_path: str, lines: list[str]) -> None:
@@ -166,12 +154,3 @@ def key_fingerprint(key) -> str:
         bits = 0
     return f"{bits} SHA256:{digest} ({label})" if bits else f"SHA256:{digest} ({label})"
 
-
-class TOFUAcceptPolicy:
-    """Paramiko missing-host-key policy that saves accepted keys to known_hosts."""
-
-    def __init__(self, known_hosts_path: str) -> None:
-        self._path = known_hosts_path
-
-    def missing_host_key(self, client, hostname: str, key) -> None:
-        append_known_hosts(self._path, [known_hosts_line(hostname, key)])
