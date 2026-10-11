@@ -57,35 +57,80 @@ _KEYRING_USERNAME = "master_encryption_key"
 
 # ------------------------------------------------------------------
 # Passwort-Hashing (für App-Login)
+#
+# The stored verifier (users.pw_hash) must never equal a key that wraps the
+# user's encryption key. Up to 1.7.2 it was PBKDF2(password, pw_salt) — the
+# very value derive_key() returns for accounts whose enc_key_kdf is still
+# 'pbkdf2'. Whoever read the database could unwrap those accounts' keys
+# without knowing the password. users.pw_hash_ver tells the formats apart:
+#
+#   1  PBKDF2(pw, salt)                          legacy, equals the old wrapping key
+#   2  SHA-256(tag2 || PBKDF2(pw, salt))         legacy hash wrapped once, no password needed
+#   3  SHA-256(tag3 || Argon2id(pw, salt))       current
+#
+# Versions 2 and 3 are one-way functions of the derived key, so the stored
+# value reveals nothing that unwraps anything.
 # ------------------------------------------------------------------
+
+PW_HASH_LEGACY = 1
+PW_HASH_WRAPPED = 2
+PW_HASH_ARGON2 = 3
+PW_HASH_CURRENT = PW_HASH_ARGON2
+
+_VERIFIER_TAG_V2 = b"NeoSSHWinManager/password-verifier/v2"
+_VERIFIER_TAG_V3 = b"NeoSSHWinManager/password-verifier/v3"
+
+
+def _pbkdf2(password: str, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        _PBKDF2_HASH,
+        password.encode("utf-8"),
+        salt,
+        _PBKDF2_ITERATIONS,
+        dklen=_KEY_LEN,
+    )
+
+
+def _argon2(password: str, salt: bytes) -> bytes:
+    pw_secure = SecureBytes.from_string(password)
+    try:
+        derived, _ = derive_key_argon2(pw_secure, salt)
+    finally:
+        pw_secure.wipe()
+    return derived
+
+
+def wrap_legacy_password_hash(hash_hex: str) -> str:
+    """Version-1 hash → version-2 hash. Needs no password (database migration)."""
+    return hashlib.sha256(_VERIFIER_TAG_V2 + bytes.fromhex(hash_hex)).hexdigest()
+
 
 def hash_password(password: str) -> Tuple[str, str]:
     """
-    Erzeugt einen sicheren Hash des App-Passworts.
-    Returns (hash_hex, salt_hex).
+    Erzeugt einen sicheren Hash des App-Passworts im aktuellen Format
+    (PW_HASH_CURRENT). Returns (hash_hex, salt_hex).
     """
     salt = secrets.token_bytes(32)
-    pw_hash = hashlib.pbkdf2_hmac(
-        _PBKDF2_HASH,
-        password.encode("utf-8"),
-        salt,
-        _PBKDF2_ITERATIONS,
-        dklen=_KEY_LEN,
-    )
-    return pw_hash.hex(), salt.hex()
+    derived = _argon2(password, salt)
+    return hashlib.sha256(_VERIFIER_TAG_V3 + derived).hexdigest(), salt.hex()
 
 
-def verify_password(password: str, hash_hex: str, salt_hex: str) -> bool:
+def verify_password(password: str, hash_hex: str, salt_hex: str,
+                    version: int = PW_HASH_LEGACY) -> bool:
     """Prüft ob ein Passwort mit dem gespeicherten Hash übereinstimmt."""
-    salt = bytes.fromhex(salt_hex)
-    expected = bytes.fromhex(hash_hex)
-    actual = hashlib.pbkdf2_hmac(
-        _PBKDF2_HASH,
-        password.encode("utf-8"),
-        salt,
-        _PBKDF2_ITERATIONS,
-        dklen=_KEY_LEN,
-    )
+    try:
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except (TypeError, ValueError):
+        return False
+    if version == PW_HASH_ARGON2:
+        actual = hashlib.sha256(_VERIFIER_TAG_V3 + _argon2(password, salt)).digest()
+    elif version == PW_HASH_WRAPPED:
+        actual = hashlib.sha256(_VERIFIER_TAG_V2 + _pbkdf2(password, salt)).digest()
+    elif version == PW_HASH_LEGACY:
+        actual = _pbkdf2(password, salt)
+    else:
+        return False
     # Timing-safe Vergleich
     return hmac.compare_digest(actual, expected)
 
@@ -95,14 +140,7 @@ def derive_key(password: str, salt_hex: str) -> bytes:
     Leitet einen 256-bit Schlüssel aus dem Passwort ab.
     Wird genutzt um den Encryption Key des Benutzers zu ver-/entschlüsseln.
     """
-    salt = bytes.fromhex(salt_hex)
-    return hashlib.pbkdf2_hmac(
-        _PBKDF2_HASH,
-        password.encode("utf-8"),
-        salt,
-        _PBKDF2_ITERATIONS,
-        dklen=_KEY_LEN,
-    )
+    return _pbkdf2(password, bytes.fromhex(salt_hex))
 
 
 def derive_key_argon2(password: SecureBytes, salt: Optional[bytes] = None) -> Tuple[bytes, bytes]:

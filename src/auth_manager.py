@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 from src.database import get_connection
 from src.crypto import (
-    hash_password, verify_password, generate_enc_key,
+    hash_password, verify_password, generate_enc_key, PW_HASH_CURRENT, PW_HASH_LEGACY,
     encrypt_key, decrypt_key, encrypt, decrypt, is_available,
     is_keyring_available, store_key_in_credential_manager,
     retrieve_key_from_credential_manager, delete_key_from_credential_manager
@@ -66,6 +66,19 @@ def _lockout_for_count(count: int) -> int:
     if count > last_boundary and (count - last_boundary) % last_step == 0:
         return last_dur
     return 0
+
+
+# Stand-in for unknown user names (see AuthManager.authenticate).
+_DUMMY_HASH_HEX = "00" * 32
+_DUMMY_SALT_HEX = "00" * 32
+
+
+def _pw_hash_version(row) -> int:
+    """Format of users.pw_hash (src/crypto.py PW_HASH_*); old rows lack the column."""
+    try:
+        return int(row["pw_hash_ver"]) if "pw_hash_ver" in row.keys() else PW_HASH_LEGACY
+    except (TypeError, ValueError):
+        return PW_HASH_LEGACY
 
 
 # ------------------------------------------------------------------
@@ -357,10 +370,11 @@ class AuthManager:
         try:
             with get_connection() as conn:
                 conn.execute(
-                    """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                    """UPDATE users SET username=?, pw_hash=?, pw_salt=?, pw_hash_ver=?,
                        enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
                        is_admin=1 WHERE id=?""",
-                    (cls._SINGLE_USERNAME, pw_hash, salt, enc_key_enc, enc_key_iv, current.id),
+                    (cls._SINGLE_USERNAME, pw_hash, salt, PW_HASH_CURRENT,
+                     enc_key_enc, enc_key_iv, current.id),
                 )
                 conn.execute("UPDATE application_mode SET single_user=1 WHERE id=1")
         except Exception:
@@ -400,10 +414,10 @@ class AuthManager:
         enc_key_enc, enc_key_iv = encrypt_key(key, password, salt, kdf="argon2")
         with get_connection() as conn:
             conn.execute(
-                """UPDATE users SET username=?, pw_hash=?, pw_salt=?,
+                """UPDATE users SET username=?, pw_hash=?, pw_salt=?, pw_hash_ver=?,
                    enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2',
                    is_admin=1 WHERE id=?""",
-                (username, pw_hash, salt, enc_key_enc, enc_key_iv, row["id"]),
+                (username, pw_hash, salt, PW_HASH_CURRENT, enc_key_enc, enc_key_iv, row["id"]),
             )
             conn.execute("UPDATE application_mode SET single_user=0 WHERE id=1")
 
@@ -502,9 +516,10 @@ class AuthManager:
 
             conn.execute(
                 """INSERT INTO users
-                   (id, username, pw_hash, pw_salt, enc_key_enc, enc_key_iv, enc_key_kdf, is_admin)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, username.strip(), pw_hash, salt,
+                   (id, username, pw_hash, pw_salt, pw_hash_ver, enc_key_enc, enc_key_iv,
+                    enc_key_kdf, is_admin)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, username.strip(), pw_hash, salt, PW_HASH_CURRENT,
                  enc_key_enc, enc_key_iv, 'argon2', int(is_admin))
             )
             # Default-Einstellungen anlegen. Falls der Windows-Installer
@@ -587,13 +602,17 @@ class AuthManager:
                 return lockout
 
         if not row:
+            # Spend the time a real check costs, so the response time does
+            # not tell which user names exist.
+            verify_password(password, _DUMMY_HASH_HEX, _DUMMY_SALT_HEX, PW_HASH_CURRENT)
             lockout = _record_failure()
             logger.warning(f"Login fehlgeschlagen: Benutzer '{username}' nicht gefunden.")
             if lockout:
                 raise LoginLockedError(lockout, _login_attempts[key]["count"])
             return None
 
-        if not verify_password(password, row["pw_hash"], row["pw_salt"]):
+        pw_hash_ver = _pw_hash_version(row)
+        if not verify_password(password, row["pw_hash"], row["pw_salt"], pw_hash_ver):
             lockout = _record_failure()
             logger.warning(f"Login fehlgeschlagen: Falsches Passwort für '{username}'.")
             if lockout:
@@ -617,16 +636,20 @@ class AuthManager:
             _enc_key=enc_key,
         )
 
-        # Transparente Migration: PBKDF2 → Argon2 beim ersten Login nach Update
-        if kdf == "pbkdf2":
+        # Transparente Migration beim ersten Login nach Update: Argon2 als
+        # KDF und ein Passwort-Hash im aktuellen Format. Neues Salt, damit
+        # weder Hash noch Schlüssel etwas mit den alten Werten teilen.
+        if kdf != "argon2" or pw_hash_ver != PW_HASH_CURRENT:
             try:
-                new_enc, new_iv = encrypt_key(enc_key, password, row["pw_salt"], kdf='argon2')
+                new_hash, new_salt = hash_password(password)
+                new_enc, new_iv = encrypt_key(enc_key, password, new_salt, kdf='argon2')
                 with get_connection() as db:
                     db.execute(
-                        "UPDATE users SET enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2' WHERE id=?",
-                        (new_enc, new_iv, row["id"])
+                        """UPDATE users SET pw_hash=?, pw_salt=?, pw_hash_ver=?,
+                           enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2' WHERE id=?""",
+                        (new_hash, new_salt, PW_HASH_CURRENT, new_enc, new_iv, row["id"])
                     )
-                logger.info(f"KDF-Migration zu Argon2 abgeschlossen für Benutzer '{row['username']}'.")
+                logger.info(f"Passwort-/KDF-Migration abgeschlossen für Benutzer '{row['username']}'.")
             except Exception as e:
                 logger.warning(f"KDF-Migration fehlgeschlagen (nicht kritisch): {e}")
 
@@ -654,7 +677,8 @@ class AuthManager:
                 "SELECT * FROM users WHERE id = ?", (user_id,)
             ).fetchone()
 
-        if not row or not verify_password(old_pw, row["pw_hash"], row["pw_salt"]):
+        if not row or not verify_password(old_pw, row["pw_hash"], row["pw_salt"],
+                                          _pw_hash_version(row)):
             return False
 
         kdf = row["enc_key_kdf"] if "enc_key_kdf" in row.keys() else "pbkdf2"
@@ -672,9 +696,9 @@ class AuthManager:
 
         with get_connection() as conn:
             conn.execute(
-                """UPDATE users SET pw_hash=?, pw_salt=?, enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2'
-                   WHERE id=?""",
-                (new_hash, new_salt, new_enc_key_enc, new_enc_key_iv, user_id)
+                """UPDATE users SET pw_hash=?, pw_salt=?, pw_hash_ver=?, enc_key_enc=?, enc_key_iv=?,
+                   enc_key_kdf='argon2' WHERE id=?""",
+                (new_hash, new_salt, PW_HASH_CURRENT, new_enc_key_enc, new_enc_key_iv, user_id)
             )
 
         # CWE-362: Atomares Update über Session.update_enc_key (thread-safe)
@@ -714,9 +738,9 @@ class AuthManager:
             new_enc_key_enc, new_enc_key_iv = encrypt_key(new_enc_key, new_pw, new_salt, kdf='argon2')
 
             conn.execute(
-                """UPDATE users SET pw_hash=?, pw_salt=?, enc_key_enc=?, enc_key_iv=?, enc_key_kdf='argon2'
-                   WHERE id=?""",
-                (new_hash, new_salt, new_enc_key_enc, new_enc_key_iv, user_id)
+                """UPDATE users SET pw_hash=?, pw_salt=?, pw_hash_ver=?, enc_key_enc=?, enc_key_iv=?,
+                   enc_key_kdf='argon2' WHERE id=?""",
+                (new_hash, new_salt, PW_HASH_CURRENT, new_enc_key_enc, new_enc_key_iv, user_id)
             )
             # Alte verschlüsselte SSH-Passwörter sind unlesbar → leeren
             conn.execute(

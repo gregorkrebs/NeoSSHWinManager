@@ -245,6 +245,35 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _wrap_legacy_password_hashes(conn: sqlite3.Connection) -> None:
+    """
+    Version-1 password hashes equal the key that wraps the account's
+    encryption key while enc_key_kdf is still 'pbkdf2'. Hash them once more
+    (version 2) so the database alone no longer unwraps anything. This needs
+    no password, so it runs for every account, signed in since or not; the
+    next login moves the account on to the current format.
+    """
+    from src.crypto import PW_HASH_LEGACY, PW_HASH_WRAPPED, wrap_legacy_password_hash
+    try:
+        rows = conn.execute(
+            "SELECT id, pw_hash FROM users WHERE pw_hash_ver = ?", (PW_HASH_LEGACY,)
+        ).fetchall()
+    except Exception as exc:
+        _db_logger.warning(f"Migration: Passwort-Hashes konnten nicht gelesen werden: {exc}")
+        return
+    for row in rows:
+        try:
+            wrapped = wrap_legacy_password_hash(row["pw_hash"])
+        except (TypeError, ValueError):
+            continue        # not a hex hash: this account cannot sign in anyway
+        conn.execute(
+            "UPDATE users SET pw_hash = ?, pw_hash_ver = ? WHERE id = ? AND pw_hash_ver = ?",
+            (wrapped, PW_HASH_WRAPPED, row["id"], PW_HASH_LEGACY),
+        )
+    if rows:
+        _db_logger.info(f"Migration: {len(rows)} Passwort-Hash(es) vom Schlüssel getrennt.")
+
+
 def init_db() -> None:
     """Erstellt alle Tabellen falls sie noch nicht existieren."""
     db_path = get_db_path()
@@ -264,8 +293,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id          TEXT PRIMARY KEY,
                 username    TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                pw_hash     TEXT NOT NULL,   -- PBKDF2 hex
+                pw_hash     TEXT NOT NULL,   -- password verifier hex (format: pw_hash_ver)
                 pw_salt     TEXT NOT NULL,   -- random salt hex
+                pw_hash_ver INTEGER NOT NULL DEFAULT 1,  -- see src/crypto.py PW_HASH_*
                 enc_key_enc TEXT NOT NULL,   -- AES-key verschlüsselt mit user-pw
                 enc_key_iv  TEXT NOT NULL,   -- IV für enc_key_enc
                 enc_key_kdf TEXT NOT NULL DEFAULT 'pbkdf2',  -- KDF: 'pbkdf2' | 'argon2'
@@ -422,8 +452,11 @@ def init_db() -> None:
             # Zuletzt angemeldet: bestimmt Design und Sprache der Login-Maske
             if "last_login_at" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+            if "pw_hash_ver" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN pw_hash_ver INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
+        _wrap_legacy_password_hashes(conn)
 
         # Migration: language column in app_settings
         try:
