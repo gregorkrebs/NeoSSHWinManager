@@ -77,19 +77,29 @@ def _frozen(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "executable", str(exe))
     started = []
     monkeypatch.setattr(updater.subprocess, "Popen", lambda cmd, **kw: started.append((cmd, kw)))
+    # Windows-only constants, so the handover logic can be checked anywhere.
+    monkeypatch.setattr(updater.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(updater.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x1000000, raising=False)
     return exe, started
+
+
+def _installer(name="NeoSSHWinManager-Setup-9.9.9.exe", data=b"installer"):
+    """A downloaded installer where the updater keeps it, plus its SHA-256."""
+    updater.updates_dir().mkdir(parents=True, exist_ok=True)
+    path = updater.updates_dir() / name
+    path.write_bytes(data)
+    return path, updater.file_sha256(str(path))
 
 
 def test_handover_starts_the_installer_silently_with_valid_handles(appdata, tmp_path, monkeypatch):
     exe, started = _frozen(monkeypatch, tmp_path)
-    installer = tmp_path / "NeoSSHWinManager-Setup-9.9.9.exe"
-    installer.write_bytes(b"")
-    updater.updates_dir().mkdir(parents=True)
+    installer, sha = _installer()
     legacy = updater.updates_dir() / "run_update.cmd"
     legacy.write_text("@echo off")
 
-    assert updater.launch_pending_installer({"installer_path": str(installer), "version": "9.9.9"},
-                                            from_version="1.6.1")
+    assert updater.launch_pending_installer(
+        {"installer_path": str(installer), "version": "9.9.9", "sha256": sha},
+        from_version="1.6.1")
 
     (cmd, kw), = started
     assert cmd[0] == str(installer)
@@ -111,10 +121,10 @@ def test_handover_does_not_pass_on_the_pyinstaller_environment(appdata, tmp_path
     monkeypatch.setenv("_PYI_ARCHIVE_FILE", str(_exe))
     monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", str(tmp_path / "_MEI12345"))
     monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
-    installer = tmp_path / "setup.exe"
-    installer.write_bytes(b"")
+    installer, sha = _installer("setup.exe")
 
-    assert updater.launch_pending_installer({"installer_path": str(installer), "version": "9.9.9"})
+    assert updater.launch_pending_installer(
+        {"installer_path": str(installer), "version": "9.9.9", "sha256": sha})
 
     (_cmd, kw), = started
     assert not [k for k in kw["env"] if k.upper().startswith("_PYI_")]
@@ -123,9 +133,9 @@ def test_handover_does_not_pass_on_the_pyinstaller_environment(appdata, tmp_path
 
 def test_start_hands_over_once_and_disarms(appdata, tmp_path, monkeypatch):
     _exe, started = _frozen(monkeypatch, tmp_path)
-    installer = tmp_path / "setup.exe"
-    installer.write_bytes(b"")
-    updater.save_pending_update("9.9.9", str(installer), installer.name, install_on_next_start=True)
+    installer, sha = _installer("setup.exe")
+    updater.save_pending_update("9.9.9", str(installer), installer.name, install_on_next_start=True,
+                                sha256=sha)
 
     assert updater.maybe_install_pending_update("1.6.1") is True
     assert len(started) == 1
@@ -133,3 +143,121 @@ def test_start_hands_over_once_and_disarms(appdata, tmp_path, monkeypatch):
     assert updater.read_pending_update()["install_on_next_start"] is False
     assert updater.maybe_install_pending_update("1.6.1") is False
     assert len(started) == 1
+
+
+# ── integrity (the installer is verified before it is kept and before it runs) ──
+
+def test_installer_changed_after_download_is_refused(appdata, tmp_path, monkeypatch):
+    _exe, started = _frozen(monkeypatch, tmp_path)
+    installer, sha = _installer()
+    installer.write_bytes(b"swapped by someone else")
+    record = {"installer_path": str(installer), "version": "9.9.9", "sha256": sha}
+    updater.save_pending_update("9.9.9", str(installer), installer.name, sha256=sha)
+    assert updater.launch_pending_installer(record) is False
+    assert started == []
+    assert not installer.exists()                       # discarded with its record
+
+
+def test_installer_without_verified_hash_is_refused(appdata, tmp_path, monkeypatch):
+    _exe, started = _frozen(monkeypatch, tmp_path)
+    installer, _sha = _installer()
+    assert updater.launch_pending_installer({"installer_path": str(installer), "version": "9.9.9"}) is False
+    assert started == []
+
+
+def test_installer_outside_the_updates_folder_is_refused(appdata, tmp_path, monkeypatch):
+    _exe, started = _frozen(monkeypatch, tmp_path)
+    elsewhere = tmp_path / "elsewhere.exe"
+    elsewhere.write_bytes(b"x")
+    record = {"installer_path": str(elsewhere), "version": "9.9.9",
+              "sha256": updater.file_sha256(str(elsewhere))}
+    assert updater.launch_pending_installer(record) is False
+    assert started == []
+
+
+def test_clearing_never_deletes_outside_the_updates_folder(appdata, tmp_path):
+    victim = tmp_path / "important.exe"
+    victim.write_bytes(b"keep me")
+    updater.save_pending_update("9.9.9", str(victim), victim.name)
+    updater.clear_pending_update()
+    assert victim.exists()
+
+
+class _Response:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self, *_a):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _manager_with_download(tmp_path, checksum_url, checksums: bytes, monkeypatch):
+    mgr = updater.UpdaterManager("1.0.0")
+    path = tmp_path / "NeoSSHWinManager-Setup-9.9.9.exe"
+    path.write_bytes(b"installer")
+    mgr.update_file_path = str(path)
+    mgr._checksum_url = checksum_url
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *_a, **_k: _Response(checksums))
+    return mgr, path
+
+
+CHECKSUM_URL = "https://github.com/gregorkrebs/NeoSSHWinManager/releases/download/v9.9.9/sha256sums.txt"
+
+
+def test_checksum_match_returns_the_hash(tmp_path, monkeypatch):
+    import hashlib
+    digest = hashlib.sha256(b"installer").hexdigest()
+    mgr, _ = _manager_with_download(
+        tmp_path, CHECKSUM_URL, f"{digest}  NeoSSHWinManager-Setup-9.9.9.exe\n".encode(), monkeypatch)
+    assert mgr._verify_checksum() == digest
+
+
+@pytest.mark.parametrize("url, text", [
+    ("", b""),                                                        # no checksum file
+    ("https://example.org/sha256sums.txt", b""),                      # not from this project
+    (CHECKSUM_URL, b"0" * 64 + b"  other.exe\n"),                     # no entry for the file
+    (CHECKSUM_URL, b"0" * 64 + b"  NeoSSHWinManager-Setup-9.9.9.exe\n"),  # mismatch
+])
+def test_unverifiable_download_is_rejected(tmp_path, monkeypatch, url, text):
+    mgr, _ = _manager_with_download(tmp_path, url, text, monkeypatch)
+    with pytest.raises(ValueError):
+        mgr._verify_checksum()
+
+
+def test_checksum_download_error_is_not_ignored(tmp_path, monkeypatch):
+    mgr, _ = _manager_with_download(tmp_path, CHECKSUM_URL, b"", monkeypatch)
+
+    def offline(*_a, **_k):
+        raise OSError("offline")
+    monkeypatch.setattr(updater.urllib.request, "urlopen", offline)
+    with pytest.raises(OSError):
+        mgr._verify_checksum()
+
+
+@pytest.mark.parametrize("url, ok", [
+    ("https://github.com/gregorkrebs/NeoSSHWinManager/releases/download/v1/Setup.exe", True),
+    ("http://github.com/gregorkrebs/NeoSSHWinManager/releases/download/v1/Setup.exe", False),
+    ("https://evil.example/gregorkrebs/NeoSSHWinManager/releases/download/v1/Setup.exe", False),
+    ("https://github.com/someone/else/releases/download/v1/Setup.exe", False),
+    ("https://github.com.evil.example/gregorkrebs/NeoSSHWinManager/releases/download/v1/x.exe", False),
+])
+def test_only_this_projects_release_assets_are_downloaded(url, ok):
+    assert updater.is_release_asset_url(url) is ok
+
+
+@pytest.mark.parametrize("name, ok", [
+    ("NeoSSHWinManager-Setup-1.7.3.exe", True),
+    ("..\\..\\Startup\\x.exe", False),
+    ("../x.exe", False),
+    ("C:x.exe", False),
+    ("setup.txt", False),
+    ("", False),
+])
+def test_asset_names_are_plain_exe_names(name, ok):
+    assert (updater.safe_asset_file_name(name) is not None) is ok

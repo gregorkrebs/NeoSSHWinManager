@@ -33,6 +33,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -42,6 +43,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from src.app_logger import logger
 
 GITHUB_API_URL = "https://api.github.com/repos/gregorkrebs/neosshwinmanager/releases/latest"
+# Release assets are only ever fetched from this repository's releases.
+_RELEASE_HOST = "github.com"
+_RELEASE_PATH_PREFIX = "/gregorkrebs/neosshwinmanager/releases/download/"
 # The changelog as released: all versions between the running and the new one.
 CHANGELOG_URL = "https://raw.githubusercontent.com/gregorkrebs/NeoSSHWinManager/{tag}/CHANGELOG.md"
 
@@ -50,6 +54,45 @@ _ATTEMPT_NAME = "update_attempt.json"
 _LOG_NAME = "install.log"
 # Helper script of 1.5.4–1.6.0; removed when found.
 _LEGACY_SCRIPT_NAME = "run_update.cmd"
+
+
+# ── Integrity helpers ───────────────────────────────────────────────────────
+
+def is_release_asset_url(url: str) -> bool:
+    """True for an https download URL of an asset of this repository's releases."""
+    try:
+        parts = urllib.parse.urlsplit(url or "")
+    except ValueError:
+        return False
+    return (parts.scheme == "https"
+            and (parts.hostname or "").lower() == _RELEASE_HOST
+            and parts.path.lower().startswith(_RELEASE_PATH_PREFIX))
+
+
+def safe_asset_file_name(name: str) -> str | None:
+    """The asset name as a plain .exe file name, or None if it is anything else."""
+    name = (name or "").strip()
+    if (not name or name != os.path.basename(name.replace("\\", "/"))
+            or ":" in name or name.startswith(".") or not name.lower().endswith(".exe")):
+        return None
+    return name
+
+
+def file_sha256(path: str) -> str:
+    sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def _inside_updates_dir(path: str) -> bool:
+    try:
+        target = Path(path).resolve()
+        base = updates_dir().resolve()
+    except OSError:
+        return False
+    return target.parent == base
 
 
 # ── Pending-update bookkeeping ──────────────────────────────────────────────
@@ -102,12 +145,15 @@ def get_pending_update(current_version: str) -> dict | None:
 
 
 def save_pending_update(version_str: str, installer_path: str, asset_name: str,
-                        changelog: str = "", install_on_next_start: bool = True) -> None:
+                        changelog: str = "", install_on_next_start: bool = True,
+                        sha256: str = "") -> None:
     """Remember a downloaded installer so later starts/checks can find it."""
     record = {
         "version": version_str,
         "installer_path": str(installer_path),
         "asset_name": asset_name,
+        # Verified at download time; checked again right before the start.
+        "sha256": sha256,
         # Kept so the dialog can show release notes without asking GitHub again.
         "changelog": changelog,
         "install_on_next_start": bool(install_on_next_start),
@@ -139,7 +185,8 @@ def set_install_on_next_start(enabled: bool) -> bool:
 def clear_pending_update() -> None:
     """Drop the marker and any downloaded installer."""
     data = read_pending_update()
-    if data:
+    # Only ever delete inside the updates folder, whatever the marker says.
+    if data and _inside_updates_dir(data["installer_path"]):
         try:
             os.remove(data["installer_path"])
         except Exception:
@@ -266,6 +313,23 @@ def launch_pending_installer(record: dict, from_version: str = "") -> bool:
     installer = str(record.get("installer_path", ""))
     if not installer or not os.path.isfile(installer):
         logger.warning("launch_pending_installer: installer file is missing.")
+        return False
+
+    # The installer waited in a user-writable folder since the download.
+    # Start it only from there and only if it is still the verified file.
+    if not _inside_updates_dir(installer):
+        logger.error("launch_pending_installer: installer is outside the updates folder — refused.")
+        clear_pending_update()
+        return False
+    expected = str(record.get("sha256", "")).lower()
+    try:
+        actual = file_sha256(installer)
+    except OSError as e:
+        logger.error(f"launch_pending_installer: installer cannot be read: {e}")
+        return False
+    if not expected or not hmac.compare_digest(actual, expected):
+        logger.error("launch_pending_installer: installer does not match its verified SHA-256 — refused.")
+        clear_pending_update()
         return False
 
     if not getattr(sys, "frozen", False):
@@ -432,12 +496,16 @@ class UpdaterManager(QObject):
                     for asset in data.get("assets", []):
                         name = asset.get("name", "")
                         low = name.lower()
-                        if low.endswith(".exe") and "setup" in low and not download_url:
-                            download_url = asset.get("browser_download_url", "")
+                        url = asset.get("browser_download_url", "")
+                        if not is_release_asset_url(url):
+                            continue
+                        if (low.endswith(".exe") and "setup" in low and not download_url
+                                and safe_asset_file_name(name)):
+                            download_url = url
                             asset_name = name
                             obj_type = "installer"
                         if name in ("sha256sums.txt", "checksums.txt", "SHA256SUMS"):
-                            checksum_url = asset.get("browser_download_url", "")
+                            checksum_url = url
 
                     if not download_url:
                         # No installer in this release — send the user to the release page.
@@ -475,7 +543,11 @@ class UpdaterManager(QObject):
                 # A previously downloaded installer of another version is dead weight.
                 clear_pending_update()
 
-                file_name = self._asset_name or "NeoSSHWinManager-Setup.exe"
+                if not is_release_asset_url(download_url):
+                    raise ValueError("Download URL is not a release asset of this project")
+                file_name = safe_asset_file_name(self._asset_name or "NeoSSHWinManager-Setup.exe")
+                if not file_name:
+                    raise ValueError(f"Unexpected installer name: {self._asset_name!r}")
                 self.update_file_path = str(target_dir / file_name)
 
                 req = urllib.request.Request(download_url, headers={"User-Agent": "NeoSSHWinManager-Updater"})
@@ -495,7 +567,7 @@ class UpdaterManager(QObject):
                                 percent = int((downloaded / total_size) * 100)
                                 self.download_progress.emit(percent)
 
-                self._verify_checksum()
+                sha256 = self._verify_checksum()
 
                 save_pending_update(
                     self.latest_version,
@@ -503,6 +575,7 @@ class UpdaterManager(QObject):
                     file_name,
                     changelog=self._changelog,
                     install_on_next_start=True,
+                    sha256=sha256,
                 )
                 self.download_finished.emit(True, self.update_file_path)
             except Exception as e:
@@ -519,46 +592,35 @@ class UpdaterManager(QObject):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _verify_checksum(self):
+    def _verify_checksum(self) -> str:
         """
-        SECURITY: verify the SHA-256 of the download if the release ships a
-        checksum file. A mismatch raises and discards the file; a missing or
-        unreadable checksum file only warns.
+        SECURITY: verify the SHA-256 of the download against the release's
+        checksum file and return it. Fails closed: without a checksum file, a
+        matching entry or on any error the download is discarded — an
+        installer that cannot be verified is never kept for installation.
         """
         checksum_url = self._checksum_url
-        if not checksum_url:
-            logger.warning("No checksum file found in release assets — integrity not verified.")
-            return
+        if not checksum_url or not is_release_asset_url(checksum_url):
+            raise ValueError("The release has no checksum file — the installer cannot be verified.")
 
-        try:
-            cs_req = urllib.request.Request(checksum_url, headers={"User-Agent": "NeoSSHWinManager-Updater"})
-            with urllib.request.urlopen(cs_req, timeout=10) as cs_resp:
-                checksums_text = cs_resp.read().decode('utf-8', errors='replace')
+        cs_req = urllib.request.Request(checksum_url, headers={"User-Agent": "NeoSSHWinManager-Updater"})
+        with urllib.request.urlopen(cs_req, timeout=10) as cs_resp:
+            checksums_text = cs_resp.read(1024 * 1024).decode('utf-8', errors='replace')
 
-            sha256 = hashlib.sha256()
-            with open(self.update_file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(65536), b''):
-                    sha256.update(chunk)
-            actual_hex = sha256.hexdigest()
+        actual_hex = file_sha256(self.update_file_path)
 
-            # Format: "<hash>  <filename>"
-            file_name = os.path.basename(self.update_file_path)
-            expected_hex = None
-            for line in checksums_text.splitlines():
-                parts = line.strip().split()
-                if len(parts) >= 2 and parts[1].lstrip('*') == file_name:
-                    expected_hex = parts[0].lower()
-                    break
+        # Format: "<hash>  <filename>"
+        file_name = os.path.basename(self.update_file_path)
+        expected_hex = None
+        for line in checksums_text.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[1].lstrip('*') == file_name:
+                expected_hex = parts[0].lower()
+                break
 
-            if expected_hex is None:
-                logger.warning("Checksum file found but no matching entry for the installer — skipping verification")
-            elif not hmac.compare_digest(actual_hex, expected_hex):
-                os.remove(self.update_file_path)
-                self.update_file_path = None
-                raise ValueError(f"SHA-256 mismatch: expected {expected_hex}, got {actual_hex}")
-            else:
-                logger.info("Update integrity verified via SHA-256.")
-        except ValueError:
-            raise
-        except Exception as e:
-            logger.warning(f"Checksum verification failed (non-fatal): {e}")
+        if expected_hex is None:
+            raise ValueError("The checksum file has no entry for the installer — it cannot be verified.")
+        if not hmac.compare_digest(actual_hex, expected_hex):
+            raise ValueError(f"SHA-256 mismatch: expected {expected_hex}, got {actual_hex}")
+        logger.info("Update integrity verified via SHA-256.")
+        return actual_hex
